@@ -1,0 +1,70 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+develop-eggs/
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+ENV/
+
+# ===== IDE =====
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ===== 环境变量和密钥 =====
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# ===== 本地配置覆盖 =====
+config.local.yaml
+config.*.local.yaml
+
+# ===== 数据目录（不入仓库）=====
+data/vector_db/
+data/extracted/
+data/feedback_queue/
+data/raw_uploads/
+data/metadata.db
+data/metadata.db-journal
+data/metadata.db-wal
+data/metadata.db-shm
+data/cache/
+
+# ===== 日志 =====
+logs/
+*.log
+
+# ===== 测试和覆盖率 =====
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# ===== Jupyter =====
+.ipynb_checkpoints/
+
+# ===== Streamlit =====
+.streamlit/secrets.toml
+
+# ===== macOS =====
+.DS_Store
+.AppleDouble
+.LSOverride

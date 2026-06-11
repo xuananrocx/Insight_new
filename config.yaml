@@ -1,0 +1,174 @@
+# ============================================
+#  AMD AI Assistant - 主配置文件
+# ============================================
+#  说明：
+#  - 所有功能默认值遵循"安全优先"原则，高风险功能默认关闭
+#  - 想覆盖某项配置，可创建 config.local.yaml（已 gitignore）
+#  - 修改后重启应用生效
+# ============================================
+
+# ===== 全局 =====
+app:
+  name: AMD AI Assistant
+  version: 0.1.0
+  log_level: INFO
+
+# ===== 服务端口 =====
+server:
+  api_host: 127.0.0.1
+  api_port: 8000           # FastAPI 端口
+  web_host: 127.0.0.1
+  web_port: 8501           # Streamlit 端口
+
+# ===== 路径配置 =====
+paths:
+  # 投喂文件夹（用户投喂文档的入口）
+  # 支持 ~、相对路径（相对项目根）或绝对路径
+  feed_folder: ~/AMD-Knowledge-Feeds
+
+  # 数据目录（全部 gitignored）
+  vector_db: ./data/vector_db
+  extracted: ./data/extracted        # 程序包解压临时目录
+  feedback_queue: ./data/feedback_queue
+  raw_uploads: ./data/raw_uploads
+  metadata_db: ./data/metadata.db
+  cache: ./data/cache
+
+# ===== 功能开关（feature flags）=====
+feature_flags:
+  knowledge_base:
+    enabled: true
+    auto_extract_package: true      # 程序包自动解包提取
+    image_ocr: false                # OCR 默认关（耗资源）
+
+  qa:
+    enabled: true
+    web_ui: true
+    show_sources: true              # 答案显示引用来源
+    feedback_buttons: true          # 点赞/点踩按钮
+
+  feedback_loop:
+    manual_feedback: true           # 通道1：人工点赞反哺
+    log_feedback: false             # 通道2：日志反哺（Phase 2）
+    auto_feedback:                  # 通道3：AI 自动反哺
+      enabled: false                # 默认关闭
+      require_approval: true        # 需要审批才能入库
+      min_confidence: 0.85
+
+  realtime_watch: false             # 文件夹实时监听（Phase 2，第一版手动触发）
+
+# ===== LLM 配置（多 provider 适配）=====
+llm:
+  # 当前选用的 provider（必须在下面 providers 里 enabled=true 且有 API key）
+  chat_provider: deepseek
+  embedding_provider: qwen          # 必须支持 embedding 的 provider
+
+  # 故障切换链（主 provider 挂了按顺序尝试）
+  fallback_chain: [deepseek, qwen, moonshot]
+
+  providers:
+    deepseek:
+      api_key_env: DEEPSEEK_API_KEY
+      base_url: https://api.deepseek.com/v1
+      chat_model: deepseek-chat
+      embedding_model: false        # DeepSeek 当前无 embedding 接口
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: true
+
+    qwen:
+      api_key_env: DASHSCOPE_API_KEY
+      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      chat_model: qwen-plus
+      embedding_model: text-embedding-v3
+      embedding_dimensions: 1024
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: true
+
+    moonshot:
+      api_key_env: MOONSHOT_API_KEY
+      base_url: https://api.moonshot.cn/v1
+      chat_model: moonshot-v1-32k
+      embedding_model: false
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: false                # 默认关，按需开
+
+    openai:
+      api_key_env: OPENAI_API_KEY
+      base_url: https://api.openai.com/v1
+      chat_model: gpt-4o-mini
+      embedding_model: text-embedding-3-small
+      embedding_dimensions: 1536
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: false
+
+    local:                          # 本地模型（Ollama / vLLM），未来用
+      api_key_env: null
+      base_url: http://localhost:11434/v1
+      chat_model: qwen2.5:14b
+      embedding_model: nomic-embed-text
+      embedding_dimensions: 768
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: false
+
+# ===== 文档摄入（统一配置）=====
+ingest:
+  # 投喂白名单：哪些扩展名的文件会被解析入库
+  # 这个列表是 package_extractor 和 ingestion 共用的
+  text_extensions:
+    - md
+    - markdown
+    - txt
+    - rst
+    - log
+    - pdf
+    - docx
+    - xlsx
+    - xlsm
+    - pptx
+    - html
+    - htm
+    - xml
+    - json
+    - yaml
+    - yml
+    - ini
+    - conf
+    - cfg
+    - toml
+    - properties
+    - csv
+    - tsv
+    - env
+    - py
+    - sh
+    - bash
+    - js
+    - ts
+    - go
+    - java
+    - c
+    - cpp
+    - h
+    - hpp
+    - sql
+
+  # 单文件大小上限（MB）
+  max_file_size_mb: 50
+
+  # 切片
+  chunking:
+    chunk_size: 800                 # 每块字符数
+    chunk_overlap: 100              # 块之间的重叠字符数
+
+# ===== RAG 检索（问答）=====
+qa:
+  top_k: 5                          # 检索多少条上下文
+  similarity_threshold: 0.3         # 相似度阈值
+  chat_options:
+    temperature: 0.2
+    max_tokens: 1500

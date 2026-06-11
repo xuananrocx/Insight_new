@@ -1,0 +1,54 @@
+# ============================================
+#  AMD AI Assistant - Python 依赖
+# ============================================
+#  Python 版本要求：>= 3.11
+#  安装：pip install -r requirements.txt
+# ============================================
+
+# ===== Web 框架 =====
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+streamlit==1.41.1
+httpx==0.28.1                  # 异步 HTTP 客户端（调 LLM API）
+python-multipart==0.0.20       # FastAPI 文件上传
+
+# ===== RAG 核心 =====
+langchain>=0.3.14,<0.4
+langchain-core>=0.3.29,<0.4
+langchain-community>=0.3.14,<0.4
+langchain-chroma>=0.2.2,<0.3
+langchain-openai>=0.2.14,<0.3  # OpenAI 兼容协议（DeepSeek/通义/Kimi 都用这个）
+openai>=1.58.1,<2.0            # OpenAI 兼容 SDK（多 provider 切换基础）
+chromadb>=0.5.23,<0.6
+
+# ===== 文档解析（纯 Python，跨平台友好）=====
+pypdf==5.1.0                   # PDF 文本提取
+pdfplumber==0.11.4             # PDF 表格提取
+python-docx==1.1.2             # Word
+openpyxl==3.1.5                # Excel
+python-pptx==1.0.2             # PPT
+beautifulsoup4==4.12.3         # HTML/XML
+lxml==5.3.0                    # XML 解析后端
+
+# ===== 数据库 =====
+sqlalchemy==2.0.36
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# ===== 工具 =====
+python-dotenv==1.0.1
+pyyaml==6.0.2
+loguru==0.7.3                  # 日志
+rich==13.9.4                   # 终端美化
+tenacity==9.0.0                # 重试
+tiktoken==0.8.0                # token 计数
+
+# ===== 文件处理 =====
+watchdog==6.0.0                # 文件夹监听（Phase 2 用，先装着）
+python-magic-bin==0.4.14 ; sys_platform == "win32"   # Windows 文件类型识别
+python-magic==0.4.27 ; sys_platform != "win32"       # Mac/Linux
+
+# ===== 开发工具 =====
+pytest==8.3.4
+pytest-asyncio==0.25.0
+ruff==0.8.4                    # linter/formatter
