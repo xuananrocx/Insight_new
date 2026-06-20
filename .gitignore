@@ -7,8 +7,15 @@ __pycache__/
 *.egg-info/
 *.egg
 .eggs/
-build/
-dist/
+# build/ 和 dist/ 是 PyInstaller 输出，但保留 build/insight.spec + Info.plist
+/build/insight/
+/build/pyi-build/
+/dist/
+/build/*.toc
+/build/*.warn
+/build/*.log
+# 旧的 spec 文件（已被 insight.spec 替代）
+/build/amd-ai-assistant.spec
 develop-eggs/
 
 # ===== 虚拟环境 =====

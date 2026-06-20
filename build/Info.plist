@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDisplayName</key>
+    <string>AMD AI Assistant</string>
+    <key>CFBundleExecutable</key>
+    <string>amd-ai-assistant</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.archforce.amd-ai-assistant</string>
+    <key>CFBundleName</key>
+    <string>AMD AI Assistant</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>本应用不需要麦克风权限</string>
+    <key>NSCameraUsageDescription</key>
+    <string>本应用不需要摄像头权限</string>
+    <key>LSEnvironment</key>
+    <dict>
+        <key>APP_ENV</key>
+        <string>production</string>
+    </dict>
+</dict>
+</plist>
