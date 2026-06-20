@@ -1,0 +1,382 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ===== Stripe Light (默认) ===== */
+    --background: 210 60% 98%;
+    --foreground: 222 47% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+
+    --primary: 245 80% 61%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 60% 96%;
+    --secondary-foreground: 222 47% 11%;
+
+    --muted: 210 60% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 245 80% 96%;
+    --accent-foreground: 245 80% 30%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 60% 40%;
+    --warning: 35 92% 50%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 245 80% 61%;
+
+    --radius: 0.5rem;
+
+    /* 主题元数据 */
+    --theme-name: 'Stripe Light';
+    --sidebar-bg: 0 0% 100%;
+  }
+
+  /* ===== Stripe Dark ===== */
+  .theme-stripe-dark {
+    --background: 222 47% 7%;
+    --foreground: 210 40% 96%;
+
+    --card: 222 47% 10%;
+    --card-foreground: 210 40% 96%;
+
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary: 245 80% 67%;
+    --primary-foreground: 222 47% 7%;
+
+    --secondary: 222 47% 14%;
+    --secondary-foreground: 210 40% 96%;
+
+    --muted: 222 47% 14%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 245 60% 20%;
+    --accent-foreground: 210 40% 96%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 60% 50%;
+    --warning: 35 92% 60%;
+
+    --border: 222 30% 18%;
+    --input: 222 30% 18%;
+    --ring: 245 80% 67%;
+
+    --sidebar-bg: 222 47% 10%;
+  }
+
+  /* ===== Linear Purple ===== */
+  .theme-linear {
+    --background: 220 13% 6%;
+    --foreground: 60 6% 90%;
+
+    --card: 220 13% 9%;
+    --card-foreground: 60 6% 90%;
+
+    --popover: 220 13% 9%;
+    --popover-foreground: 60 6% 90%;
+
+    --primary: 232 60% 68%;
+    --primary-foreground: 220 13% 6%;
+
+    --secondary: 220 13% 13%;
+    --secondary-foreground: 60 6% 90%;
+
+    --muted: 220 13% 13%;
+    --muted-foreground: 60 4% 60%;
+
+    --accent: 232 60% 18%;
+    --accent-foreground: 60 6% 95%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 60% 50%;
+    --warning: 35 92% 60%;
+
+    --border: 220 13% 17%;
+    --input: 220 13% 17%;
+    --ring: 232 60% 68%;
+
+    --sidebar-bg: 220 13% 9%;
+  }
+
+  /* ===== macOS Glass ===== */
+  .theme-macos {
+    /* 用户可调的毛玻璃强度：0.2 = 明显毛玻璃，1 = 完全不透明 */
+    --glass-alpha: 0.30;
+
+    /* macOS 主题使用更大的圆角 */
+    --radius: 1rem;
+
+    --background: 220 25% 6%;
+    --foreground: 0 0% 98%;
+
+    --card: 220 22% 10%;
+    --card-foreground: 0 0% 98%;
+
+    /* popover 完全不透明，避免遮挡后面文字 */
+    --popover: 220 25% 8%;
+    --popover-foreground: 0 0% 98%;
+
+    --primary: 211 100% 56%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 22% 14%;
+    --secondary-foreground: 0 0% 98%;
+
+    --muted: 220 22% 14%;
+    --muted-foreground: 0 0% 80%;
+
+    --accent: 211 70% 38%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 152 60% 48%;
+    --warning: 35 92% 52%;
+
+    --border: 0 0% 100% / 0.2;
+    --input: 0 0% 100% / 0.15;
+    --ring: 211 100% 56%;
+
+    --sidebar-bg: 220 22% 9%;
+
+    --radius: 1rem;
+  }
+
+  .theme-macos body {
+    background: linear-gradient(135deg, #0a1628 0%, #1a2c4e 30%, #2c3e50 70%, #4a5568 100%) fixed;
+    background-attachment: fixed;
+  }
+
+  /* ===== macOS 主题下的可选背景渐变 =====
+     默认是「深海蓝」（上面的 .theme-macos body）。
+     下面 6 个 modifier 类挂在 documentElement 上，覆盖默认背景。
+     仅在 .theme-macos 上下文下生效（其他主题不显示渐变）。 */
+
+  /* 烟熏蓝：低饱和蓝灰单色阶 */
+  .theme-macos.bg-smoky-blue body {
+    background: linear-gradient(135deg, #1c2a3a 0%, #2d3e50 33%, #3e5266 66%, #4f6580 100%) fixed;
+    background-attachment: fixed;
+  }
+
+  /* 暮色山影：Tailwind slate 系单色阶 */
+  .theme-macos.bg-twilight-slate body {
+    background: linear-gradient(135deg, #1e293b 0%, #334155 33%, #475569 66%, #64748b 100%) fixed;
+    background-attachment: fixed;
+  }
+
+  /* Moonlit Mint：深青底 + 月光薄荷光晕（清新护眼） */
+  .theme-macos.bg-moonlit-mint body {
+    background-color: #0a141a;
+    background-image: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(94, 234, 212, 0.15) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* Pearl Dusk：暖灰底 + 珍珠金光晕（暖色优雅） */
+  .theme-macos.bg-pearl-dusk body {
+    background-color: #1a1612;
+    background-image: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(252, 211, 77, 0.12) 0%, transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* Emerald Vault：深翡翠底 + 翡翠光晕 + 角落金光（Rolex 经典「绿+金」） */
+  .theme-macos.bg-emerald-vault body {
+    background-color: #0a1410;
+    background-image:
+      radial-gradient(ellipse 80% 60% at 50% 0%, rgba(16, 185, 129, 0.20) 0%, transparent 60%),
+      radial-gradient(ellipse 50% 40% at 80% 80%, rgba(252, 211, 77, 0.10) 0%, transparent 50%);
+    background-attachment: fixed;
+  }
+
+  /* Rose Gold Mist：深酒红 + 玫瑰金双光晕（Hermès 红葡萄酒色） */
+  .theme-macos.bg-rose-gold-mist body {
+    background-color: #1a0a14;
+    background-image:
+      radial-gradient(ellipse 80% 60% at 50% 0%, rgba(251, 113, 133, 0.18) 0%, transparent 60%),
+      radial-gradient(ellipse 60% 50% at 75% 85%, rgba(252, 211, 77, 0.08) 0%, transparent 55%);
+    background-attachment: fixed;
+  }
+
+  /* Aurora Haze：深空底 + 紫/粉/青三色薄雾（macOS Sonoma 风） */
+  .theme-macos.bg-aurora-haze body {
+    background-color: #0a0e1a;
+    background-image:
+      radial-gradient(ellipse 70% 50% at 15% 25%, rgba(120, 119, 198, 0.20) 0%, transparent 55%),
+      radial-gradient(ellipse 70% 50% at 85% 15%, rgba(236, 72, 153, 0.12) 0%, transparent 50%),
+      radial-gradient(ellipse 80% 60% at 50% 90%, rgba(34, 211, 238, 0.15) 0%, transparent 55%);
+    background-attachment: fixed;
+  }
+
+  /* Obsidian：近纯黑 + 极淡暖冷双光（OLED 友好） */
+  .theme-macos.bg-obsidian body {
+    background-color: #050507;
+    background-image:
+      radial-gradient(ellipse 60% 50% at 25% 15%, rgba(251, 191, 36, 0.07) 0%, transparent 55%),
+      radial-gradient(ellipse 70% 60% at 75% 85%, rgba(59, 130, 246, 0.06) 0%, transparent 55%);
+    background-attachment: fixed;
+  }
+
+  /* 星河 Mesh：深蓝底 + 蓝紫青三色 mesh 辐射 */
+  .theme-macos.bg-galaxy-mesh body {
+    background-color: #0f172a;
+    background-image:
+      radial-gradient(at 15% 20%, rgba(56, 189, 248, 0.5) 0%, transparent 50%),
+      radial-gradient(at 80% 20%, rgba(129, 140, 248, 0.5) 0%, transparent 50%),
+      radial-gradient(at 60% 80%, rgba(167, 139, 250, 0.4) 0%, transparent 50%);
+    background-attachment: fixed;
+  }
+
+  /* 关键：根容器/topbar 等用 bg-background 的元素在 macOS 主题下必须透明，
+     否则会用不透明深色盖住 body 渐变，毛玻璃透出来的就是纯黑 */
+  .theme-macos .bg-background {
+    background-color: transparent;
+  }
+
+  /* 毛玻璃面板：sidebar/card/主区域容器 */
+  .theme-macos .glass-panel {
+    background-color: hsl(220 25% 28% / var(--glass-alpha));
+    backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
+    -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
+    border: 1px solid hsl(220 30% 50% / 0.3);
+    box-shadow: 0 8px 32px hsl(220 40% 30% / 0.15);
+  }
+
+  /* Card 卡片毛玻璃 */
+  .theme-macos .bg-card {
+    background-color: hsl(220 25% 28% / var(--glass-alpha));
+    backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
+    -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
+    border: 1px solid hsl(220 30% 50% / 0.25);
+    box-shadow: 0 4px 16px hsl(220 40% 30% / 0.12);
+  }
+
+  /* Sidebar 毛玻璃（稍深一点） */
+  .theme-macos .bg-sidebar {
+    background-color: hsl(220 25% 24% / var(--glass-alpha));
+    backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
+    -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
+    border-right: 1px solid hsl(220 30% 50% / 0.3);
+  }
+
+  /* popover 完全不透明，强制覆盖 */
+  .theme-macos .bg-popover {
+    background-color: hsl(230 40% 10%);
+    border: 1px solid hsl(230 40% 40% / 0.3);
+    box-shadow: 0 8px 24px hsl(230 50% 20% / 0.2);
+  }
+
+  /* Hover 蓝色（方案 F2）：菜单/按钮 hover 时半透明蓝填充 */
+  .theme-macos nav a:hover,
+  .theme-macos button:hover {
+    background-color: rgba(28, 117, 201, 0.28) !important;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html,
+  body,
+  #root {
+    @apply h-full;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply rounded-full bg-border;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-muted-foreground/40;
+  }
+}
+
+/* Markdown body styles */
+.md-body > :first-child { margin-top: 0; }
+.md-body > :last-child { margin-bottom: 0; }
+.md-body p { margin: 0.5em 0; }
+.md-body h1, .md-body h2, .md-body h3, .md-body h4 {
+  font-weight: 600;
+  margin: 1em 0 0.5em;
+  line-height: 1.3;
+}
+.md-body h1 { font-size: 1.25rem; }
+.md-body h2 { font-size: 1.125rem; }
+.md-body h3 { font-size: 1rem; }
+.md-body h4 { font-size: 0.9rem; }
+.md-body ul, .md-body ol { margin: 0.5em 0; padding-left: 1.5em; }
+.md-body ul { list-style: disc; }
+.md-body ol { list-style: decimal; }
+.md-body li { margin: 0.25em 0; }
+.md-body li > ul, .md-body li > ol { margin: 0.25em 0; }
+.md-body code {
+  background: hsl(var(--muted) / 0.6);
+  padding: 0.1em 0.35em;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.md-body pre { margin: 0; }
+.md-body pre code { background: transparent; padding: 0; }
+.md-body blockquote {
+  border-left: 3px solid hsl(var(--border));
+  padding-left: 0.75em;
+  margin: 0.5em 0;
+  color: hsl(var(--muted-foreground));
+}
+.md-body a { color: hsl(var(--primary)); text-decoration: underline; text-underline-offset: 2px; }
+.md-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.875em;
+}
+.md-body th, .md-body td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.35em 0.6em;
+  text-align: left;
+}
+.md-body th { background: hsl(var(--muted) / 0.4); font-weight: 600; }
+.md-body hr { border: 0; border-top: 1px solid hsl(var(--border)); margin: 1em 0; }
+.md-body strong { font-weight: 600; }
+
+/* 强制 sonner toast 始终展开（不折叠堆叠） */
+[data-sonner-toast][data-expanded="false"][data-front="false"] {
+  --scale: 1 !important;
+  height: var(--initial-height, auto) !important;
+}
+[data-sonner-toast][data-expanded="false"][data-front="false"][data-styled="true"] > * {
+  opacity: 1 !important;
+}

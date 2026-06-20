@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -24,7 +25,11 @@ from typing import Any, Callable
 from src.core import llm_client, vector_store
 from src.core.config import settings
 from src.db import metadata_db
+from src.knowledge.ai_summarizer import remove_summary_data, summarize_and_extract
 from src.knowledge.chunker import Chunk, chunk_document
+from src.qa import bm25_index
+
+logger = logging.getLogger(__name__)
 from src.knowledge.package_extractor import (
     extract_package,
     is_package,
@@ -72,12 +77,47 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def _infer_doc_type(path: Path) -> str:
+    """根据文件名启发式判断文档类型。
+
+    简单实现，迭代 3 可以用 LLM 重新分类。
+    顺序：先按文件名关键词（更具体），再按扩展名兜底。
+    """
+    name = path.name.lower()
+    suffix = path.suffix.lower()
+    # 1. 部署/运维/手册
+    if any(kw in name for kw in ["manual", "guide", "deploy", "部署", "运维", "手册", "install", "readme"]):
+        return "manual"
+    # 2. API 文档
+    if any(kw in name for kw in ["api", "reference", "接口", "swagger", "openapi"]):
+        return "api_ref"
+    # 3. 测试用例
+    if any(kw in name for kw in ["test", "测试", "case", "spec"]):
+        return "test"
+    # 4. 配置文件（扩展名兜底）
+    if suffix in {".conf", ".ini", ".yaml", ".yml", ".toml", ".properties", ".env", ".cfg"}:
+        return "config"
+    return "unknown"
+
+
 def _relativize(path: Path, base: Path) -> str:
     """把绝对路径转成相对 feed_folder 的字符串（用作 db 主键）。"""
     try:
         return str(path.resolve().relative_to(base.resolve()))
     except ValueError:
         return str(path)
+
+
+def _is_ai_summary_enabled() -> bool:
+    """读 config: ingest.ai_summary.enabled"""
+    cfg = settings.config.get("ingest", {}).get("ai_summary", {})
+    return bool(cfg.get("enabled", False))
+
+
+def _ai_summary_min_word_count() -> int:
+    """读 config: ingest.ai_summary.min_word_count（短文档跳过 AI 处理）"""
+    cfg = settings.config.get("ingest", {}).get("ai_summary", {})
+    return int(cfg.get("min_word_count", 100))
 
 
 def _embed_chunks(chunks: list[Chunk]) -> tuple[list[list[float]], str]:
@@ -93,14 +133,23 @@ def _process_one_document(
     file_size: int,
     file_type: str,
     source_package: str | None,
-    result: ScanResult,
-    progress: ProgressFn | None,
+    kb_id: str = "default",
+    result: ScanResult | None = None,
+    progress: ProgressFn | None = None,
 ) -> None:
-    """处理单个文档：解析 → 切片 → 向量化 → 入库。"""
+    """处理单个文档：解析 → 切片 → 向量化 → 入库。
+
+    参数：
+        kb_id: 目标知识库 ID（默认 'default'）
+        result: 统计结果对象（如果为 None，则创建新对象）
+        progress: 进度回调函数
+    """
+    if result is None:
+        result = ScanResult()
     import json
 
     # 先查是否已存在（用于统计 added/updated 和清理旧 chunks）
-    existing = metadata_db.get_file_by_path(rel_path)
+    existing = metadata_db.get_file_by_path(rel_path, kb_id=kb_id)
     is_existing = existing is not None
     old_chunk_ids: list[str] = (
         json.loads(existing.get("chunk_ids_json") or "[]") if is_existing else []
@@ -114,14 +163,24 @@ def _process_one_document(
         file_size=file_size,
         file_type=file_type,
         source_package=source_package,
+        kb_id=kb_id,
     )
+
+    # 查询 KB 的 collection_name（用于向量库隔离）
+    kb_row = metadata_db.get_kb(kb_id)
+    collection_name = kb_row["collection_name"] if kb_row else vector_store.COLLECTION_NAME
 
     # 先删旧的 chunks（如果 hash 变了，旧 chunk_id 因为带 hash，不会被新 chunk 复用）
     if old_chunk_ids:
         try:
-            vector_store.delete_chunks(old_chunk_ids)
-        except Exception:
-            pass
+            vector_store.delete_chunks(old_chunk_ids, collection_name=collection_name)
+        except Exception as e:
+            # 向量库删除失败：旧 chunks 残留会污染检索，但不应阻塞重投喂
+            logger.warning(f"vector_store.delete_chunks 失败 (collection={collection_name}, count={len(old_chunk_ids)}): {e}")
+        try:
+            bm25_index.remove_chunks(old_chunk_ids)
+        except Exception as e:
+            logger.warning(f"BM25 删除旧 chunks 失败: {e}")
 
     try:
         if progress:
@@ -155,6 +214,7 @@ def _process_one_document(
                 "file_size": file_size,
                 "file_id": file_id,
                 "embedding_provider": provider,
+                "kb_id": kb_id,
                 **chunk.metadata,
             }
             chunk_payloads.append({
@@ -166,8 +226,62 @@ def _process_one_document(
 
         if progress:
             progress("upserting", {"file": abs_path.name, "stage": "upsert", "chunks": len(chunk_payloads)})
-        vector_store.upsert_chunks(chunk_payloads)
+        vector_store.upsert_chunks(chunk_payloads, collection_name=collection_name)
+        try:
+            bm25_index.add_chunks(chunk_payloads)
+        except Exception as e:
+            logger.warning(f"BM25 索引更新失败: {e}")
         metadata_db.set_file_processed(file_id, chunk_ids)
+        # 创建/更新文档级元信息（v4：为 RAG 升级预留）
+        try:
+            metadata_db.upsert_document_meta(
+                file_id=file_id,
+                kb_id=kb_id,
+                processed_level="raw",
+                doc_type=_infer_doc_type(abs_path),
+                section_count=len(doc.sections),
+                total_chunks=len(chunk_ids),
+                word_count=sum(len(c.text) for c in chunks),
+            )
+        except Exception as e:
+            logger.warning(f"document_meta 写入失败（不影响投喂）: {e}")
+        # 迭代 2：投喂后触发 AI 摘要 + 概念提取（如启用）
+        if _is_ai_summary_enabled():
+            word_count = sum(len(c.text) for c in chunks)
+            min_words = _ai_summary_min_word_count()
+            if word_count < min_words:
+                logger.info(f"跳过 AI 摘要（字数 {word_count} < {min_words}）: {abs_path.name}")
+            else:
+                if progress:
+                    progress("ai_summary", {"file": abs_path.name, "stage": "ai_summary"})
+                # 重新投喂时先清理旧的 AI 数据
+                if is_existing:
+                    try:
+                        remove_summary_data(file_id, kb_id, content_hash)
+                    except Exception as e:
+                        logger.warning(f"清理旧 AI 摘要失败（不影响）: {e}")
+                try:
+                    ai_result = summarize_and_extract(
+                        file_id=file_id,
+                        kb_id=kb_id,
+                        file_name=abs_path.name,
+                        chunks=chunks,
+                        content_hash=content_hash,
+                        collection_name=collection_name,
+                        source_path=str(abs_path),
+                    )
+                    if ai_result.ok:
+                        logger.info(
+                            f"AI 摘要完成: {abs_path.name} "
+                            f"(concepts={len(ai_result.concepts)}, tokens={ai_result.summary_tokens}, "
+                            f"provider={ai_result.model})"
+                        )
+                    else:
+                        logger.warning(
+                            f"AI 摘要失败（不影响主流程）: {abs_path.name} - {ai_result.error}"
+                        )
+                except Exception as e:
+                    logger.warning(f"AI 摘要异常（不影响主流程）: {abs_path.name} - {e}")
         if is_existing:
             result.updated += 1
         else:
@@ -182,19 +296,68 @@ def _process_one_document(
         metadata_db.set_file_failed(file_id, str(e))
 
 
-def _collect_feed_files() -> list[Path]:
-    """扫描 feed_folder，返回所有顶层文件 + 解压后的子文件。
+def _collect_feed_files(kb_id: str = "default") -> list[Path]:
+    """扫描 feed_folder，返回该 KB 应该 ingest 的所有文件。
 
-    返回顺序：先非压缩包，再压缩包解压后的子文件。
+    按 KB 隔离：
+    - default KB：扫 feed 顶层（旧数据兼容）+ feed/default/（如果有）
+    - 其他 KB：只扫 feed/{kb_id}/
+
+    注意：不会扫其他 KB 的子目录，避免跨 KB 文件污染。
     """
     feed = settings.feed_folder
     if not feed.exists():
         return []
-    top_files = [p for p in feed.rglob("*") if p.is_file()]
-    return top_files
+
+    result: list[Path] = []
+    seen: set[Path] = set()
+
+    def _add_files_in_dir(dir_path: Path) -> None:
+        if not dir_path.exists() or not dir_path.is_dir():
+            return
+        for p in dir_path.rglob("*"):
+            if p.is_file():
+                resolved = p.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    result.append(p)
+
+    if kb_id == "default":
+        # default KB：扫 feed 顶层所有文件（直接位于 feed，不在子目录里）
+        for p in feed.iterdir():
+            if p.is_file():
+                resolved = p.resolve()
+                if resolved not in seen:
+                    seen.add(resolved)
+                    result.append(p)
+        # 也扫 feed/default/（如果存在）
+        _add_files_in_dir(feed / "default")
+    else:
+        # 其他 KB：只扫自己的子目录
+        _add_files_in_dir(feed / kb_id)
+
+    return result
 
 
-def scan_feed_folder(progress: ProgressFn | None = None) -> ScanResult:
+def _get_kb_feed_dirs(kb_id: str) -> list[Path]:
+    """返回某 KB 在 feed_folder 下应该管理的所有目录。
+
+    用于 _cleanup_removed。
+    """
+    feed = settings.feed_folder
+    if kb_id == "default":
+        dirs = [feed]  # 顶层（仅扫顶层文件）
+        if (feed / "default").exists():
+            dirs.append(feed / "default")
+        return dirs
+    return [feed / kb_id]
+
+
+def scan_feed_folder(
+    progress: ProgressFn | None = None,
+    force: bool = False,
+    kb_id: str = "default",
+) -> ScanResult:
     """扫描 feed_folder，做增量同步。
 
     流程：
@@ -202,15 +365,20 @@ def scan_feed_folder(progress: ProgressFn | None = None) -> ScanResult:
     2. 对压缩包：解压并扫描其子文件（白名单）
     3. 对每个文件：hash → 比对 db → 增量处理
     4. 对 db 中已不存在的文件：清理
+
+    参数：
+        force: True 时跳过 hash 比对，强制重新 ingest 所有文件。
+                用于 embedding 维度变更后的全量重建。
+        kb_id: 目标知识库 ID（默认 'default'）
     """
     metadata_db.init_db()
     result = ScanResult()
     feed_base = settings.feed_folder
 
-    # 1. 收集文件
-    top_files = _collect_feed_files()
+    # 1. 收集文件（按 KB 隔离扫）
+    top_files = _collect_feed_files(kb_id=kb_id)
     if progress:
-        progress("scanning", {"top_files": len(top_files)})
+        progress("scanning", {"top_files": len(top_files), "kb_id": kb_id, "force": force})
 
     # 2. 解压所有压缩包（先解压再统一处理，便于去重）
     extracted_root = settings.get_path("extracted")
@@ -262,8 +430,8 @@ def scan_feed_folder(progress: ProgressFn | None = None) -> ScanResult:
             result.failed += 1
             result.errors.append({"file": rel_path, "error": f"读取失败: {e}"})
             continue
-        existing = metadata_db.get_file_by_path(rel_path)
-        if existing and existing.get("status") == "done" and existing.get("content_hash") == content_hash:
+        existing = metadata_db.get_file_by_path(rel_path, kb_id=kb_id)
+        if not force and existing and existing.get("status") == "done" and existing.get("content_hash") == content_hash:
             result.skipped += 1
             continue
         result.scanned += 1
@@ -274,34 +442,68 @@ def scan_feed_folder(progress: ProgressFn | None = None) -> ScanResult:
             file_size=abs_path.stat().st_size,
             file_type=abs_path.suffix.lower().lstrip("."),
             source_package=source_pkg,
+            kb_id=kb_id,
             result=result,
             progress=progress,
         )
 
     # 5. 清理：db 中存在但 feed_folder 不再有的文件
-    _cleanup_removed(result, feed_base)
+    _cleanup_removed(result, feed_base, kb_id)
 
     return result
 
 
-def _cleanup_removed(result: ScanResult, feed_base: Path) -> None:
-    """删除已不在 feed_folder 的文件记录和对应 chunks。"""
-    all_records = metadata_db.list_files(limit=100000)
-    # 收集当前 feed 中存在的所有 rel_path（含解压子文件）
+def _cleanup_removed(result: ScanResult, feed_base: Path, kb_id: str = "default") -> None:
+    """删除已不在 feed_folder 的文件记录和对应 chunks（按 KB 隔离扫）。
+
+    扫描规则跟 _collect_feed_files 一致：
+    - default KB：扫 feed 顶层（不递归到子目录）+ feed/default/（递归）
+    - 其他 KB：扫 feed/{kb_id}/（递归）
+
+    这样不会把其他 KB 子目录的文件误当作"还存在"。
+    """
+    # 只处理这个 KB 的文件
+    all_records = metadata_db.list_files(limit=100000, kb_id=kb_id)
+
+    # 收集当前 KB feed 目录下存在的所有 rel_path（含解压子文件）
     current_rels: set[str] = set()
-    if feed_base.exists():
-        for p in feed_base.rglob("*"):
+
+    def _scan_dir_recursively(dir_path: Path) -> None:
+        if not dir_path.exists() or not dir_path.is_dir():
+            return
+        for p in dir_path.rglob("*"):
             if p.is_file():
                 current_rels.add(_relativize(p, feed_base))
                 if is_package(p):
                     try:
                         extracted_dir = extract_package(p)
-                        rel_pkg = _relativize(p, feed_base)
                         for sub in list_extractable_files(extracted_dir):
                             sub_rel = str(sub.relative_to(settings.get_path("extracted")))
                             current_rels.add(sub_rel)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning(f"扫描投喂目录：解压 {p.name} 失败（cleanup 阶段会跳过该包的子文件）: {e}")
+
+    def _scan_top_only(dir_path: Path) -> None:
+        """只扫顶层文件（不进子目录）。"""
+        if not dir_path.exists() or not dir_path.is_dir():
+            return
+        for p in dir_path.iterdir():
+            if p.is_file():
+                current_rels.add(_relativize(p, feed_base))
+                if is_package(p):
+                    try:
+                        extracted_dir = extract_package(p)
+                        for sub in list_extractable_files(extracted_dir):
+                            sub_rel = str(sub.relative_to(settings.get_path("extracted")))
+                            current_rels.add(sub_rel)
+                    except Exception as e:
+                        logger.warning(f"扫描投喂目录：解压 {p.name} 失败: {e}")
+
+    if kb_id == "default":
+        _scan_top_only(feed_base)
+        _scan_dir_recursively(feed_base / "default")
+    else:
+        _scan_dir_recursively(feed_base / kb_id)
 
     for rec in all_records:
         rel = rec["relative_path"]
@@ -320,18 +522,34 @@ def _cleanup_removed(result: ScanResult, feed_base: Path) -> None:
             import json
             ids = json.loads(chunk_ids)
             if ids:
-                vector_store.delete_chunks(ids)
-            metadata_db.delete_file(rel)
+                rec_kb_id = rec.get("kb_id") or "default"
+                kb_row = metadata_db.get_kb(rec_kb_id)
+                cn = kb_row["collection_name"] if kb_row else vector_store.COLLECTION_NAME
+                vector_store.delete_chunks(ids, collection_name=cn)
+            metadata_db.delete_file(rel, kb_id=rec.get("kb_id"))
             result.removed += 1
         except Exception as e:
             result.failed += 1
             result.errors.append({"file": rel, "error": f"删除失败: {e}"})
 
 
-def ingest_single_file(abs_path: Path) -> dict[str, Any]:
+def ingest_single_file(
+    abs_path: Path,
+    kb_id: str = "default",
+    *,
+    skip_if_exists: bool = False,
+    progress: ProgressFn | None = None,
+) -> dict[str, Any]:
     """手动触发单个文件入库（不扫描文件夹，不做清理）。
 
-    用于 Web UI 上传单文件时调用。
+    用于 Web UI 上传单文件 / 批量上传 worker 调用。
+
+    参数：
+        kb_id: 目标知识库 ID（默认 'default'）
+        skip_if_exists: True 时若 (kb_id, relative_path) 已存在则跳过（不动旧文件）；
+                       False 时按 hash 比较决定是否重新 ingest（默认行为，向后兼容）
+        progress: 进度回调，签名 (stage: str, payload: dict) -> None
+                 stage 取值：parsing / chunking / embedding / upserting / ai_summary
     """
     metadata_db.init_db()
     feed_base = settings.feed_folder
@@ -340,9 +558,14 @@ def ingest_single_file(abs_path: Path) -> dict[str, Any]:
         content_hash = _hash_file(abs_path)
     except OSError as e:
         return {"ok": False, "error": str(e)}
-    existing = metadata_db.get_file_by_path(rel_path)
-    if existing and existing.get("status") == "done" and existing.get("content_hash") == content_hash:
-        return {"ok": True, "skipped": True, "file_id": existing["id"]}
+    existing = metadata_db.get_file_by_path(rel_path, kb_id=kb_id)
+    if existing:
+        if existing.get("status") == "failed":
+            logger.info(f"覆盖失败记录重新 ingest: {rel_path} (旧错误: {existing.get('error_message')})")
+        elif skip_if_exists:
+            return {"ok": True, "skipped": True, "file_id": existing["id"], "skip_reason": "exists"}
+        elif existing.get("status") == "done" and existing.get("content_hash") == content_hash:
+            return {"ok": True, "skipped": True, "file_id": existing["id"]}
     result = ScanResult()
     _process_one_document(
         abs_path=abs_path,
@@ -351,8 +574,9 @@ def ingest_single_file(abs_path: Path) -> dict[str, Any]:
         file_size=abs_path.stat().st_size,
         file_type=abs_path.suffix.lower().lstrip("."),
         source_package=None,
+        kb_id=kb_id,
         result=result,
-        progress=None,
+        progress=progress,
     )
     return {
         "ok": result.failed == 0,
@@ -362,14 +586,20 @@ def ingest_single_file(abs_path: Path) -> dict[str, Any]:
     }
 
 
-def remove_file_by_relpath(rel_path: str) -> dict[str, Any]:
-    """从库中删除指定文件（含向量 chunks）。"""
+def remove_file_by_relpath(rel_path: str, kb_id: str | None = None) -> dict[str, Any]:
+    """从库中删除指定文件（含向量 chunks）。
+
+    v7+ 行为：传 kb_id 精确删；不传删任意一条。
+    """
     metadata_db.init_db()
-    rec = metadata_db.delete_file(rel_path)
+    rec = metadata_db.delete_file(rel_path, kb_id=kb_id)
     if not rec:
         return {"ok": False, "error": "文件不在库中"}
     import json
     chunk_ids = json.loads(rec.get("chunk_ids_json") or "[]")
     if chunk_ids:
-        vector_store.delete_chunks(chunk_ids)
+        rec_kb_id = rec.get("kb_id") or "default"
+        kb_row = metadata_db.get_kb(rec_kb_id)
+        cn = kb_row["collection_name"] if kb_row else vector_store.COLLECTION_NAME
+        vector_store.delete_chunks(chunk_ids, collection_name=cn)
     return {"ok": True, "deleted_chunks": len(chunk_ids)}

@@ -1,0 +1,97 @@
+name: Build Insight
+
+# 触发：手动 + 推 v* tag（如 v0.5.0）+ PR 到 main
+on:
+  workflow_dispatch:
+    inputs:
+      upload_artifact:
+        description: '上传构建产物到 Release（仅 tag 触发时有效）'
+        default: 'true'
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: Insight-Windows
+            artifact_ext: exe
+            archive_cmd: 'Compress-Archive -Path dist/Insight.exe -DestinationPath Insight-Windows.zip'
+            artifact_path: 'Insight-Windows.zip'
+          - os: macos-latest
+            artifact_name: Insight-macOS
+            artifact_ext: app
+            archive_cmd: 'cd dist && zip -r -y ../Insight-macOS.zip Insight.app && cd ..'
+            artifact_path: 'Insight-macOS.zip'
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build with PyInstaller (Windows)
+        if: runner.os == 'Windows'
+        run: pyinstaller build/insight.spec --noconfirm
+
+      - name: Build with PyInstaller (macOS)
+        if: runner.os == 'macOS'
+        run: pyinstaller build/insight.spec --noconfirm
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          echo "Archiving with: ${{ matrix.archive_cmd }}"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            powershell -Command "${{ matrix.archive_cmd }}"
+          else
+            ${{ matrix.archive_cmd }}
+          fi
+          ls -lh ${{ matrix.artifact_path }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+          retention-days: 30
+
+      - name: Attach to Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_path }}
+          draft: true
+          generate_release_notes: true

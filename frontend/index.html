@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Insight</title>
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('amd-ui-theme') || 'stripe-light';
+          var map = {
+            'stripe-light': '',
+            'stripe-dark': 'theme-stripe-dark',
+            'linear': 'theme-linear',
+            'macos': 'theme-macos',
+          };
+          var cls = map[t];
+          if (cls) document.documentElement.classList.add(cls);
+
+          // macOS 主题下的渐变背景选择
+          var bgMap = {
+            'deep-blue': '',
+            'smoky-blue': 'bg-smoky-blue',
+            'moonlit-mint': 'bg-moonlit-mint',
+            'pearl-dusk': 'bg-pearl-dusk',
+            'emerald-vault': 'bg-emerald-vault',
+            'rose-gold-mist': 'bg-rose-gold-mist',
+            'aurora-haze': 'bg-aurora-haze',
+            'obsidian': 'bg-obsidian',
+            'galaxy-mesh': 'bg-galaxy-mesh',
+          };
+          var bRaw = localStorage.getItem('amd-ui-background');
+          var b = null;
+          if (bRaw) {
+            try { b = JSON.parse(bRaw); } catch (e) { b = bRaw; }
+          }
+          if (b && bgMap[b] && t === 'macos') {
+            document.documentElement.classList.add(bgMap[b]);
+          }
+
+          var glassRaw = localStorage.getItem('amd-ui-glass-opacity');
+          if (glassRaw) {
+            var glass = JSON.parse(glassRaw);
+            if (typeof glass === 'number' && !isNaN(glass)) {
+              document.documentElement.style.setProperty('--glass-alpha', String(glass));
+            }
+          }
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

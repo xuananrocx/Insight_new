@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import signal
 import subprocess
 import sys
@@ -20,7 +21,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
 def start_api(host: str, port: int) -> subprocess.Popen:
-    """启动 FastAPI（uvicorn）。"""
+    """启动 FastAPI（uvicorn）。
+
+    --reload 仅在 dev 环境启用（生产环境性能差、长连接会被 reload 中断）。
+    """
+    is_dev = os.environ.get("APP_ENV", "dev") == "dev"
     cmd = [
         sys.executable,
         "-m",
@@ -30,9 +35,10 @@ def start_api(host: str, port: int) -> subprocess.Popen:
         host,
         "--port",
         str(port),
-        "--reload",
     ]
-    print(f"[启动 FastAPI] {' '.join(cmd)}")
+    if is_dev:
+        cmd.append("--reload")
+    print(f"[启动 FastAPI] {' '.join(cmd)} (env={os.environ.get('APP_ENV', 'dev')})")
     return subprocess.Popen(cmd, cwd=PROJECT_ROOT)
 
 

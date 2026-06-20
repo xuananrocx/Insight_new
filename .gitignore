@@ -68,3 +68,12 @@ htmlcov/
 .DS_Store
 .AppleDouble
 .LSOverride
+
+# ===== 数据库备份/索引缓存（不入仓库）=====
+data/*.db-*
+data/*.before-import-test
+data/*.pkl
+
+# ===== 临时审查文档（不入仓库）=====
+corner-code-review.md
+tests/COVERAGE_REVIEW.md

@@ -41,20 +41,50 @@ def get_chroma_client() -> chromadb.api.ClientAPI:
 
 
 def get_main_collection() -> chromadb.api.Collection:
-    """主知识库 collection。"""
+    """主知识库 collection。使用 cosine 距离（bge 已归一化，cosine similarity 即 score）。"""
     client = get_chroma_client()
     return client.get_or_create_collection(
         name=COLLECTION_NAME,
-        metadata={"description": "AMD AI Assistant 主知识库"},
+        metadata={
+            "description": "AMD AI Assistant 主知识库",
+            "hnsw:space": "cosine",
+        },
     )
 
 
 def get_feedback_collection() -> chromadb.api.Collection:
-    """审批通过的人工问答 collection（高分优先）。"""
+    """审批通过的人工问答 collection（高分优先）。使用 cosine 距离。"""
     client = get_chroma_client()
     return client.get_or_create_collection(
         name=FEEDBACK_COLLECTION_NAME,
-        metadata={"description": "审批通过的人工问答"},
+        metadata={
+            "description": "审批通过的人工问答",
+            "hnsw:space": "cosine",
+        },
+    )
+
+
+def _resolve_collection(collection_name: str) -> chromadb.api.Collection:
+    """按名字返回 collection，自动附带 cosine metadata。
+
+    每个 KB 拥有独立的 collection（按 collection_name 隔离）。
+    """
+    client = get_chroma_client()
+    return client.get_or_create_collection(
+        name=collection_name,
+        metadata={"hnsw:space": "cosine"},
+    )
+
+
+def get_or_create_collection(collection_name: str) -> chromadb.api.Collection:
+    """获取或创建指定名称的 collection（自动附加 cosine metadata）。
+
+    用于多 KB 场景：每个 KB 对应一个独立 collection。
+    """
+    client = get_chroma_client()
+    return client.get_or_create_collection(
+        name=collection_name,
+        metadata={"hnsw:space": "cosine"},
     )
 
 
@@ -77,11 +107,24 @@ def upsert_chunks(
         chunks: [{"id": "...", "text": "...", "embedding": [...], "metadata": {...}}, ...]
     返回：
         写入的 chunk_id 列表
+
+    抛出：
+        EmbeddingDimensionMismatchError: 当 embedding 维度与 collection 已有维度不一致时。
+        早期失败，避免 Chroma 抛出英文 traceback 难以诊断。
     """
     if not chunks:
         return []
-    client = get_chroma_client()
-    collection = client.get_or_create_collection(name=collection_name)
+    # 维度预检：collection 已有数据时，比对维度避免静默失败
+    vec_dim = len(chunks[0]["embedding"])
+    actual_dim = get_collection_dim(collection_name)
+    if actual_dim and actual_dim != vec_dim:
+        from src.core.errors import EmbeddingDimensionMismatchError
+        raise EmbeddingDimensionMismatchError(
+            collection_name=collection_name,
+            expected_dim=actual_dim,
+            got_dim=vec_dim,
+        )
+    collection = _resolve_collection(collection_name)
     ids = [c["id"] for c in chunks]
     texts = [c["text"] for c in chunks]
     embeddings = [c["embedding"] for c in chunks]
@@ -101,9 +144,8 @@ def delete_chunks(ids: list[str], collection_name: str = COLLECTION_NAME) -> Non
     """按 id 删除 chunks。"""
     if not ids:
         return
-    client = get_chroma_client()
     try:
-        collection = client.get_collection(name=collection_name)
+        collection = _resolve_collection(collection_name)
     except Exception:
         return
     collection.delete(ids=ids)
@@ -116,9 +158,8 @@ def query_by_embedding(
     collection_name: str = COLLECTION_NAME,
 ) -> list[dict[str, Any]]:
     """根据 embedding 检索最相似的 chunks。"""
-    client = get_chroma_client()
     try:
-        collection = client.get_collection(name=collection_name)
+        collection = _resolve_collection(collection_name)
     except Exception:
         return []
     res = collection.query(
@@ -197,11 +238,57 @@ def _sanitize_meta(m: dict[str, Any]) -> dict[str, Any]:
 def count(collection_name: str = COLLECTION_NAME) -> int:
     """返回 collection 内的 chunk 数。"""
     try:
-        client = get_chroma_client()
-        collection = client.get_collection(name=collection_name)
+        collection = _resolve_collection(collection_name)
         return collection.count()
     except Exception:
         return 0
+
+
+def get_collection_dim(collection_name: str = COLLECTION_NAME) -> int:
+    """读取 collection 的 embedding 维度。
+
+    Chroma 不在 metadata 里直接存维度，需要取样一条向量。
+    空集合返回 0（视为无维度约束）。
+    """
+    try:
+        client = get_chroma_client()
+        collection = client.get_collection(collection_name)
+        if collection.count() == 0:
+            return 0
+        sample = collection.get(limit=1, include=["embeddings"])
+        embs = sample.get("embeddings")
+        if embs is None or len(embs) == 0:
+            return 0
+        return len(embs[0])
+    except Exception:
+        return 0
+
+
+def count_chunks(collection_name: str = COLLECTION_NAME) -> int:
+    """读取 collection 当前 chunks 数。失败返回 0。"""
+    try:
+        client = get_chroma_client()
+        collection = client.get_collection(collection_name)
+        return collection.count()
+    except Exception:
+        return 0
+
+
+def reset_collection(collection_name: str) -> int:
+    """删除并重建空 collection，返回删除前的 chunk 数。
+
+    用于 embedding 维度变更时的重建流程。cosine 距离会保留。
+    """
+    client = get_chroma_client()
+    try:
+        existing = client.get_collection(collection_name)
+        before = existing.count()
+        client.delete_collection(collection_name)
+    except Exception:
+        before = 0
+    # 重新创建（带 cosine metadata）
+    _resolve_collection(collection_name)
+    return before
 
 
 def health_check() -> dict:

@@ -31,7 +31,7 @@ from src.web import api_client  # noqa: E402
 
 # ===== 页面全局设置 =====
 st.set_page_config(
-    page_title="AMD AI Assistant",
+    page_title="AMD 智能助手",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -51,29 +51,30 @@ _init_state()
 
 # ===== 侧边栏 =====
 with st.sidebar:
-    st.title("🤖 AMD AI Assistant")
-    st.caption(f"v{__version__} - 华锐 AMD 行情系统智能运维助手")
+    st.title("🤖 AMD 智能助手")
+    st.caption(f"版本 v{__version__} · 华锐 AMD 行情系统智能运维助手")
 
     h = api_client.health()
     if h.get("status") == "ok":
-        st.success("✅ API 在线")
+        st.success("✅ 后端服务在线")
         vec = h.get("vector_db", {})
         llm = h.get("llm", {})
-        st.caption(f"向量库 chunks: {sum(vec.get('counts', {}).values())}")
+        st.caption(f"知识库片段数：{sum(vec.get('counts', {}).values())}")
         chain = llm.get("effective_chat_chain", [])
         if not chain:
-            st.warning("⚠️ 没有可用的 LLM provider（缺 API key）")
+            st.warning("⚠️ 没有可用的对话模型（缺少 API key）")
         else:
-            st.caption(f"当前 chat provider: {' → '.join(chain)}")
-        st.caption(f"投喂文件夹: `{h.get('feed_folder')}`")
+            st.caption(f"当前对话模型：{' → '.join(chain)}")
+        st.caption(f"投喂文件夹：`{h.get('feed_folder')}`")
     else:
-        st.error(f"❌ API 不可用：{h.get('error', '未知错误')}")
+        st.error(f"❌ 后端服务不可用：{h.get('error', '未知错误')}")
         st.caption("请先启动 FastAPI：`python -m src.main --api-only`")
 
     st.divider()
     st.subheader("快速链接")
-    st.markdown(f"- [API 文档]({api_client._get_base_url()}/docs)")
-    st.markdown(f"- [健康检查]({api_client._get_base_url()}/health)")
+    base_url = api_client._get_base_url()
+    st.markdown(f"- [📖 API 接口文档]({base_url}/docs)")
+    st.markdown(f"- [💚 健康检查]({base_url}/health)")
 
 
 # ===== 标签页 =====
@@ -85,24 +86,25 @@ tab_qa, tab_kb, tab_review, tab_system = st.tabs(
 # ===== 💬 问答 =====
 with tab_qa:
     st.header("💬 智能问答")
+    st.caption("向 AI 提问，系统会从知识库中检索相关文档并生成回答。点赞的回答会进入审批队列。")
 
     # 历史对话
     for i, msg in enumerate(st.session_state.chat_history):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg.get("citations"):
-                with st.expander(f"📎 引用来源（{len(msg['citations'])} 条）"):
+                with st.expander(f"📎 引用来源（共 {len(msg['citations'])} 条）"):
                     for j, c in enumerate(msg["citations"], 1):
                         st.markdown(
                             f"**[{j}] {c.get('title', '')}** "
                             f"_{c.get('section_label', '')}_ "
                             f"`{c.get('source_name', '')}` "
-                            f"(score: {c.get('score', 0):.3f})"
+                            f"（相似度：{c.get('score', 0):.3f}）"
                         )
                         st.caption(c.get("text_snippet", ""))
 
     # 用户输入
-    if user_q := st.chat_input("基于知识库提问，比如：AMD 行情断线如何排查？"):
+    if user_q := st.chat_input("请输入您的问题，例如：AMD 行情断线如何排查？"):
         st.chat_message("user").markdown(user_q)
         st.session_state.chat_history.append({"role": "user", "content": user_q})
 
@@ -113,10 +115,10 @@ with tab_qa:
         ]
 
         try:
-            with st.spinner("正在检索知识库并生成答案..."):
+            with st.spinner("正在检索知识库并生成答案，请稍候..."):
                 resp = api_client.qa_ask(user_q, top_k=5, history=history_for_api)
         except Exception as e:
-            st.error(f"调用失败：{e}")
+            st.error(f"查询失败：{e}")
             resp = None
 
         if resp:
@@ -126,13 +128,13 @@ with tab_qa:
 
             st.chat_message("assistant").markdown(answer)
             if citations:
-                with st.expander(f"📎 引用来源（{len(citations)} 条）"):
+                with st.expander(f"📎 引用来源（共 {len(citations)} 条）"):
                     for j, c in enumerate(citations, 1):
                         st.markdown(
                             f"**[{j}] {c.get('title', '')}** "
                             f"_{c.get('section_label', '')}_ "
                             f"`{c.get('source_name', '')}` "
-                            f"(score: {c.get('score', 0):.3f})"
+                            f"（相似度：{c.get('score', 0):.3f}）"
                         )
                         st.caption(c.get("text_snippet", ""))
 
@@ -161,7 +163,7 @@ with tab_qa:
                         "rating": 1,
                     })
                     if r.get("feedback_id"):
-                        st.success(f"已加入待审批队列 (id={r['feedback_id']})")
+                        st.success(f"已加入待审批队列（编号 {r['feedback_id']}）")
                     else:
                         st.info(r.get("message", "已记录"))
                 except Exception as e:
@@ -173,13 +175,13 @@ with tab_qa:
                         **st.session_state.last_answer,
                         "rating": -1,
                     })
-                    st.info("已记录，谢谢反馈")
+                    st.info("已记录，感谢反馈")
                 except Exception as e:
                     st.error(f"提交失败：{e}")
         with col3:
             note = st.text_input("补充说明（可选）", key="fb_note")
 
-        if st.button("🗑️ 清空对话"):
+        if st.button("🗑️ 清空当前对话"):
             st.session_state.chat_history = []
             st.session_state.last_answer = None
             st.rerun()
@@ -188,15 +190,16 @@ with tab_qa:
 # ===== 📚 知识库 =====
 with tab_kb:
     st.header("📚 知识库管理")
+    st.caption("把 AMD 相关的文档投喂给系统，AI 才能基于这些内容回答问题。")
 
     col_a, col_b, col_c = st.columns(3)
     try:
         stats = api_client.kb_stats()
         col_a.metric("已入库文件", stats.get("files_done", 0))
-        col_b.metric("总 chunks", stats.get("total_chunks", 0))
-        col_c.metric("待审批", stats.get("feedback_pending", 0))
+        col_b.metric("知识片段总数", stats.get("total_chunks", 0))
+        col_c.metric("待审批反馈", stats.get("feedback_pending", 0))
     except Exception as e:
-        st.error(f"获取统计失败：{e}")
+        st.error(f"获取统计数据失败：{e}")
 
     st.divider()
 
@@ -204,42 +207,42 @@ with tab_kb:
     col_scan1, col_scan2 = st.columns([1, 3])
     with col_scan1:
         if st.button("🔄 扫描投喂文件夹", type="primary"):
-            with st.spinner("扫描中..."):
+            with st.spinner("正在扫描投喂文件夹，请稍候..."):
                 try:
                     r = api_client.kb_scan()
                     result = r.get("result", {})
                     st.success(
-                        f"扫描完成：✨新增 {result.get('added', 0)} | "
-                        f"♻️更新 {result.get('updated', 0)} | "
-                        f"⏭️跳过 {result.get('skipped', 0)} | "
-                        f"❌失败 {result.get('failed', 0)} | "
+                        f"扫描完成：✨新增 {result.get('added', 0)}　|　"
+                        f"♻️更新 {result.get('updated', 0)}　|　"
+                        f"⏭️跳过 {result.get('skipped', 0)}　|　"
+                        f"❌失败 {result.get('failed', 0)}　|　"
                         f"🗑️移除 {result.get('removed', 0)}"
                     )
                     if result.get("errors"):
-                        with st.expander(f"⚠️ 错误详情（{len(result['errors'])} 条）"):
+                        with st.expander(f"⚠️ 错误详情（共 {len(result['errors'])} 条）"):
                             for e in result["errors"][:20]:
-                                st.write(f"- `{e.get('file')}`: {e.get('error')}")
+                                st.write(f"- `{e.get('file')}`：{e.get('error')}")
                 except Exception as e:
                     st.error(f"扫描失败：{e}")
 
     # 文件上传
-    st.subheader("📤 上传单文件")
+    st.subheader("📤 上传单个文件")
     uploaded = st.file_uploader(
-        "选择文件（支持 PDF/Word/Excel/Markdown 等）",
+        "选择文件（支持 PDF / Word / Excel / Markdown 等格式）",
         type=None,
     )
     if uploaded is not None:
-        if st.button("📥 上传并入库"):
+        if st.button("📥 上传并添加到知识库"):
             try:
-                with st.spinner(f"上传 {uploaded.name}..."):
+                with st.spinner(f"正在上传 {uploaded.name}..."):
                     r = api_client.kb_upload(uploaded.name, uploaded.getvalue())
                 if r.get("ok"):
                     st.success(
-                        f"上传成功：✨新增 {r.get('added', 0)} | "
+                        f"上传成功：✨新增 {r.get('added', 0)}　|　"
                         f"♻️更新 {r.get('updated', 0)}"
                     )
                 elif r.get("skipped"):
-                    st.info("文件未变化，已跳过")
+                    st.info("文件内容未变化，已跳过")
                 else:
                     st.error(f"上传失败：{r.get('errors', '未知错误')}")
             except Exception as e:
@@ -247,14 +250,22 @@ with tab_kb:
 
     # 文件列表
     st.subheader("📋 文件列表")
-    filter_status = st.selectbox(
-        "筛选状态",
-        ["all", "done", "pending", "failed"],
+    filter_options = {
+        "all": "全部",
+        "done": "已入库",
+        "pending": "处理中",
+        "failed": "失败",
+    }
+    filter_keys = list(filter_options.keys())
+    selected_filter = st.selectbox(
+        "按状态筛选",
+        filter_keys,
+        format_func=lambda k: filter_options[k],
         index=0,
     )
     try:
         files = api_client.kb_files(
-            status=None if filter_status == "all" else filter_status,
+            status=None if selected_filter == "all" else selected_filter,
         )
     except Exception as e:
         st.error(f"获取文件列表失败：{e}")
@@ -266,33 +277,37 @@ with tab_kb:
             status_emoji = {
                 "done": "✅", "pending": "⏳", "failed": "❌",
             }.get(f["status"], "❓")
+            status_text = {
+                "done": "已入库", "pending": "处理中", "failed": "失败",
+            }.get(f["status"], "未知")
             with st.expander(
                 f"{status_emoji} {f['relative_path']} "
-                f"({f['file_type']}, {f['chunk_count']} chunks)"
+                f"（{f['file_type']}，{f['chunk_count']} 个片段，{status_text}）"
             ):
                 col_meta1, col_meta2 = st.columns([3, 1])
                 with col_meta1:
-                    st.caption(f"大小: {f['file_size']:,} bytes")
-                    st.caption(f"Hash: `{f['content_hash'][:16]}...`")
+                    st.caption(f"文件大小：{f['file_size']:,} 字节")
+                    st.caption(f"内容指纹：`{f['content_hash'][:16]}...`")
                     if f.get("source_package"):
-                        st.caption(f"来自压缩包: `{f['source_package']}`")
+                        st.caption(f"来自压缩包：`{f['source_package']}`")
                     if f.get("error_message"):
-                        st.error(f"错误: {f['error_message']}")
+                        st.error(f"错误信息：{f['error_message']}")
                 with col_meta2:
                     if st.button("🗑️ 删除", key=f"del_{f['id']}"):
                         try:
                             api_client.kb_delete(f["relative_path"])
-                            st.success("已删除")
+                            st.success("已从知识库中删除")
                             st.rerun()
                         except Exception as e:
                             st.error(f"删除失败：{e}")
     else:
-        st.info("知识库为空。请先投喂文档（放到投喂文件夹）后点击「扫描」。")
+        st.info("📭 知识库为空。请先把 AMD 相关文档放到投喂文件夹，再点击「扫描投喂文件夹」。")
 
 
 # ===== ✅ 审批 =====
 with tab_review:
     st.header("✅ 反馈审批")
+    st.caption("用户点赞过的问答会进入这里，审批通过后会自动沉淀到知识库，让 AI 越用越聪明。")
 
     try:
         pending = api_client.feedback_list("pending")
@@ -307,7 +322,7 @@ with tab_review:
 
     for fb in pending:
         with st.expander(
-            f"#{fb['id']} | {fb['question'][:60]}{'...' if len(fb['question']) > 60 else ''}"
+            f"编号 #{fb['id']} | {fb['question'][:60]}{'...' if len(fb['question']) > 60 else ''}"
         ):
             st.markdown(f"**问题：** {fb['question']}")
             st.markdown(f"**答案：**")
@@ -318,10 +333,10 @@ with tab_review:
                     if sources:
                         st.caption("引用来源：")
                         for s in sources:
-                            st.caption(f"- {s.get('source_name', '')} ({s.get('section_label', '')})")
+                            st.caption(f"- {s.get('source_name', '')}（{s.get('section_label', '')}）")
                 except Exception:
                     pass
-            st.caption(f"提交时间：{fb.get('created_at', '')} | provider: {fb.get('used_provider', '')}")
+            st.caption(f"提交时间：{fb.get('created_at', '')}　|　回答所用模型：{fb.get('used_provider', '')}")
 
             col_a, col_b, col_c = st.columns([1, 1, 3])
             with col_a:
@@ -329,32 +344,34 @@ with tab_review:
                     try:
                         r = api_client.feedback_review(fb["id"], "approved")
                         if r.get("ok"):
-                            st.success("已通过并写入知识库")
+                            st.success("已通过并写入知识库，AI 下次回答会参考此内容")
                             st.rerun()
                         else:
-                            st.error(f"失败：{r.get('error')}")
+                            st.error(f"操作失败：{r.get('error')}")
                     except Exception as e:
-                        st.error(f"失败：{e}")
+                        st.error(f"操作失败：{e}")
             with col_b:
                 if st.button("❌ 拒绝", key=f"rej_{fb['id']}"):
                     try:
                         r = api_client.feedback_review(fb["id"], "rejected")
                         if r.get("ok"):
-                            st.success("已拒绝")
+                            st.success("已拒绝，不会写入知识库")
                             st.rerun()
                         else:
-                            st.error(f"失败：{r.get('error')}")
+                            st.error(f"操作失败：{r.get('error')}")
                     except Exception as e:
-                        st.error(f"失败：{e}")
+                        st.error(f"操作失败：{e}")
 
     # 已审批
     st.divider()
-    with st.expander("📜 查看已通过"):
+    with st.expander("📜 查看已通过的反馈"):
         try:
             approved = api_client.feedback_list("approved")
+            if not approved:
+                st.caption("暂无已通过的反馈")
             for fb in approved:
                 st.markdown(f"#{fb['id']} **{fb['question'][:60]}**")
-                st.caption(f"审批人: {fb.get('reviewer', '')} | 时间: {fb.get('reviewed_at', '')}")
+                st.caption(f"审批人：{fb.get('reviewer', '')}　|　时间：{fb.get('reviewed_at', '')}")
         except Exception as e:
             st.error(f"获取失败：{e}")
 
@@ -363,11 +380,48 @@ with tab_review:
 with tab_system:
     st.header("🩺 系统状态")
 
+    # Embedding 模型切换
+    st.subheader("🧠 向量化模型（Embedding）")
+    st.caption("向量化模型负责把文档和问题转成数字向量，用于语义检索。模型越大效果越好但更慢。")
+    try:
+        emb = api_client.embedding_status()
+        st.caption(f"当前模型：`{emb.get('current_model', '')}`　|　向量维度：{emb.get('dimensions', '?')}")
+
+        models = emb.get("available_models", [])
+        if models:
+            active_name = emb.get("current_model", "")
+            options = {m["name"]: f"{m['label']}（{m['size']}）- {m['description']}" for m in models}
+            selected = st.selectbox(
+                "选择向量化模型",
+                options=list(options.keys()),
+                format_func=lambda k: options[k],
+                index=list(options.keys()).index(active_name) if active_name in options else 0,
+            )
+            if selected != active_name:
+                if st.button("🔄 确认切换", type="primary"):
+                    with st.spinner(f"正在加载 {selected}，首次切换需下载模型，请耐心等待..."):
+                        try:
+                            r = api_client.embedding_switch(selected)
+                            st.success(f"已切换到 `{r.get('current_model', selected)}`")
+                            st.warning("⚠️ 切换模型后向量维度可能改变，建议重新扫描投喂文件夹以获得最佳检索效果。")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"切换失败：{e}")
+        else:
+            st.info("未配置可选模型")
+    except Exception as e:
+        st.error(f"获取向量化模型状态失败：{e}")
+
+    st.divider()
+
+    # 系统健康
+    st.subheader("📊 系统健康详情")
     h = api_client.health()
     st.json(h)
 
     st.divider()
-    st.subheader("Feature Flags")
+    st.subheader("⚙️ 功能开关")
+    st.caption("配置文件中的各项功能开关状态，可在 config.yaml 中修改。")
     try:
         st.json(h.get("feature_flags", {}))
     except Exception:

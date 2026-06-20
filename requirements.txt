@@ -12,6 +12,9 @@ streamlit==1.41.1
 httpx==0.28.1                  # 异步 HTTP 客户端（调 LLM API）
 python-multipart==0.0.20       # FastAPI 文件上传
 
+# ===== 跨平台路径 =====
+platformdirs==4.3.6            # 用户数据目录（mac/win/linux 统一）
+
 # ===== RAG 核心 =====
 langchain>=0.3.14,<0.4
 langchain-core>=0.3.29,<0.4
@@ -19,6 +22,7 @@ langchain-community>=0.3.14,<0.4
 langchain-chroma>=0.2.2,<0.3
 langchain-openai>=0.2.14,<0.3  # OpenAI 兼容协议（DeepSeek/通义/Kimi 都用这个）
 openai>=1.58.1,<2.0            # OpenAI 兼容 SDK（多 provider 切换基础）
+anthropic>=0.40.0,<1.0         # Anthropic 原生 SDK（Claude/archforce 等）
 chromadb>=0.5.23,<0.6
 
 # ===== 文档解析（纯 Python，跨平台友好）=====
@@ -42,6 +46,9 @@ loguru==0.7.3                  # 日志
 rich==13.9.4                   # 终端美化
 tenacity==9.0.0                # 重试
 tiktoken==0.8.0                # token 计数
+
+# ===== 本地 Embedding =====
+sentence-transformers>=3.3.0,<4.0     # 本地向量化（不依赖 API）
 
 # ===== 文件处理 =====
 watchdog==6.0.0                # 文件夹监听（Phase 2 用，先装着）

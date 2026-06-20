@@ -1,2 +1,2 @@
-"""AMD AI Assistant."""
-__version__ = "0.1.0"
+"""Insight."""
+__version__ = "0.5.0"

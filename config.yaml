@@ -1,81 +1,94 @@
-# ============================================
-#  AMD AI Assistant - 主配置文件
-# ============================================
-#  说明：
-#  - 所有功能默认值遵循"安全优先"原则，高风险功能默认关闭
-#  - 想覆盖某项配置，可创建 config.local.yaml（已 gitignore）
-#  - 修改后重启应用生效
-# ============================================
-
-# ===== 全局 =====
 app:
-  name: AMD AI Assistant
-  version: 0.1.0
+  name: Insight
+  version: 0.5.0
   log_level: INFO
-
-# ===== 服务端口 =====
+ui:
+  # 默认展示的知识库 ID。null/空字符串 = 使用 is_default 字段标记的 KB（当前是「内置知识库」）。
+  # 配置具体 kb_id 后，提问页和文档库页会默认选中该 KB。
+  default_kb_id: null
 server:
   api_host: 127.0.0.1
-  api_port: 8000           # FastAPI 端口
+  api_port: 8000
   web_host: 127.0.0.1
-  web_port: 8501           # Streamlit 端口
-
-# ===== 路径配置 =====
+  web_port: 8501
 paths:
-  # 投喂文件夹（用户投喂文档的入口）
-  # 支持 ~、相对路径（相对项目根）或绝对路径
   feed_folder: ~/AMD-Knowledge-Feeds
-
-  # 数据目录（全部 gitignored）
   vector_db: ./data/vector_db
-  extracted: ./data/extracted        # 程序包解压临时目录
+  extracted: ./data/extracted
   feedback_queue: ./data/feedback_queue
   raw_uploads: ./data/raw_uploads
   metadata_db: ./data/metadata.db
   cache: ./data/cache
-
-# ===== 功能开关（feature flags）=====
 feature_flags:
   knowledge_base:
     enabled: true
-    auto_extract_package: true      # 程序包自动解包提取
-    image_ocr: false                # OCR 默认关（耗资源）
-
+    auto_extract_package: true
+    image_ocr: false
   qa:
     enabled: true
     web_ui: true
-    show_sources: true              # 答案显示引用来源
-    feedback_buttons: true          # 点赞/点踩按钮
-
+    show_sources: true
+    feedback_buttons: true
   feedback_loop:
-    manual_feedback: true           # 通道1：人工点赞反哺
-    log_feedback: false             # 通道2：日志反哺（Phase 2）
-    auto_feedback:                  # 通道3：AI 自动反哺
-      enabled: false                # 默认关闭
-      require_approval: true        # 需要审批才能入库
+    manual_feedback: true
+    log_feedback: false
+    auto_feedback:
+      enabled: false
+      require_approval: true
       min_confidence: 0.85
-
-  realtime_watch: false             # 文件夹实时监听（Phase 2，第一版手动触发）
-
-# ===== LLM 配置（多 provider 适配）=====
+  realtime_watch: false
+  batch_upload:
+    auto_ingest: true  # 批量上传后是否自动 ingest（false=只放投喂目录，需手动扫描）
+  ai_call_log:
+    enabled: true              # 全局总开关
+    log_response: true         # 是否记响应
+    log_system_prompt: true    # 是否记 system prompt
+    log_messages: true         # 是否记 messages
+    retention_days: 30         # 保留天数（超过自动清理）
+    scenes:
+      qa_chat: true
+      summarize: true
+      concept_extract: true
+      title: true
+      test: false              # 测试场景默认不记
 llm:
-  # 当前选用的 provider（必须在下面 providers 里 enabled=true 且有 API key）
   chat_provider: deepseek
-  embedding_provider: qwen          # 必须支持 embedding 的 provider
-
-  # 故障切换链（主 provider 挂了按顺序尝试）
-  fallback_chain: [deepseek, qwen, moonshot]
-
+  embedding:
+    mode: local
+    local_model: BAAI/bge-base-zh-v1.5
+    device: cpu
+    cache_size: 1
+    available_models:
+    - name: BAAI/bge-small-zh-v1.5
+      label: BGE-Small-中文
+      size: 93MB
+      dimensions: 512
+      description: 速度快，中文好，推荐默认
+    - name: BAAI/bge-base-zh-v1.5
+      label: BGE-Base-中文
+      size: 400MB
+      dimensions: 768
+      description: 精度更高，速度稍慢
+    - name: BAAI/bge-large-zh-v1.5
+      label: BGE-Large-中文
+      size: 1.2GB
+      dimensions: 1024
+      description: 最高精度，适合大批量文档
+  fallback_chain:
+  - deepseek
+  - qwen
+  - moonshot
+  - anthropic
+  - anthropic-arch
   providers:
     deepseek:
       api_key_env: DEEPSEEK_API_KEY
       base_url: https://api.deepseek.com/v1
       chat_model: deepseek-chat
-      embedding_model: false        # DeepSeek 当前无 embedding 接口
+      embedding_model: false
       max_tokens: 4096
       temperature: 0.3
       enabled: true
-
     qwen:
       api_key_env: DASHSCOPE_API_KEY
       base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
@@ -85,7 +98,6 @@ llm:
       max_tokens: 4096
       temperature: 0.3
       enabled: true
-
     moonshot:
       api_key_env: MOONSHOT_API_KEY
       base_url: https://api.moonshot.cn/v1
@@ -93,8 +105,7 @@ llm:
       embedding_model: false
       max_tokens: 4096
       temperature: 0.3
-      enabled: false                # 默认关，按需开
-
+      enabled: false
     openai:
       api_key_env: OPENAI_API_KEY
       base_url: https://api.openai.com/v1
@@ -104,8 +115,7 @@ llm:
       max_tokens: 4096
       temperature: 0.3
       enabled: false
-
-    local:                          # 本地模型（Ollama / vLLM），未来用
+    local:
       api_key_env: null
       base_url: http://localhost:11434/v1
       chat_model: qwen2.5:14b
@@ -114,61 +124,87 @@ llm:
       max_tokens: 4096
       temperature: 0.3
       enabled: false
-
-# ===== 文档摄入（统一配置）=====
+    anthropic:
+      protocol: anthropic
+      api_key_env: ANTHROPIC_API_KEY
+      base_url: https://api.anthropic.com
+      chat_model: claude-sonnet-4-20250514
+      embedding_model: false
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: false
+    anthropic-arch:
+      protocol: anthropic-arch
+      api_key_env: ANTHROPIC_AUTH_TOKEN
+      base_url: https://plan.ai.archforce.cn
+      chat_model: glm-5.2
+      embedding_model: false
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: true
+    glm:
+      protocol: openai
+      api_key_env: ZHIPU_API_KEY
+      base_url: https://open.bigmodel.cn/api/paas/v4
+      chat_model: glm-4-flash
+      embedding_model: false
+      max_tokens: 4096
+      temperature: 0.3
+      enabled: false
 ingest:
-  # 投喂白名单：哪些扩展名的文件会被解析入库
-  # 这个列表是 package_extractor 和 ingestion 共用的
   text_extensions:
-    - md
-    - markdown
-    - txt
-    - rst
-    - log
-    - pdf
-    - docx
-    - xlsx
-    - xlsm
-    - pptx
-    - html
-    - htm
-    - xml
-    - json
-    - yaml
-    - yml
-    - ini
-    - conf
-    - cfg
-    - toml
-    - properties
-    - csv
-    - tsv
-    - env
-    - py
-    - sh
-    - bash
-    - js
-    - ts
-    - go
-    - java
-    - c
-    - cpp
-    - h
-    - hpp
-    - sql
-
-  # 单文件大小上限（MB）
+  - md
+  - markdown
+  - txt
+  - rst
+  - log
+  - pdf
+  - docx
+  - xlsx
+  - xlsm
+  - pptx
+  - html
+  - htm
+  - xml
+  - json
+  - yaml
+  - yml
+  - ini
+  - conf
+  - cfg
+  - toml
+  - properties
+  - csv
+  - tsv
+  - env
+  - py
+  - sh
+  - bash
+  - js
+  - ts
+  - go
+  - java
+  - c
+  - cpp
+  - h
+  - hpp
+  - sql
   max_file_size_mb: 50
-
-  # 切片
   chunking:
-    chunk_size: 800                 # 每块字符数
-    chunk_overlap: 100              # 块之间的重叠字符数
-
-# ===== RAG 检索（问答）=====
+    chunk_size: 800
+    chunk_overlap: 200
+  ai_summary:
+    enabled: false
+    min_word_count: 100
 qa:
-  top_k: 5                          # 检索多少条上下文
-  similarity_threshold: 0.3         # 相似度阈值
+  top_k: 5
+  similarity_threshold: 0.3
+  hybrid_search: true
+  rerank:
+    enabled: true
+    model_name: BAAI/bge-reranker-v2-m3
+    retrieve_multiplier: 4
   chat_options:
     temperature: 0.2
     max_tokens: 1500
+  system_prompt: ''

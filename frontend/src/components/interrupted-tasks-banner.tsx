@@ -1,0 +1,124 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import { AlertCircle, Loader2, Play, Trash2 } from 'lucide-react'
+
+import { api, type UploadTask } from '@/lib/api'
+import { Button } from '@/components/ui/button'
+
+/**
+ * 检测未完成的批量上传任务（包括 paused / running），顶部 banner 提示用户。
+ *
+ * - paused（进程崩溃留下的）：显示"继续 / 放弃"
+ * - running（其他 tab 正在跑）：只显示状态，不操作
+ */
+export function InterruptedTasksBanner() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery({
+    queryKey: ['upload-tasks', 'active'],
+    queryFn: () => api.knowledge.uploadTasksActive(),
+    staleTime: 30_000,
+  })
+
+  const resumeMutation = useMutation({
+    mutationFn: (taskId: string) => api.knowledge.resumeUploadTask(taskId),
+    onSuccess: () => {
+      toast.success('已恢复任务')
+      qc.invalidateQueries({ queryKey: ['upload-tasks', 'active'] })
+    },
+    onError: (e: Error) => toast.error(`恢复失败：${e.message}`),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (taskId: string) => api.knowledge.deleteUploadTask(taskId),
+    onSuccess: () => {
+      toast.info('已放弃任务')
+      qc.invalidateQueries({ queryKey: ['upload-tasks', 'active'] })
+    },
+    onError: (e: Error) => toast.error(`放弃失败：${e.message}`),
+  })
+
+  if (isLoading || !data || data.tasks.length === 0) return null
+
+  return (
+    <div className="space-y-2">
+      {data.tasks.map((task) => (
+        <TaskRow
+          key={task.id}
+          task={task}
+          onResume={() => resumeMutation.mutate(task.id)}
+          onDelete={() => deleteMutation.mutate(task.id)}
+          resuming={resumeMutation.isPending}
+          deleting={deleteMutation.isPending}
+        />
+      ))}
+    </div>
+  )
+}
+
+type TaskRowProps = {
+  task: UploadTask
+  onResume: () => void
+  onDelete: () => void
+  resuming: boolean
+  deleting: boolean
+}
+
+function TaskRow({ task, onResume, onDelete, resuming, deleting }: TaskRowProps) {
+  const finished = task.done + task.skipped + task.failed
+  const isPaused = task.status === 'paused'
+  const isRunning = task.status === 'running'
+
+  return (
+    <div className="flex items-center gap-3 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-[12px]">
+      <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
+      <div className="flex-1">
+        {isPaused ? (
+          <span>
+            上次批量导入未完成：{finished}/{task.total}
+            <span className="ml-1 text-muted-foreground">
+              （进程重启后自动暂停）
+            </span>
+          </span>
+        ) : isRunning ? (
+          <span>
+            <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
+            后台正在处理：{finished}/{task.total}
+            <span className="ml-1 text-muted-foreground">（其他标签页或会话触发）</span>
+          </span>
+        ) : null}
+      </div>
+      {isPaused ? (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-7 gap-1 text-[11px]"
+            onClick={onResume}
+            disabled={resuming || deleting}
+          >
+            {resuming ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Play className="h-3 w-3" />
+            )}
+            继续
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 text-[11px]"
+            onClick={onDelete}
+            disabled={resuming || deleting}
+          >
+            {deleting ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <Trash2 className="h-3 w-3" />
+            )}
+            放弃
+          </Button>
+        </>
+      ) : null}
+    </div>
+  )
+}

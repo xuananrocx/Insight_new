@@ -124,3 +124,20 @@ def feedback_review(feedback_id: int, decision: str, reviewer: str = "pm", note:
         if r.status_code >= 400:
             return {"ok": False, "error": r.text}
         return r.json()
+
+
+# ===== Embedding 管理 =====
+
+
+def embedding_status() -> dict:
+    with _client() as c:
+        r = c.get("/api/v1/embedding/status")
+        r.raise_for_status()
+        return r.json()
+
+
+def embedding_switch(model_name: str) -> dict:
+    with _client() as c:
+        r = c.post("/api/v1/embedding/switch", json={"model_name": model_name})
+        r.raise_for_status()
+        return r.json()

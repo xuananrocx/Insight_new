@@ -1,19 +1,21 @@
-# AMD AI Assistant
+# Insight
 
-> 华锐 AMD（Archforce Market Data）行情系统智能运维助手
+> 基于 RAG 的本地知识库问答系统 · v0.5.0
 
-Phase 1：知识库 MVP（投喂 → 解析 → 向量化 → RAG 问答 → 反馈反哺）
+完全本地化的企业知识助手：文档投喂 → 多 KB 管理 → 向量检索 + BM25 + Rerank → 多 LLM 问答 → 反馈反哺闭环。
 
 ---
 
 ## 它能做什么
 
-- 📚 **知识库管理**：投喂 PDF/Word/Excel/Markdown/HTML 等文档，自动解析入库
-- 📦 **程序包投喂**：自动解压 tar.gz/zip，提取白名单文件入库
-- 💬 **RAG 问答**：基于知识库回答问题，每条答案带引用来源（"出自 XXX.pdf 第3页"）
-- 👍 **人工反哺**：点赞的问答对进审批队列，PM 审批后写回知识库
-- 🔌 **多 LLM 适配**：DeepSeek / 通义千问 / Kimi / OpenAI / 本地 Ollama，切换只改配置
-- 🚀 **完全本地化**：Chroma + SQLite + FastAPI + Streamlit，无外部依赖
+- 📚 **多知识库管理**：创建/导入/导出/重建 KB，每个 KB 独立 collection，可配置默认 KB
+- 📂 **批量投喂**：单/批量/扫描/ZIP，SSE 进度 + 失败重试 + 一键清理失败文件
+- 💬 **3 种 RAG 策略**：basic（基础检索）/ summary（摘要增强）/ agentic（跨文档概念扩展）
+- 🔌 **多 LLM 适配**：OpenAI / Anthropic / GLM / DeepSeek / 内网代理，UI 切换
+- 👍 **反馈反哺**：点赞问答进审批队列，PM 审批后写回知识库
+- 📊 **AI 日志**：记录 5 个场景的 LLM 调用（prompt/messages/response），可筛选/统计/清理
+- 🎨 **多主题 + 渐变背景**：macOS 毛玻璃主题 + 9 种渐变背景
+- 🚀 **完全本地化**：Chroma + SQLite + FastAPI + React，无外部依赖
 
 ---
 
