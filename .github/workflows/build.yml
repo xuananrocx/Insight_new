@@ -23,7 +23,7 @@ jobs:
           - os: windows-latest
             artifact_name: Insight-Windows
             artifact_ext: exe
-            archive_cmd: 'Compress-Archive -Path dist/Insight.exe -DestinationPath Insight-Windows.zip'
+            archive_cmd: 'powershell -Command "Compress-Archive -Path dist/Insight.exe -DestinationPath Insight-Windows.zip"'
             artifact_path: 'Insight-Windows.zip'
           - os: macos-latest
             artifact_name: Insight-macOS
@@ -31,6 +31,8 @@ jobs:
             archive_cmd: 'cd dist && zip -r -y ../Insight-macOS.zip Insight.app && cd ..'
             artifact_path: 'Insight-macOS.zip'
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write  # softprops/action-gh-release 需要写 Release 权限
     steps:
       - name: Checkout
         uses: actions/checkout@v4
