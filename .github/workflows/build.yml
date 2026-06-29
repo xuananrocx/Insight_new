@@ -85,9 +85,21 @@ jobs:
 
       - name: Install NSIS (Windows)
         if: runner.os == 'Windows'
-        uses: crazy-max/ghaction-chocolatey@v2
-        with:
-          args: install nsis -y
+        shell: bash
+        run: |
+          # 尝试 winget（Windows 11+ runner 自带）
+          if command -v winget &> /dev/null; then
+            echo "Installing NSIS via winget..."
+            winget install --id NSIS.NSIS --accept-package-agreements --accept-source-agreements
+          else
+            echo "winget not available, downloading NSIS manually..."
+            # 手动下载 NSIS（稳定版本 3.08）
+            curl -L -o nsis-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.08/nsis-3.08-setup.exe/download"
+            # 静默安装（/S = silent, /D specifies installation directory）
+            ./nsis-setup.exe /S /D=C:\Program Files (x86)\NSIS
+          fi
+          # 验证 makensis 可用
+          makensis /VERSION || echo "makensis not found in PATH"
 
       - name: Package Windows installer (NSIS)
         if: runner.os == 'Windows'
