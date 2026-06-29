@@ -95,11 +95,11 @@ jobs:
             echo "winget not available, downloading NSIS manually..."
             # 手动下载 NSIS（稳定版本 3.08）
             curl -L -o nsis-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.08/nsis-3.08-setup.exe/download"
-            # 静默安装（/S = silent, /D specifies installation directory）
-            ./nsis-setup.exe /S /D=C:\Program Files (x86)\NSIS
+            # 静默安装（路径加引号避免括号被 bash 误解析）
+            "./nsis-setup.exe" //S //D="C:\\NSIS"
           fi
           # 验证 makensis 可用
-          makensis /VERSION || echo "makensis not found in PATH"
+          makensis //VERSION || echo "makensis not found in PATH"
 
       - name: Package Windows installer (NSIS)
         if: runner.os == 'Windows'
