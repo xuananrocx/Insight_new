@@ -83,6 +83,12 @@ jobs:
           hdiutil create -volname "Insight" -srcfolder dmg-staging -ov -format UDZO Insight-macOS.dmg
           ls -lh Insight-macOS.dmg
 
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        uses: crazy-max/ghaction-chocolatey@v2
+        with:
+          args: install nsis -y
+
       - name: Package Windows installer (NSIS)
         if: runner.os == 'Windows'
         shell: bash
