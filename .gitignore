@@ -11,6 +11,10 @@ __pycache__/
 /build/insight/
 /build/pyi-build/
 /dist/
+# 本地打包分发产物（dmg/exe/中间目录，CI 产物不入库）
+/Insight-macOS.dmg
+/Insight-Windows.exe
+/dmg-staging/
 /build/*.toc
 /build/*.warn
 /build/*.log

@@ -1,12 +1,8 @@
 name: Build Insight
 
-# 触发：手动 + 推 v* tag（如 v0.5.0）+ PR 到 main
+# 触发：手动 + 推 v* tag（如 v0.1.1）+ PR 到 main
 on:
   workflow_dispatch:
-    inputs:
-      upload_artifact:
-        description: '上传构建产物到 Release（仅 tag 触发时有效）'
-        default: 'true'
   push:
     tags:
       - 'v*'
@@ -15,24 +11,16 @@ on:
 
 jobs:
   build:
-    name: Build on ${{ matrix.os }}
+    name: Build (${{ matrix.os }})
     strategy:
-      fail-fast: false
+      fail-fast: false   # 一个平台失败不取消另一个，方便看两边日志
       matrix:
         include:
-          - os: windows-latest
-            artifact_name: Insight-Windows
-            artifact_ext: exe
-            archive_cmd: 'powershell -Command "Compress-Archive -Path dist/Insight.exe -DestinationPath Insight-Windows.zip"'
-            artifact_path: 'Insight-Windows.zip'
-          - os: macos-latest
-            artifact_name: Insight-macOS
-            artifact_ext: app
-            archive_cmd: 'cd dist && zip -r -y ../Insight-macOS.zip Insight.app && cd ..'
-            artifact_path: 'Insight-macOS.zip'
+          - os: macos-latest       # macos-latest = Apple Silicon (arm64)
+            artifact: Insight-macOS.dmg
+          - os: windows-latest     # windows-latest = x64
+            artifact: Insight-Windows.exe
     runs-on: ${{ matrix.os }}
-    permissions:
-      contents: write  # softprops/action-gh-release 需要写 Release 权限
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,36 +55,67 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build with PyInstaller (Windows)
-        if: runner.os == 'Windows'
-        run: pyinstaller build/insight.spec --noconfirm
-
-      - name: Build with PyInstaller (macOS)
-        if: runner.os == 'macOS'
-        run: pyinstaller build/insight.spec --noconfirm
-
-      - name: Package artifact
+      - name: Read version
+        id: ver
         shell: bash
         run: |
-          echo "Archiving with: ${{ matrix.archive_cmd }}"
-          if [ "${{ runner.os }}" = "Windows" ]; then
-            powershell -Command "${{ matrix.archive_cmd }}"
-          else
-            ${{ matrix.archive_cmd }}
-          fi
-          ls -lh ${{ matrix.artifact_path }}
+          v=$(python -c "from src import __version__; print(__version__)")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $v"
+
+      - name: Build app (PyInstaller)
+        run: pyinstaller build/insight.spec --noconfirm
+
+      - name: Package macOS .dmg
+        if: runner.os == 'macOS'
+        run: |
+          # PyInstaller 6.x 不读 info_plist 的版本键，手动把版本号注入生成的 plist
+          V="${{ steps.ver.outputs.version }}"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" dist/Insight.app/Contents/Info.plist
+          /usr/libexec/PlistBuddy -c "Delete :CFBundleVersion" dist/Insight.app/Contents/Info.plist 2>/dev/null || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1" dist/Insight.app/Contents/Info.plist
+          # 改了 Info.plist 会让原签名失效，必须重新 ad-hoc 签名（否则提示「应用已损坏」）
+          codesign --force --deep --sign - dist/Insight.app
+          # 打 dmg（拖拽安装布局：app + Applications 软链接）
+          rm -rf dmg-staging && mkdir dmg-staging
+          ditto dist/Insight.app dmg-staging/Insight.app
+          ln -s /Applications dmg-staging/Applications
+          hdiutil create -volname "Insight" -srcfolder dmg-staging -ov -format UDZO Insight-macOS.dmg
+          ls -lh Insight-macOS.dmg
+
+      - name: Package Windows installer (NSIS)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          makensis -DAPPVERSION="${{ steps.ver.outputs.version }}" build/insight.nsi
+          ls -lh Insight-Windows.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact_name }}
-          path: ${{ matrix.artifact_path }}
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
           retention-days: 30
 
-      - name: Attach to Release
-        if: startsWith(github.ref, 'refs/tags/v')
+  # 发布job：等两个平台都构建成功才发布（全有或全无，避免「只有 dmg」的半成品 release）
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Publish to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ matrix.artifact_path }}
-          draft: true
+          files: |
+            release-assets/Insight-macOS.dmg/Insight-macOS.dmg
+            release-assets/Insight-Windows.exe/Insight-Windows.exe
+          draft: false              # 构建完成直接发布（不存草稿）
           generate_release_notes: true

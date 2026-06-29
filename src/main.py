@@ -1,4 +1,4 @@
-"""AMD AI Assistant - 主启动入口。
+"""Insight - 主启动入口。
 
 同时启动 FastAPI 后端和 Streamlit 前端。
 

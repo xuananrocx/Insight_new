@@ -1,4 +1,4 @@
-"""AMD AI Assistant - Streamlit Web UI。
+"""Insight - Streamlit Web UI。
 
 四个标签页：
 - 💬 问答：与 AI 对话，可对答案点赞（→ 进入审批队列）
@@ -31,7 +31,7 @@ from src.web import api_client  # noqa: E402
 
 # ===== 页面全局设置 =====
 st.set_page_config(
-    page_title="AMD 智能助手",
+    page_title="Insight",
     page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -51,8 +51,8 @@ _init_state()
 
 # ===== 侧边栏 =====
 with st.sidebar:
-    st.title("🤖 AMD 智能助手")
-    st.caption(f"版本 v{__version__} · 华锐 AMD 行情系统智能运维助手")
+    st.title("🤖 Insight")
+    st.caption(f"版本 v{__version__} · 智能知识问答助手")
 
     h = api_client.health()
     if h.get("status") == "ok":
@@ -104,7 +104,7 @@ with tab_qa:
                         st.caption(c.get("text_snippet", ""))
 
     # 用户输入
-    if user_q := st.chat_input("请输入您的问题，例如：AMD 行情断线如何排查？"):
+    if user_q := st.chat_input("请输入您的问题，例如：如何排查系统故障？"):
         st.chat_message("user").markdown(user_q)
         st.session_state.chat_history.append({"role": "user", "content": user_q})
 
@@ -190,7 +190,7 @@ with tab_qa:
 # ===== 📚 知识库 =====
 with tab_kb:
     st.header("📚 知识库管理")
-    st.caption("把 AMD 相关的文档投喂给系统，AI 才能基于这些内容回答问题。")
+    st.caption("把相关文档投喂给系统，AI 才能基于这些内容回答问题。")
 
     col_a, col_b, col_c = st.columns(3)
     try:
@@ -301,7 +301,7 @@ with tab_kb:
                         except Exception as e:
                             st.error(f"删除失败：{e}")
     else:
-        st.info("📭 知识库为空。请先把 AMD 相关文档放到投喂文件夹，再点击「扫描投喂文件夹」。")
+        st.info("📭 知识库为空。请先把相关文档放到投喂文件夹，再点击「扫描投喂文件夹」。")
 
 
 # ===== ✅ 审批 =====

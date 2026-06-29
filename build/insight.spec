@@ -6,7 +6,7 @@
 
 产物：
     macOS:  dist/Insight.app（onedir 模式，启动快、可读 .app 结构）
-    Windows: dist/Insight.exe（onefile 模式）
+    Windows: dist/Insight/（onedir 文件夹，再用 NSIS 打包成 Insight-Windows.exe 安装包）
 """
 import os
 import sys
@@ -122,20 +122,28 @@ if sys.platform == 'darwin':
         name='Insight.app',
         icon=None,
         bundle_identifier='com.insight.app',
-        info_plist='build/Info.plist',
+        info_plist=os.path.join(_project_root, 'build', 'Info.plist'),
     )
 else:
-    # Windows：onefile 模式（生成单个 Insight.exe）
+    # Windows：onedir 模式（生成 dist/Insight/ 文件夹，再用 NSIS 打成安装包）
+    # EXE 只含入口脚本，binaries/datas 放到 COLLECT 里（与 macOS 一致）
     exe = EXE(
         pyz,
         a.scripts,
-        a.binaries,
-        a.zipfiles,
-        a.datas,
         [],
+        exclude_binaries=True,
         name='Insight',
         console=False,
         codesign_identity=None,
         entitlements_file=None,
         **_common_exe_kwargs,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=False,
+        name='Insight',
     )
