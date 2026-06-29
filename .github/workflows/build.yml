@@ -87,25 +87,22 @@ jobs:
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          # 尝试 winget（Windows 11+ runner 自带）
-          if command -v winget &> /dev/null; then
-            echo "Installing NSIS via winget..."
-            winget install --id NSIS.NSIS --accept-package-agreements --accept-source-agreements
-          else
-            echo "winget not available, downloading NSIS manually..."
-            # 手动下载 NSIS（稳定版本 3.08）
-            curl -L -o nsis-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.08/nsis-3.08-setup.exe/download"
-            # 静默安装（路径加引号避免括号被 bash 误解析）
-            "./nsis-setup.exe" //S //D="C:\\NSIS"
-          fi
-          # 验证 makensis 可用
-          makensis //VERSION || echo "makensis not found in PATH"
+          # 手动下载 NSIS 3.10（稳定版），winget 装的路径在带空格/括号的 Program Files 里，
+          # 且 bash 的 PATH 是 step 开始时快照的不会刷新，所以装到无空格的 C:\NSIS 最稳。
+          curl -L -o nsis-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe/download"
+          # NSIS 静默安装参数：/S 静默，/D=目标目录（必须无空格）
+          "./nsis-setup.exe" //S //D=C:\\NSIS
+          # 验证安装
+          ls -la C:\\NSIS\\makensis.exe
+          # 写入 GITHUB_PATH，后续 step 自动有 PATH
+          echo "C:\\NSIS" >> "$GITHUB_PATH"
 
       - name: Package Windows installer (NSIS)
         if: runner.os == 'Windows'
         shell: bash
         run: |
-          makensis -DAPPVERSION="${{ steps.ver.outputs.version }}" build/insight.nsi
+          # 用绝对路径调用，双保险（PATH 已加但仍可能因 Git Bash 转换出问题）
+          "C:\\NSIS\\makensis.exe" -DAPPVERSION="${{ steps.ver.outputs.version }}" build/insight.nsi
           ls -lh Insight-Windows.exe
 
       - name: Upload artifact
