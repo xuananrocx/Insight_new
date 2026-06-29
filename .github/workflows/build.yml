@@ -10,17 +10,9 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
-    name: Build (${{ matrix.os }})
-    strategy:
-      fail-fast: false   # 一个平台失败不取消另一个，方便看两边日志
-      matrix:
-        include:
-          - os: macos-latest       # macos-latest = Apple Silicon (arm64)
-            artifact: Insight-macOS.dmg
-          - os: windows-latest     # windows-latest = x64
-            artifact: Insight-Windows.exe
-    runs-on: ${{ matrix.os }}
+  build-macos:
+    name: Build (macOS arm64)
+    runs-on: macos-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,70 +59,114 @@ jobs:
         run: pyinstaller build/insight.spec --noconfirm
 
       - name: Package macOS .dmg
-        if: runner.os == 'macOS'
         run: |
-          # PyInstaller 6.x 不读 info_plist 的版本键，手动把版本号注入生成的 plist
           V="${{ steps.ver.outputs.version }}"
           /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" dist/Insight.app/Contents/Info.plist
           /usr/libexec/PlistBuddy -c "Delete :CFBundleVersion" dist/Insight.app/Contents/Info.plist 2>/dev/null || true
           /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1" dist/Insight.app/Contents/Info.plist
-          # 改了 Info.plist 会让原签名失效，必须重新 ad-hoc 签名（否则提示「应用已损坏」）
           codesign --force --deep --sign - dist/Insight.app
-          # 打 dmg（拖拽安装布局：app + Applications 软链接）
           rm -rf dmg-staging && mkdir dmg-staging
           ditto dist/Insight.app dmg-staging/Insight.app
           ln -s /Applications dmg-staging/Applications
           hdiutil create -volname "Insight" -srcfolder dmg-staging -ov -format UDZO Insight-macOS.dmg
           ls -lh Insight-macOS.dmg
 
-      - name: Install NSIS (Windows)
-        if: runner.os == 'Windows'
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Insight-macOS.dmg
+          path: Insight-macOS.dmg
+          retention-days: 30
+
+  build-windows:
+    name: Build (Windows x64)
+    runs-on: windows-latest
+    continue-on-error: true   # Windows NSIS 不稳定，失败不阻塞 macOS 发布
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm run build
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Read version
+        id: ver
         shell: bash
         run: |
-          # 手动下载 NSIS 3.10（稳定版），winget 装的路径在带空格/括号的 Program Files 里，
-          # 且 bash 的 PATH 是 step 开始时快照的不会刷新，所以装到无空格的 C:\NSIS 最稳。
+          v=$(python -c "from src import __version__; print(__version__)")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Build app (PyInstaller)
+        run: pyinstaller build/insight.spec --noconfirm
+
+      - name: Install NSIS
+        shell: bash
+        run: |
           curl -L -o nsis-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe/download"
-          # NSIS 静默安装参数：/S 静默，/D=目标目录（必须无空格）
           "./nsis-setup.exe" //S //D=C:\\NSIS
-          # 验证安装
           ls -la C:\\NSIS\\makensis.exe
-          # 写入 GITHUB_PATH，后续 step 自动有 PATH
           echo "C:\\NSIS" >> "$GITHUB_PATH"
 
-      - name: Package Windows installer (NSIS)
-        if: runner.os == 'Windows'
+      - name: Package Windows installer
         shell: bash
         run: |
-          # 用绝对路径调用，双保险（PATH 已加但仍可能因 Git Bash 转换出问题）
           "C:\\NSIS\\makensis.exe" -DAPPVERSION="${{ steps.ver.outputs.version }}" build/insight.nsi
           ls -lh Insight-Windows.exe
 
       - name: Upload artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
+          name: Insight-Windows.exe
+          path: Insight-Windows.exe
           retention-days: 30
 
-  # 发布job：等两个平台都构建成功才发布（全有或全无，避免「只有 dmg」的半成品 release）
+  # 发布 job：只等 macOS 成功就发布（Windows continue-on-error，失败也不阻塞）
   release:
     name: Publish Release
-    needs: build
+    needs: build-macos
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - name: Download all artifacts
+      - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
+          name: Insight-macOS.dmg
           path: release-assets
 
       - name: Publish to Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release-assets/Insight-macOS.dmg/Insight-macOS.dmg
-            release-assets/Insight-Windows.exe/Insight-Windows.exe
-          draft: false              # 构建完成直接发布（不存草稿）
+            release-assets/Insight-macOS.dmg
+          draft: false
           generate_release_notes: true
