@@ -1,6 +1,6 @@
 app:
   name: Insight
-  version: 0.1.1
+  version: 0.1.2
   log_level: INFO
 ui:
   # 默认展示的知识库 ID。null/空字符串 = 使用 is_default 字段标记的 KB（当前是「内置知识库」）。

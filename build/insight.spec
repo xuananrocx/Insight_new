@@ -45,6 +45,32 @@ if os.path.isfile(config_yaml):
 hiddenimports = []
 hiddenimports += collect_submodules('sentence_transformers')
 hiddenimports += collect_submodules('chromadb')
+
+# chromadb 含 namespace 包目录（无 __init__.py，如 execution/executor/、segment/impl/），
+# collect_submodules 不递归这类目录，运行时 chromadb.config 通过 importlib 动态加载
+# executor/segment 类时会 ModuleNotFoundError（已实测导致打包版无法创建任何 KB）。
+# 这里强制遍历整个 chromadb 目录，把每个 .py（含 namespace 模块）都加进 hiddenimports。
+try:
+    import chromadb as _chromadb_pkg
+    _chroma_pkg_dir = os.path.dirname(os.path.abspath(_chromadb_pkg.__file__))
+    _chroma_site_dir = os.path.dirname(_chroma_pkg_dir)
+    _missing = []
+    for _root, _dirs, _files in os.walk(_chroma_pkg_dir):
+        if '__pycache__' in _root:
+            continue
+        for _f in _files:
+            if _f.endswith('.py'):
+                _rel = os.path.relpath(os.path.join(_root, _f), _chroma_site_dir)
+                _mod = _rel[:-3].replace(os.sep, '.')
+                if _mod.endswith('.__init__'):
+                    _mod = _mod[:-9]
+                if _mod:
+                    _missing.append(_mod)
+    hiddenimports += _missing
+    print(f'[spec] chromadb 强制补充 hiddenimports: {len(_missing)} 个模块（含 namespace 包）')
+except Exception as _e:
+    print(f'[spec] WARNING: chromadb hiddenimports 补充失败: {_e}')
+
 hiddenimports += collect_submodules('rank_bm25')
 hiddenimports += ['duckdb']
 hiddenimports += ['jieba']
