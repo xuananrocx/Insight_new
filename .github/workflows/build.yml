@@ -82,6 +82,8 @@ jobs:
     name: Build (Windows x64)
     runs-on: windows-latest
     continue-on-error: true   # Windows NSIS 不稳定，失败不阻塞 macOS 发布
+    env:
+      PYTHONUTF8: '1'   # 强制 UTF-8，防止 spec 里非 ASCII 字符在 Windows cp1252 控制台触发 UnicodeEncodeError
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -1,0 +1,96 @@
+name: Build Windows Only
+
+# 仅手动触发：单独构建 Windows 安装包并上传到「已存在」的 release（不动 macOS、不动版本号、不打新 tag）。
+# 典型场景：某次 tag 发版后 Windows 失败（macOS 已发布），用它把 Windows exe 补到同一个 release。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '目标 release tag（exe 会追加到此 release，如 v0.1.2）'
+        required: true
+        default: 'v0.1.2'
+
+jobs:
+  build-windows:
+    name: Build Windows & attach to release
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: '1'
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm run build
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Read version
+        id: ver
+        shell: bash
+        run: |
+          v=$(python -c "from src import __version__; print(__version__)")
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "Detected version: $v"
+
+      - name: Build app (PyInstaller)
+        run: pyinstaller build/insight.spec --noconfirm
+
+      - name: Install NSIS
+        shell: bash
+        run: |
+          curl -L -o nsis-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe/download"
+          "./nsis-setup.exe" //S //D=C:\\NSIS
+          ls -la C:\\NSIS\\makensis.exe
+          echo "C:\\NSIS" >> "$GITHUB_PATH"
+
+      - name: Package Windows installer
+        shell: bash
+        run: |
+          "C:\\NSIS\\makensis.exe" -DAPPVERSION="${{ steps.ver.outputs.version }}" build/insight.nsi
+          ls -lh Insight-Windows.exe
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Insight-Windows.exe
+          path: Insight-Windows.exe
+          retention-days: 30
+
+      - name: Attach to existing release
+        shell: bash
+        run: |
+          TAG="${{ inputs.tag }}"
+          echo "Uploading Insight-Windows.exe to release $TAG"
+          # gh release upload --clobber 会覆盖同名 asset，release 必须已存在
+          gh release upload "$TAG" Insight-Windows.exe --clobber
+          echo "Done. Release $TAG assets:"
+          gh release view "$TAG" --json assets --jq '.assets[].name'

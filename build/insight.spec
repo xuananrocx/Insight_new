@@ -67,9 +67,9 @@ try:
                 if _mod:
                     _missing.append(_mod)
     hiddenimports += _missing
-    print(f'[spec] chromadb 强制补充 hiddenimports: {len(_missing)} 个模块（含 namespace 包）')
+    print(f'[spec] chromadb forced hiddenimports: {len(_missing)} modules (incl. namespace packages)')
 except Exception as _e:
-    print(f'[spec] WARNING: chromadb hiddenimports 补充失败: {_e}')
+    print(f'[spec] WARNING: chromadb hiddenimports supplement failed: {_e}')
 
 hiddenimports += collect_submodules('rank_bm25')
 hiddenimports += ['duckdb']
