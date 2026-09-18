@@ -32,10 +32,11 @@ class BaseLLMProvider(ABC):
         self.base_url = cfg.get("base_url", "")
         self.chat_model = cfg.get("chat_model")
         self.embedding_model = cfg.get("embedding_model")
-
-    @property
-    def enabled(self) -> bool:
-        return bool(self.cfg.get("enabled", False))
+        # 超时可配置（由 llm_client 从全局 llm 配置注入，缺省保守值）
+        self.request_timeout = float(cfg.get("request_timeout_seconds", 120.0))
+        self.test_timeout = float(cfg.get("test_timeout_seconds", 10.0))
+        # 内部禁用标记（如 SSRF 拦截后置位），不落盘
+        self._disabled = bool(cfg.get("_disabled", False))
 
     @property
     def has_chat_model(self) -> bool:
@@ -76,14 +77,36 @@ class BaseLLMProvider(ABC):
         pass
 
 
+def _normalize_openai_base_url(url: str) -> tuple[str, str]:
+    """规范化 OpenAI 格式 base_url，自动识别 API 风格。
+
+    支持三种填法：
+      https://xxx/v1                  → chat（SDK 拼 /chat/completions）
+      https://xxx/v1/chat/completions → chat（去掉后缀）
+      https://xxx/v1/responses        → responses（Responses API，去掉后缀）
+    返回 (规范后的 base_url, api_style)。
+    """
+    u = (url or "").rstrip("/")
+    if u.endswith("/responses"):
+        return u[: -len("/responses")], "responses"
+    if u.endswith("/chat/completions"):
+        return u[: -len("/chat/completions")], "chat"
+    return u, "chat"
+
+
 class OpenAIProvider(BaseLLMProvider):
-    """OpenAI 协议 Provider（兼容 DeepSeek/Qwen/GLM/等）。"""
+    """OpenAI 协议 Provider（兼容 DeepSeek/GLM/等）。
+
+    base_url 末尾为 /responses 时自动走 Responses API，否则走 chat/completions。
+    """
 
     def __init__(self, name: str, cfg: dict[str, Any], api_key: str | None = None) -> None:
         super().__init__(name, cfg)
         self._api_key = api_key or cfg.get("api_key", "")
+        self.base_url, self._api_style = _normalize_openai_base_url(self.base_url)
         self._client: OpenAI | None = None
         self._async_client: AsyncOpenAI | None = None
+        self._test_client: OpenAI | None = None
 
     @property
     def has_api_key(self) -> bool:
@@ -91,7 +114,7 @@ class OpenAIProvider(BaseLLMProvider):
 
     @property
     def usable(self) -> bool:
-        return self.enabled and self.has_api_key
+        return not self._disabled and self.has_api_key
 
     @property
     def client(self) -> OpenAI:
@@ -99,7 +122,7 @@ class OpenAIProvider(BaseLLMProvider):
             self._client = OpenAI(
                 api_key=self._api_key or "not-required",
                 base_url=self.base_url,
-                http_client=httpx.Client(timeout=120.0),
+                http_client=httpx.Client(timeout=self.request_timeout),
             )
         return self._client
 
@@ -109,31 +132,66 @@ class OpenAIProvider(BaseLLMProvider):
             self._async_client = AsyncOpenAI(
                 api_key=self._api_key or "not-required",
                 base_url=self.base_url,
-                http_client=httpx.AsyncClient(timeout=120.0),
+                http_client=httpx.AsyncClient(timeout=self.request_timeout),
             )
         return self._async_client
 
+    @property
+    def test_client(self) -> OpenAI:
+        """连接测试专用客户端（独立短超时）。"""
+        if self._test_client is None:
+            self._test_client = OpenAI(
+                api_key=self._api_key or "not-required",
+                base_url=self.base_url,
+                http_client=httpx.Client(timeout=self.test_timeout),
+            )
+        return self._test_client
+
     def test_connection(self) -> bool:
-        """测试连接：发送最小请求验证 API 可用。"""
+        """测试连接：发送最小请求验证 API 可用（短超时）。"""
         if not self.has_chat_model:
             raise ValueError(f"provider {self.name} 未配置 chat_model")
         try:
-            resp = self.client.chat.completions.create(
+            if self._api_style == "responses":
+                resp = self.test_client.responses.create(
+                    model=self.chat_model,
+                    input="hi",
+                    max_output_tokens=16,
+                )
+                if not (resp.output_text or "").strip():
+                    raise ValueError("API 返回空响应")
+                return True
+            resp = self.test_client.chat.completions.create(
                 model=self.chat_model,
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=1,
             )
             if not resp.choices:
-                raise ValueError(f"API 返回空响应")
+                raise ValueError("API 返回空响应")
             return True
         except Exception as e:
             logger.warning(f"OpenAI provider {self.name} 连接测试失败: {e}")
             raise  # 重新抛出异常，让上层获取详细错误
 
+    @staticmethod
+    def _responses_kwargs(kwargs: dict) -> dict:
+        """chat 参数 → Responses API 参数映射。"""
+        out = dict(kwargs)
+        if "max_tokens" in out:
+            out["max_output_tokens"] = out.pop("max_tokens")
+        return out
+
     def chat(self, messages: list[dict], **kwargs: Any) -> str:
         if not self.chat_model:
             raise LLMError(f"provider {self.name} 未配置 chat_model")
         try:
+            if self._api_style == "responses":
+                resp = self.client.responses.create(
+                    model=self.chat_model,
+                    input=messages,
+                    **self._responses_kwargs(kwargs),
+                )
+                return resp.output_text or ""
             resp = self.client.chat.completions.create(
                 model=self.chat_model,
                 messages=messages,
@@ -147,6 +205,10 @@ class OpenAIProvider(BaseLLMProvider):
         """流式生成，逐 token yield。stream 启动失败时降级为同步一次性返回。"""
         if not self.chat_model:
             raise LLMError(f"provider {self.name} 未配置 chat_model")
+        if self._api_style == "responses":
+            async for token in self._chat_stream_responses(messages, **kwargs):
+                yield token
+            return
         try:
             stream = await self.async_client.chat.completions.create(
                 model=self.chat_model,
@@ -174,11 +236,33 @@ class OpenAIProvider(BaseLLMProvider):
             except Exception:
                 pass
 
+    async def _chat_stream_responses(self, messages: list[dict], **kwargs: Any) -> AsyncGenerator[str, None]:
+        """Responses API 流式：response.output_text.delta 事件携带增量文本。"""
+        try:
+            stream = await self.async_client.responses.create(
+                model=self.chat_model,
+                input=messages,
+                stream=True,
+                **self._responses_kwargs(kwargs),
+            )
+        except Exception as e:
+            logger.warning(f"provider {self.name} stream 启动失败，降级同步: {e}")
+            yield self.chat(messages, **kwargs)
+            return
+        try:
+            async for event in stream:
+                if event.type == "response.output_text.delta" and event.delta:
+                    yield event.delta
+        except Exception as e:
+            raise LLMError(f"provider {self.name} chat_stream 中途失败: {e}") from e
+
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not self.embedding_model:
             raise LLMError(f"provider {self.name} 未配置 embedding_model")
         if self.embedding_model is False:
             raise LLMError(f"provider {self.name} 不支持 embedding")
+        if self._api_style == "responses":
+            raise LLMError(f"provider {self.name} 走 Responses API 时不支持 embedding")
         try:
             resp = self.client.embeddings.create(
                 model=self.embedding_model,
@@ -190,7 +274,7 @@ class OpenAIProvider(BaseLLMProvider):
 
     def close(self, force: bool = False) -> None:
         """释放底层 OpenAI SDK 的 httpx 连接。"""
-        for attr in ("_client", "_async_client"):
+        for attr in ("_client", "_async_client", "_test_client"):
             client = getattr(self, attr, None)
             if client is not None:
                 try:
@@ -210,6 +294,7 @@ class AnthropicProvider(BaseLLMProvider):
         self.api_base = self.base_url or "https://api.anthropic.com"
         self._client: Any = None
         self._async_client: Any = None
+        self._test_client: Any = None
 
     def _init_client(self) -> Any:
         """延迟导入 anthropic（仅在需要时加载）。"""
@@ -221,6 +306,7 @@ class AnthropicProvider(BaseLLMProvider):
         return anthropic.Anthropic(
             api_key=self._api_key or "not-required",
             base_url=self.api_base,
+            timeout=self.request_timeout,
         )
 
     def _init_async_client(self) -> Any:
@@ -233,6 +319,20 @@ class AnthropicProvider(BaseLLMProvider):
         return anthropic.AsyncAnthropic(
             api_key=self._api_key or "not-required",
             base_url=self.api_base,
+            timeout=self.request_timeout,
+        )
+
+    def _init_test_client(self) -> Any:
+        """连接测试专用客户端（独立短超时）。"""
+        try:
+            import anthropic
+        except ImportError:
+            raise LLMError("anthropic 包未安装，请运行: pip install anthropic")
+
+        return anthropic.Anthropic(
+            api_key=self._api_key or "not-required",
+            base_url=self.api_base,
+            timeout=self.test_timeout,
         )
 
     @property
@@ -241,7 +341,7 @@ class AnthropicProvider(BaseLLMProvider):
 
     @property
     def usable(self) -> bool:
-        return self.enabled and self.has_api_key
+        return not self._disabled and self.has_api_key
 
     @property
     def client(self) -> Any:
@@ -255,18 +355,24 @@ class AnthropicProvider(BaseLLMProvider):
             self._async_client = self._init_async_client()
         return self._async_client
 
+    @property
+    def test_client(self) -> Any:
+        if self._test_client is None:
+            self._test_client = self._init_test_client()
+        return self._test_client
+
     def test_connection(self) -> bool:
-        """测试连接：发送最小请求验证 API 可用。"""
+        """测试连接：发送最小请求验证 API 可用（短超时）。"""
         if not self.has_chat_model:
             raise ValueError(f"provider {self.name} 未配置 chat_model")
         try:
-            resp = self.client.messages.create(
+            resp = self.test_client.messages.create(
                 model=self.chat_model,
                 max_tokens=1,
                 messages=[{"role": "user", "content": "hi"}],
             )
             if not resp.content:
-                raise ValueError(f"API 返回空响应")
+                raise ValueError("API 返回空响应")
             return True
         except Exception as e:
             logger.warning(f"Anthropic provider {self.name} 连接测试失败: {e}")
@@ -418,7 +524,7 @@ class AnthropicProvider(BaseLLMProvider):
 
     def close(self, force: bool = False) -> None:
         """释放底层 anthropic SDK 的 httpx 连接。"""
-        for attr in ("_client", "_async_client"):
+        for attr in ("_client", "_async_client", "_test_client"):
             client = getattr(self, attr, None)
             if client is not None:
                 try:
@@ -505,18 +611,18 @@ class AnthropicArchProvider(BaseLLMProvider):
 
     @property
     def usable(self) -> bool:
-        return self.enabled and self.has_api_key
+        return not self._disabled and self.has_api_key
 
     @property
     def sync_client(self) -> httpx.Client:
         if self._sync_client is None:
-            self._sync_client = httpx.Client(timeout=120.0)
+            self._sync_client = httpx.Client(timeout=self.request_timeout)
         return self._sync_client
 
     @property
     def async_client(self) -> httpx.AsyncClient:
         if self._async_client is None:
-            self._async_client = httpx.AsyncClient(timeout=120.0)
+            self._async_client = httpx.AsyncClient(timeout=self.request_timeout)
         return self._async_client
 
     def _build_headers(self) -> dict[str, str]:
@@ -554,13 +660,15 @@ class AnthropicArchProvider(BaseLLMProvider):
             raise ValueError(f"provider {self.name} 未配置 chat_model")
         if not self.has_api_key:
             raise ValueError(f"provider {self.name} 未配置 api_key")
+        payload = self._build_payload(
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=10,
+            temperature=None,
+        )
+        # 连接测试用独立短超时客户端
+        test_client = httpx.Client(timeout=self.test_timeout)
         try:
-            payload = self._build_payload(
-                messages=[{"role": "user", "content": "hi"}],
-                max_tokens=10,
-                temperature=None,
-            )
-            resp = self.sync_client.post(
+            resp = test_client.post(
                 f"{self.api_base}/v1/messages",
                 headers=self._build_headers(),
                 json=payload,
@@ -575,6 +683,8 @@ class AnthropicArchProvider(BaseLLMProvider):
         except Exception as e:
             logger.warning(f"AnthropicArch provider {self.name} 连接测试失败: {e}")
             raise
+        finally:
+            test_client.close()
 
     def chat(self, messages: list[dict], **kwargs: Any) -> str:
         if not self.chat_model:

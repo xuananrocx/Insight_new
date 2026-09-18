@@ -5,6 +5,7 @@ import { Menu } from 'lucide-react'
 
 import { AppSidebar } from '@/components/app-sidebar'
 import { Topbar } from '@/components/topbar'
+import { UploadActivityLayer } from '@/components/upload-activity-layer'
 import { Button } from '@/components/ui/button'
 import { ChatSessionProvider } from '@/hooks/chat-session-context'
 import { ChatPage } from '@/pages/chat-page'
@@ -90,6 +91,7 @@ function App() {
           </main>
         </div>
       </div>
+      <UploadActivityLayer />
       <Toaster position="top-right" richColors closeButton expand visibleToasts={10} />
     </ChatSessionProvider>
   )

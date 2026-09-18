@@ -29,6 +29,20 @@ CLEANUP_AFTER_DAYS = 7
 LOG_FORMAT = "%(asctime)s.%(msecs)03d %(levelname)-5s [%(name)s] %(message)s"
 DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
+# 第三方噪声库的日志级别下限：无论全局级别多低（DEBUG）都不允许低于该级别。
+# pdfminer 在 DEBUG 下会逐 token 输出日志，曾把 PDF 解析从秒级拖到十几分钟。
+NOISY_FLOOR: dict[str, int] = {
+    "pdfminer": logging.WARNING,
+    "chromadb": logging.WARNING,
+    "chromadb.telemetry": logging.CRITICAL,  # 遥测上报失败无意义且刷屏
+    "httpx": logging.WARNING,
+    "httpcore": logging.WARNING,
+    "urllib3": logging.WARNING,
+    "watchfiles": logging.WARNING,
+    "sentence_transformers": logging.WARNING,
+    "pdfplumber": logging.WARNING,
+}
+
 _INITIALIZED = False
 _CURRENT_LEVEL = logging.INFO
 _CURRENT_LOG_FILE: Path | None = None
@@ -85,9 +99,8 @@ def setup_logging(default_level: str = "INFO", *, force: bool = False) -> None:
     console_handler.setLevel(level_value)
     root.addHandler(console_handler)
 
-    # 降低噪音库的级别
-    for noisy in ("chromadb", "httpx", "httpcore", "urllib3", "watchfiles", "sentence_transformers"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    # 降低噪音库的级别（不低于下限）
+    _apply_noisy_floors(level_value)
 
     _INITIALIZED = True
     _CURRENT_LOG_FILE = LOG_FILE
@@ -104,7 +117,14 @@ def set_log_level(level: str) -> None:
     logging.getLogger().setLevel(level_value)
     for h in logging.getLogger().handlers:
         h.setLevel(level_value)
+    _apply_noisy_floors(level_value)
     logging.getLogger(__name__).info(f"log level changed: {level}")
+
+
+def _apply_noisy_floors(global_level: int) -> None:
+    """噪声库级别 = max(下限, 全局级别)：全局开 DEBUG 也不会被第三方库刷屏。"""
+    for name, floor in NOISY_FLOOR.items():
+        logging.getLogger(name).setLevel(max(floor, global_level))
 
 
 def get_log_level() -> str:

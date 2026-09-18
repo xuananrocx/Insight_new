@@ -24,6 +24,8 @@ langchain-openai>=0.2.14,<0.3  # OpenAI 兼容协议（DeepSeek/通义/Kimi 都�
 openai>=1.58.1,<2.0            # OpenAI 兼容 SDK（多 provider 切换基础）
 anthropic>=0.40.0,<1.0         # Anthropic 原生 SDK（Claude/archforce 等）
 chromadb>=0.5.23,<0.6
+jieba>=0.42                      # BM25 中文分词
+rank-bm25>=0.2.2                 # BM25 关键词检索
 
 # ===== 文档解析（纯 Python，跨平台友好）=====
 pypdf==5.1.0                   # PDF 文本提取

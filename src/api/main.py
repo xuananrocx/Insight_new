@@ -136,6 +136,20 @@ def _on_startup() -> None:
     # 初始化数据库 + schema 迁移
     metadata_db.init_db()
 
+    # BM25 依赖预检：缺失时 ingest 的 add_chunks 会静默失败（只记 warning），
+    # 历史上因此建过空索引，这里显式报错提醒安装
+    try:
+        import jieba  # noqa: F401
+        import rank_bm25  # noqa: F401
+        from src.qa import bm25_index
+        st = bm25_index.stats()
+        logger.info(f"[init] BM25 deps ok, index chunks={st['chunk_count']}")
+    except ImportError as e:
+        logger.error(
+            f"[init] BM25 依赖缺失（{e}），关键词检索将不生效。"
+            f"请安装: pip install jieba rank-bm25"
+        )
+
     # 检测批量上传任务中断（running 但实际进程已死）→ 标记 paused
     try:
         from src.knowledge import batch_upload
@@ -193,6 +207,24 @@ def _on_startup() -> None:
         rebuild.recover_state_on_startup()
     except Exception as e:
         logger.warning(f"rebuild 状态恢复检查失败: {e}")
+
+    # 后台预热本地 embedding 模型（bge-large 加载可达数十秒，
+    # 不预热的话首次问答/首次进设置页会被同步加载卡住）
+    try:
+        client = llm_client.get_client()
+        if client._embed_mode == "local":
+            import threading
+
+            def _prewarm_local_embedder() -> None:
+                try:
+                    client._get_local_embedder()
+                    logger.info("embedding 模型预热完成")
+                except Exception as e:
+                    logger.warning(f"embedding 模型预热失败（下次用到时再加载）: {e}")
+
+            threading.Thread(target=_prewarm_local_embedder, name="embedding-prewarm", daemon=True).start()
+    except Exception as e:
+        logger.warning(f"embedding 预热启动失败（非致命）: {e}")
 
     logger.info("startup complete")
 
@@ -298,7 +330,10 @@ def embedding_switch(req: EmbeddingSwitchRequest) -> dict:
             status_code=400,
             detail=f"不支持的模型: {req.model_name}。可选: {valid_names}",
         )
-    return client.switch_embedding_model(req.model_name)
+    try:
+        return client.switch_embedding_model(req.model_name)
+    except llm_client.EmbeddingBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @app.post("/api/v1/embedding/precheck")

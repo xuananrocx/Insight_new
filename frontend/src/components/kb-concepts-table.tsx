@@ -4,6 +4,13 @@ import { AlertCircle, Boxes, FileText, Search } from 'lucide-react'
 import { api, type KbConcept } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { useQuery } from '@tanstack/react-query'
 
 const TYPE_LABEL: Record<string, string> = {
@@ -70,15 +77,16 @@ export function KbConceptsTable({ kbId }: Props) {
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
             最小提及：
-            <select
-              value={minMention}
-              onChange={(e) => setMinMention(Number(e.target.value))}
-              className="rounded border bg-background px-1.5 py-0.5 text-[11px]"
-            >
-              <option value={1}>≥1</option>
-              <option value={2}>≥2</option>
-              <option value={3}>≥3</option>
-            </select>
+            <Select value={String(minMention)} onValueChange={(v) => setMinMention(Number(v))}>
+              <SelectTrigger className="h-auto w-auto gap-1 px-1.5 py-0.5 text-[11px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="min-w-0">
+                <SelectItem value="1" className="pl-3 pr-6">≥1</SelectItem>
+                <SelectItem value="2" className="pl-3 pr-6">≥2</SelectItem>
+                <SelectItem value="3" className="pl-3 pr-6">≥3</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="relative">
             <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />

@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -28,6 +28,9 @@ class AskRequest(BaseModel):
     # AI 日志关联（可选）：流式问答时前端传，便于日志页跳转到对应会话
     session_id: str | None = None
     turn_id: str | None = None
+    # 检索模式：basic/deep 不调 LLM 直接返回片段；ai 走 LLM 流式作答。
+    # 不传时读会话的 retrieval_mode，都没有则 ai。
+    mode: Literal["basic", "deep", "ai"] | None = None
 
 
 class CitationModel(BaseModel):
@@ -83,21 +86,39 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
     )
 
 
+def _resolve_mode(req: AskRequest) -> str:
+    """检索模式优先级：请求体 > 会话 retrieval_mode > 'ai'。"""
+    if req.mode:
+        return req.mode
+    if req.session_id:
+        from src.db import metadata_db
+        try:
+            s = metadata_db.get_session(req.session_id)
+            if s and s.get("retrieval_mode") in ("basic", "deep", "ai"):
+                return s["retrieval_mode"]
+        except Exception:
+            pass
+    return "ai"
+
+
 async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
     """把 ask_stream 的事件流转成 SSE 格式，15s 无事件时发 ping。"""
     queue: asyncio.Queue = asyncio.Queue()
     start_time = time.time()
     q_preview = req.question[:50].replace("\n", " ")
-    logger.info(f"ask_stream start q={q_preview!r} history_len={len(req.history) if req.history else 0}")
+    mode = _resolve_mode(req)
+    logger.info(f"ask_stream start q={q_preview!r} mode={mode} history_len={len(req.history) if req.history else 0}")
 
     async def producer() -> None:
         try:
             async for evt in ask_stream(
                 question=req.question,
+                top_k=req.top_k,
                 history=req.history,
                 kb_scope=req.kb_scope,
                 session_id=req.session_id,
                 turn_id=req.turn_id,
+                mode=mode,
             ):
                 await queue.put(evt)
         except asyncio.CancelledError:

@@ -23,15 +23,22 @@ import {
   ChevronUp,
   ChevronDown,
   PanelLeft,
+  Timer,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { RebuildConfirmModal } from '@/components/rebuild-confirm-modal'
 import { RebuildProgressDialog } from '@/components/rebuild-progress-dialog'
 import { SystemPromptCard } from '@/components/system-prompt-card'
 import { ConfirmDialog } from '@/components/confirm-dialog'
-import { RetrievalStrategyCard } from '@/components/retrieval-strategy-card'
 import { AiSummaryConfigCard } from '@/components/ai-summary-config-card'
 import { AiCallLogConfigCard } from '@/components/ai-call-log-config-card'
 import { api, type EmbeddingPrecheckResult, type EmbeddingRebuildStatus } from '@/lib/api'
@@ -67,7 +74,6 @@ function LLMProviderConfigDialog({
     base_url: provider?.base_url || '',
     api_key: provider?.api_key || '', // 预填完整 key（默认 password 模式隐藏，点眼睛切换显示）
     model: provider?.chat_model || '',
-    enabled: provider?.enabled || false,
   })
 
   const [showApiKey, setShowApiKey] = useState(false)
@@ -137,6 +143,11 @@ function LLMProviderConfigDialog({
               placeholder="https://api.example.com/v1"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
             />
+            {provider.protocol === 'openai' && (
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                一般填到 /v1 即可；也支持完整端点（…/v1/chat/completions 或 …/v1/responses，自动识别 Responses API）
+              </p>
+            )}
           </div>
 
           <div>
@@ -179,18 +190,6 @@ function LLMProviderConfigDialog({
               placeholder="gpt-4o-mini"
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
             />
-          </div>
-
-          <div>
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={formData.enabled}
-                onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
-                className="h-4 w-4 rounded"
-              />
-              <span className="text-[13px] font-medium">启用此 Provider</span>
-            </label>
           </div>
 
           {/* 测试结果显示 */}
@@ -245,6 +244,87 @@ function LLMProviderConfigDialog({
 }
 
 // 估算首次切换耗时（用于进度条 ETA）
+function LLMTimeoutsCard() {
+  const qc = useQueryClient()
+  const timeouts = useQuery({ queryKey: ['llm', 'timeouts'], queryFn: api.llm.timeouts })
+  const [form, setForm] = useState<{ test: number; request: number } | null>(null)
+
+  useEffect(() => {
+    if (timeouts.data && form === null) {
+      setForm({
+        test: timeouts.data.test_timeout_seconds,
+        request: timeouts.data.request_timeout_seconds,
+      })
+    }
+  }, [timeouts.data, form])
+
+  const saveMutation = useMutation({
+    mutationFn: () =>
+      api.llm.updateTimeouts({
+        test_timeout_seconds: form!.test,
+        request_timeout_seconds: form!.request,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['llm', 'timeouts'] })
+      toast.success('超时配置已保存')
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  })
+
+  if (form === null) return null
+
+  return (
+    <Card className="mb-4 p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <Timer className="h-4 w-4 text-muted-foreground" />
+        <span className="text-[14px] font-medium">LLM 超时配置</span>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="mb-1.5 block text-[13px] font-medium">连接测试超时（秒）</label>
+          <input
+            type="number"
+            min={1}
+            max={300}
+            value={form.test}
+            onChange={(e) => setForm({ ...form, test: Number(e.target.value) })}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">「测试」按钮的等待时长，建议 5-15 秒</p>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-[13px] font-medium">请求超时（秒）</label>
+          <input
+            type="number"
+            min={5}
+            max={3600}
+            value={form.request}
+            onChange={(e) => setForm({ ...form, request: Number(e.target.value) })}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">正式对话请求超时（流式为相邻输出最大间隔），建议 60-300 秒</p>
+        </div>
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button
+          size="sm"
+          className="h-8 gap-1.5"
+          disabled={saveMutation.isPending}
+          onClick={() => saveMutation.mutate()}
+        >
+          {saveMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="h-3.5 w-3.5" />
+          )}
+          保存
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+
 function estimateSeconds(size: string, cached: boolean) {
   if (cached) return 0
   const mb = SIZE_TO_MB[size] ?? 100
@@ -306,24 +386,28 @@ function DefaultKbCard() {
         提问页和文档管理页会默认选中此知识库。留空则使用「内置知识库」。
       </p>
       <div className="flex items-center gap-2">
-        <select
-          value={selected}
-          onChange={(e) => {
-            const v = e.target.value
-            setPendingId(v)
-            updateMutation.mutate(v || null)
+        <Select
+          value={selected || 'builtin'}
+          onValueChange={(v) => {
+            const id = v === 'builtin' ? '' : v
+            setPendingId(id)
+            updateMutation.mutate(id || null)
           }}
           disabled={updateMutation.isPending || kbList.isLoading}
-          className="flex-1 rounded-md border bg-background px-3 py-1.5 text-[13px]"
         >
-          <option value="">使用内置默认（is_default）</option>
-          {(kbList.data ?? []).map((kb) => (
-            <option key={kb.id} value={kb.id}>
-              {kb.name}
-              {kb.is_default ? '（内置）' : ''}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="flex-1 py-2 text-[13px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="builtin">使用内置默认（is_default）</SelectItem>
+            {(kbList.data ?? []).map((kb) => (
+              <SelectItem key={kb.id} value={kb.id}>
+                {kb.name}
+                {kb.is_default ? '（内置）' : ''}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {updateMutation.isPending ? (
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         ) : null}
@@ -553,7 +637,7 @@ export function SettingsPage() {
   })
 
   const updateLLMProvider = useMutation({
-    mutationFn: (config: { name: string; base_url?: string; api_key?: string; model?: string; enabled?: boolean }) =>
+    mutationFn: (config: { name: string; base_url?: string; api_key?: string; model?: string }) =>
       api.llm.update(config),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['llm', 'providers'] })
@@ -847,9 +931,6 @@ export function SettingsPage() {
                   {(!provider.api_key_configured || !provider.api_key_configured) && (
                     <span className="text-[10px] text-destructive">缺少 API Key</span>
                   )}
-                  {!provider.enabled && provider.api_key_configured && (
-                    <span className="text-[10px] text-muted-foreground">未启用</span>
-                  )}
                 </div>
                 <div className="mt-0.5 flex gap-3 text-[11px] text-muted-foreground">
                   <span>模型: {provider.chat_model || '无'}</span>
@@ -902,7 +983,7 @@ export function SettingsPage() {
                           }
                         })
                       }}
-                      disabled={!provider.enabled || !provider.api_key_configured || switchLLMProvider.isPending || testingProvider === provider.name}
+                      disabled={!provider.api_key_configured || switchLLMProvider.isPending || testingProvider === provider.name}
                     >
                       {testingProvider === provider.name ? (
                         <>
@@ -967,11 +1048,11 @@ export function SettingsPage() {
         />
       )}
 
+      <LLMTimeoutsCard />
+
       <SystemPromptCard />
 
       <AiSummaryConfigCard />
-
-      <RetrievalStrategyCard />
 
       <AiCallLogConfigCard />
 

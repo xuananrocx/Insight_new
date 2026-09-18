@@ -54,7 +54,7 @@ feature_flags:
 
 ```yaml
 paths:
-  feed_folder: ~/AMD-Knowledge-Feeds    # 投喂目录（可改绝对路径）
+  feed_folder: ~/Insight_Knowledge_Feeds    # 投喂目录（可改绝对路径）
   vector_db: ./data/vector_db           # Chroma 数据
   extracted: ./data/extracted           # 程序包解压临时
   feedback_queue: ./data/feedback_queue

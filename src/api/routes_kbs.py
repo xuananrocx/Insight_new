@@ -63,6 +63,7 @@ class KBResponse(BaseModel):
     total_chunks: int = 0
     actual_collection_dim: int | None = None  # collection 当前实际维度（0 = 空）
     dim_mismatch: bool = False  # actual vs declared/current 是否一致
+    feed_path: str = ""  # 该 KB 的投喂目录（default → feed 根，其他 → feed/{kb_id}）
 
 
 # ===== API 端点 =====
@@ -82,6 +83,12 @@ def _compute_dim_mismatch(collection_name: str, declared_dim: int | None) -> tup
     if declared_dim is None:
         return actual, False
     return actual, (actual != declared_dim)
+
+
+def _kb_feed_path(kb_id: str) -> str:
+    """该 KB 的投喂目录（与上传/扫描的路由规则一致，仅拼路径不建目录）。"""
+    feed = settings.feed_folder
+    return str(feed if kb_id == "default" else feed / kb_id)
 
 
 @router.get("", response_model=list[KBResponse])
@@ -127,6 +134,7 @@ def list_kbs() -> list[KBResponse]:
                 total_chunks=total_chunks,
                 actual_collection_dim=actual_dim,
                 dim_mismatch=mismatch,
+                feed_path=_kb_feed_path(kb_id),
             )
         )
 
@@ -173,6 +181,7 @@ def get_kb(kb_id: str) -> KBResponse:
         total_chunks=total_chunks,
         actual_collection_dim=actual_dim,
         dim_mismatch=mismatch,
+        feed_path=_kb_feed_path(kb["id"]),
     )
 
 
@@ -281,7 +290,8 @@ def rebuild_kb(kb_id: str, confirm: bool = False) -> dict:
     return result
 
 
-
+@router.put("/{kb_id}", response_model=KBResponse)
+def update_kb(kb_id: str, req: UpdateKBRequest) -> KBResponse:
     """更新知识库元数据（name/description）。
 
     - builtin KB 不允许更新（返回 403）
@@ -819,6 +829,7 @@ class KbGlobalSummaryResponse(BaseModel):
     tokens: int | None = None
     created_at: int | None = None
     doc_count: int | None = None
+    stale: bool = False  # 生成后 KB 文件集有变化（新增/变更/删除）→ 摘要可能过期
 
 
 @router.get("/{kb_id}/global_summary", response_model=KbGlobalSummaryResponse)
@@ -837,6 +848,7 @@ def get_kb_global_summary_api(kb_id: str) -> KbGlobalSummaryResponse:
         model=data["model"],
         tokens=data["tokens"],
         created_at=data["created_at"],
+        stale=metadata_db.is_kb_summary_stale(kb_id),
     )
 
 

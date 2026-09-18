@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Globe, RefreshCw, Trash2, Sparkles, AlertCircle } from 'lucide-react'
+import { Globe, RefreshCw, Trash2, Sparkles, AlertCircle, AlertTriangle } from 'lucide-react'
 
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -51,6 +51,15 @@ export function KbGlobalSummaryCard({ kbId }: Props) {
           {hasSummary && data?.tokens ? (
             <span className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
               {data.tokens} tokens · {data.doc_count ?? 0} 文档
+            </span>
+          ) : null}
+          {hasSummary && data?.stale ? (
+            <span
+              className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-600 dark:text-amber-400"
+              title="生成摘要后，知识库又投喂了新文件或文件有变更，当前摘要未覆盖这些内容"
+            >
+              <AlertTriangle className="h-3 w-3" />
+              文档已更新，摘要可能过期
             </span>
           ) : null}
         </div>

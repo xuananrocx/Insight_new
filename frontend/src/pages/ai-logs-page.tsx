@@ -20,6 +20,13 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
   api,
   type AiCallLogDetail,
   type AiCallLogListItem,
@@ -137,48 +144,60 @@ export function AiLogsPage() {
       <Card className="p-3">
         <div className="flex flex-wrap items-center gap-3 text-[12px]">
           <span className="text-muted-foreground">过滤：</span>
-          <select
-            value={provider}
-            onChange={(e) => {
-              setProvider(e.target.value)
+          <Select
+            value={provider || 'all'}
+            onValueChange={(v) => {
+              setProvider(v === 'all' ? '' : v)
               setPage(0)
             }}
-            className="rounded-md border border-input bg-background px-2 py-1"
           >
-            <option value="">所有 Provider</option>
-            {stats.data?.by_provider.map((p) => (
-              <option key={p.provider} value={p.provider}>
-                {p.provider} ({p.total})
-              </option>
-            ))}
-          </select>
-          <select
-            value={scene}
-            onChange={(e) => {
-              setScene(e.target.value)
+            <SelectTrigger className="w-[130px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">所有 Provider</SelectItem>
+              {stats.data?.by_provider.map((p) => (
+                <SelectItem key={p.provider} value={p.provider}>
+                  {p.provider} ({p.total})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={scene || 'all'}
+            onValueChange={(v) => {
+              setScene(v === 'all' ? '' : v)
               setPage(0)
             }}
-            className="rounded-md border border-input bg-background px-2 py-1"
           >
-            <option value="">所有场景</option>
-            {stats.data?.by_scene.map((s) => (
-              <option key={s.scene} value={s.scene}>
-                {SCENE_LABEL[s.scene] || s.scene} ({s.total})
-              </option>
-            ))}
-          </select>
-          <select
-            value={successFilter}
-            onChange={(e) => {
-              setSuccessFilter(e.target.value)
+            <SelectTrigger className="w-[130px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">所有场景</SelectItem>
+              {stats.data?.by_scene.map((s) => (
+                <SelectItem key={s.scene} value={s.scene}>
+                  {SCENE_LABEL[s.scene] || s.scene} ({s.total})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={successFilter || 'all'}
+            onValueChange={(v) => {
+              setSuccessFilter(v === 'all' ? '' : v)
               setPage(0)
             }}
-            className="rounded-md border border-input bg-background px-2 py-1"
           >
-            <option value="">全部</option>
-            <option value="success">成功</option>
-            <option value="failed">失败</option>
-          </select>
+            <SelectTrigger className="w-[90px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">全部</SelectItem>
+              <SelectItem value="success">成功</SelectItem>
+              <SelectItem value="failed">失败</SelectItem>
+            </SelectContent>
+          </Select>
           <div className="ml-auto text-muted-foreground">
             共 {total} 条 · 第 {page + 1} / {Math.max(1, Math.ceil(total / PAGE_SIZE))} 页
           </div>
@@ -510,6 +529,9 @@ function LogRow({
         ) : (
           <XCircle className="h-3.5 w-3.5 text-destructive" />
         )}
+      </div>
+      <div className="w-8 shrink-0 font-mono text-[10px] text-muted-foreground" title={`日志 ID: ${item.id}`}>
+        {item.id}
       </div>
       <div className="w-32 shrink-0 font-mono text-[11px]">{item.provider}</div>
       <div className="w-20 shrink-0 text-muted-foreground">

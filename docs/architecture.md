@@ -77,7 +77,7 @@ src/
 ### 投喂流程
 
 ```
-用户往 ~/AMD-Knowledge-Feeds 丢文件
+用户往 ~/Insight_Knowledge_Feeds 丢文件
        │
        │ 手动触发扫描（API: POST /knowledge/scan）
        ▼

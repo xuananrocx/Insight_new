@@ -235,6 +235,33 @@ def _sanitize_meta(m: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def get_chunks_by_ids(
+    ids: list[str],
+    collection_name: str = COLLECTION_NAME,
+) -> dict[str, dict[str, Any]]:
+    """按 chunk_id 批量取 chunk。返回 {id: {"id", "text", **metadata}}，不存在的 id 不在返回里。"""
+    if not ids:
+        return {}
+    try:
+        collection = _resolve_collection(collection_name)
+        res = collection.get(ids=ids, include=["documents", "metadatas"])
+    except Exception:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    if not res or not res.get("ids"):
+        return out
+    docs = res.get("documents") or []
+    metas = res.get("metadatas") or []
+    for i, cid in enumerate(res["ids"]):
+        meta = metas[i] if i < len(metas) else {}
+        out[str(cid)] = {
+            "id": cid,
+            "text": docs[i] if i < len(docs) else "",
+            **meta,
+        }
+    return out
+
+
 def count(collection_name: str = COLLECTION_NAME) -> int:
     """返回 collection 内的 chunk 数。"""
     try:

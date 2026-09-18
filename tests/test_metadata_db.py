@@ -139,3 +139,53 @@ def test_init_db_is_idempotent():
     v = cur.fetchone()[0]
     conn.close()
     assert v == metadata_db.SCHEMA_VERSION
+
+
+# ===== 默认知识库播种（v10 修复：全新建库不走迁移链导致 kbs 为空）=====
+
+
+def test_fresh_db_has_default_kb():
+    """全新建库后 kbs 表应包含内置知识库。"""
+    import sqlite3
+    metadata_db.init_db()
+    from src.core.config import settings
+    db_path = settings.get_path("metadata_db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT id, name, source, is_default FROM kbs WHERE id='default'"
+        ).fetchone()
+        assert row is not None
+        assert row["source"] == "builtin"
+        assert row["is_default"] == 1
+    finally:
+        conn.close()
+
+
+def test_v9_db_without_default_kb_gets_seeded():
+    """已存在的 v9 空库（默认 KB 缺失）升级后应补回默认 KB。"""
+    import sqlite3
+    metadata_db.init_db()
+    from src.core.config import settings
+    db_path = settings.get_path("metadata_db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        # 模拟旧库：回退到 v9 并清空 kbs
+        conn.execute("DELETE FROM kbs")
+        conn.execute("PRAGMA user_version = 9")
+        conn.commit()
+    finally:
+        conn.close()
+
+    metadata_db.init_db()  # 重跑迁移链 v9 → v10 → v11
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == metadata_db.SCHEMA_VERSION
+        row = conn.execute("SELECT id FROM kbs WHERE id='default'").fetchone()
+        assert row is not None
+    finally:
+        conn.close()

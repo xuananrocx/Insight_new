@@ -88,3 +88,4 @@ data/*.pkl
 # ===== 临时审查文档（不入仓库）=====
 corner-code-review.md
 tests/COVERAGE_REVIEW.md
+pip/

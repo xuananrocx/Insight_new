@@ -25,7 +25,7 @@ from src.core.config import settings
 
 # SQLite 连接：每次操作开新连接（避免 threading.local 在 WAL 模式下跨线程读到 stale snapshot）
 # 当前 schema 版本（每次表结构变更 +1）
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 13
 
 
 # ===== 哨兵：区分「不更新」和「清空为 NULL」 =====
@@ -190,6 +190,7 @@ def init_db() -> None:
                 global_summary_model TEXT,
                 global_summary_tokens INTEGER,
                 global_summary_created_at INTEGER,
+                global_summary_snapshot TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
             );
@@ -202,7 +203,8 @@ def init_db() -> None:
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 turn_count INTEGER NOT NULL DEFAULT 0,
-                kb_scope TEXT
+                kb_scope TEXT,
+                retrieval_mode TEXT NOT NULL DEFAULT 'ai'
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_updated ON sessions(updated_at DESC);
 
@@ -217,7 +219,8 @@ def init_db() -> None:
                 used_provider TEXT,
                 liked INTEGER NOT NULL DEFAULT 0,
                 error TEXT,
-                created_at INTEGER NOT NULL
+                created_at INTEGER NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'ai'
             );
             CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, order_idx);
 
@@ -291,6 +294,7 @@ def init_db() -> None:
                 skipped INTEGER NOT NULL DEFAULT 0,
                 failed INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL DEFAULT 'running',
+                upload_complete INTEGER NOT NULL DEFAULT 1,
                 current_file_path TEXT,
                 current_stage TEXT,
                 created_at INTEGER NOT NULL,
@@ -347,6 +351,9 @@ def init_db() -> None:
         # 版本化迁移
         current = _get_user_version(cur)
         if current == 0:
+            # 全新建库直接落在最新版本、不跑迁移链，
+            # 默认知识库必须在这里显式播种
+            _ensure_default_kb(cur)
             _set_user_version(cur, SCHEMA_VERSION)
             current = SCHEMA_VERSION
 
@@ -452,6 +459,33 @@ def _migrate_v1_to_v2(cur: sqlite3.Cursor) -> None:
 
 # ===== v2 → v3 迁移：kbs 表 + KB 抽象化 =====
 
+
+def _ensure_default_kb(cur: sqlite3.Cursor) -> None:
+    """幂等插入内置知识库（id='default'）。
+
+    全新建库不走迁移链（v0 直接跳到最新版本），所以新建和
+    v9 → v10 迁移都要显式调用本函数。
+    """
+    import time
+
+    cur.execute(
+        """
+        INSERT OR IGNORE INTO kbs (id, name, description, collection_name, source, is_default, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            "default",
+            "内置知识库",
+            "系统预置的内置知识库",
+            "knowledge_base",
+            "builtin",
+            1,
+            int(time.time() * 1000),
+            int(time.time() * 1000),
+        ),
+    )
+
+
 @_register_schema_migration(2)
 def _migrate_v2_to_v3(cur: sqlite3.Cursor) -> None:
     """v2 → v3：添加 kbs 表 + knowledge_files.kb_id + 默认 KB 迁移。
@@ -462,8 +496,6 @@ def _migrate_v2_to_v3(cur: sqlite3.Cursor) -> None:
     3. 插入默认 KB（如果不存在）
     4. sessions.kb_scope 为 NULL 的填 'default'
     """
-    import time
-
     # 1. 创建 kbs 表
     cur.execute(
         """
@@ -485,16 +517,7 @@ def _migrate_v2_to_v3(cur: sqlite3.Cursor) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS idx_kbs_default ON kbs(is_default)")
 
     # 2. 插入默认 KB（如果不存在）
-    cur.execute("SELECT id FROM kbs WHERE id='default'")
-    if not cur.fetchone():
-        now_ms = int(time.time() * 1000)
-        cur.execute(
-            """
-            INSERT INTO kbs (id, name, description, collection_name, source, is_default, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            ("default", "内置知识库", "系统预置的内置知识库", "knowledge_base", "builtin", 1, now_ms, now_ms),
-        )
+    _ensure_default_kb(cur)
 
     # 3. knowledge_files 表加 kb_id 字段（如果还没有）
     # 先检查列是否存在
@@ -818,6 +841,59 @@ def _migrate_v8_to_v9(cur: sqlite3.Cursor) -> None:
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_call_logs_scene ON ai_call_logs(scene)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_call_logs_created ON ai_call_logs(created_at DESC)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_ai_call_logs_session ON ai_call_logs(session_id)")
+
+
+@_register_schema_migration(9)
+def _migrate_v9_to_v10(cur: sqlite3.Cursor) -> None:
+    """v9 → v10：补插内置知识库。
+
+    全新建库时 v0 直接跳到最新版本、不跑迁移链，导致 kbs 表
+    建出来是空的（默认知识库只在 v2 → v3 迁移里插过）。
+    本迁移修复已存在的空库；新建库的播种见 init_db。
+    """
+    _ensure_default_kb(cur)
+
+
+@_register_schema_migration(10)
+def _migrate_v10_to_v11(cur: sqlite3.Cursor) -> None:
+    """v10 → v11：upload_tasks 加 upload_complete 列（分批上传支持）。
+
+    0 = 还有批次未传完（任务 status='uploading'），1 = 全部到位。
+    存量任务都是一次性建好的，默认 1。列已存在时跳过（幂等）。
+    """
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(upload_tasks)").fetchall()]
+    if "upload_complete" not in cols:
+        cur.execute(
+            "ALTER TABLE upload_tasks ADD COLUMN upload_complete INTEGER NOT NULL DEFAULT 1"
+        )
+
+
+@_register_schema_migration(11)
+def _migrate_v11_to_v12(cur: sqlite3.Cursor) -> None:
+    """v11 → v12：kbs 加 global_summary_snapshot 列（摘要过期检测）。
+
+    存 JSON：{file_id(str): content_hash}，生成全局摘要时的文件快照。
+    与当前 KB 文件集比对，不一致 → 摘要可能过期。
+    """
+    cols = [r[1] for r in cur.execute("PRAGMA table_info(kbs)").fetchall()]
+    if "global_summary_snapshot" not in cols:
+        cur.execute("ALTER TABLE kbs ADD COLUMN global_summary_snapshot TEXT")
+
+
+@_register_schema_migration(12)
+def _migrate_v12_to_v13(cur: sqlite3.Cursor) -> None:
+    """v12 → v13：检索模式从 KB 级改到会话级。
+
+    - sessions.retrieval_mode：会话当前检索模式（basic/deep/ai，默认 ai）
+    - turns.mode：该轮消息的形态（检索结果 or AI 回答），旧数据全部视为 ai
+    - kbs.retrieval_strategy 废弃（列保留作遗留数据，不再读写）
+    """
+    s_cols = [r[1] for r in cur.execute("PRAGMA table_info(sessions)").fetchall()]
+    if "retrieval_mode" not in s_cols:
+        cur.execute("ALTER TABLE sessions ADD COLUMN retrieval_mode TEXT NOT NULL DEFAULT 'ai'")
+    t_cols = [r[1] for r in cur.execute("PRAGMA table_info(turns)").fetchall()]
+    if "mode" not in t_cols:
+        cur.execute("ALTER TABLE turns ADD COLUMN mode TEXT NOT NULL DEFAULT 'ai'")
 
 
 # ===== document_meta CRUD =====
@@ -1368,7 +1444,7 @@ def list_files_in_kb(kb_id: str, status: str | None = None) -> list[dict]:
         if status:
             cur.execute(
                 """
-                SELECT id, kb_id, relative_path, content_hash, file_size, file_type,
+                SELECT id, kb_id, relative_path, absolute_path, content_hash, file_size, file_type,
                        source_package, status, chunk_ids_json, chunk_count,
                        processed_at, error_message, created_at
                 FROM knowledge_files
@@ -1380,7 +1456,7 @@ def list_files_in_kb(kb_id: str, status: str | None = None) -> list[dict]:
         else:
             cur.execute(
                 """
-                SELECT id, kb_id, relative_path, content_hash, file_size, file_type,
+                SELECT id, kb_id, relative_path, absolute_path, content_hash, file_size, file_type,
                        source_package, status, chunk_ids_json, chunk_count,
                        processed_at, error_message, created_at
                 FROM knowledge_files
@@ -1533,14 +1609,17 @@ def create_session(
     created_at: int,
     updated_at: int,
     kb_scope: str | None = None,
+    retrieval_mode: str = "ai",
 ) -> None:
+    if retrieval_mode not in ("basic", "deep", "ai"):
+        retrieval_mode = "ai"
     with get_cursor() as cur:
         cur.execute(
             """
-            INSERT INTO sessions (id, title, created_at, updated_at, turn_count, kb_scope)
-            VALUES (?, ?, ?, ?, 0, ?)
+            INSERT INTO sessions (id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
             """,
-            (session_id, title[:80] or "未命名会话", created_at, updated_at, kb_scope),
+            (session_id, title[:80] or "未命名会话", created_at, updated_at, kb_scope, retrieval_mode),
         )
 
 
@@ -1549,7 +1628,7 @@ def list_sessions(limit: int = 200) -> list[dict]:
     with get_cursor() as cur:
         cur.execute(
             """
-            SELECT id, title, created_at, updated_at, turn_count, kb_scope
+            SELECT id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode
             FROM sessions
             ORDER BY updated_at DESC
             LIMIT ?
@@ -1563,7 +1642,10 @@ def get_session(session_id: str) -> dict | None:
     """详情（含 turns）。"""
     with get_cursor() as cur:
         cur.execute(
-            "SELECT id, title, created_at, updated_at, turn_count, kb_scope FROM sessions WHERE id=?",
+            """
+            SELECT id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode
+            FROM sessions WHERE id=?
+            """,
             (session_id,),
         )
         row = cur.fetchone()
@@ -1573,7 +1655,7 @@ def get_session(session_id: str) -> dict | None:
         cur.execute(
             """
             SELECT id, order_idx, question, answer, sources_json, trace_json,
-                   used_provider, liked, error, created_at
+                   used_provider, liked, error, created_at, mode
             FROM turns
             WHERE session_id=?
             ORDER BY order_idx ASC
@@ -1596,6 +1678,7 @@ def update_session(
     title: str | None | _Unset = _UNSET,
     updated_at: int | None | _Unset = _UNSET,
     kb_scope: str | None | _Unset = _UNSET,
+    retrieval_mode: str | None | _Unset = _UNSET,
 ) -> bool:
     """更新会话元数据。返回是否找到。
 
@@ -1621,6 +1704,11 @@ def update_session(
     if not isinstance(kb_scope, _Unset):
         fields.append("kb_scope=?")
         params.append(kb_scope)
+    if not isinstance(retrieval_mode, _Unset):
+        if retrieval_mode not in ("basic", "deep", "ai"):
+            raise ValueError(f"非法 retrieval_mode: {retrieval_mode}")
+        fields.append("retrieval_mode=?")
+        params.append(retrieval_mode)
     if not fields:
         return False
     params.append(session_id)
@@ -1655,6 +1743,7 @@ def add_turn(
     liked: bool,
     error: str | None,
     created_at: int,
+    mode: str = "ai",
 ) -> bool:
     """追加 turn。同时更新 session.turn_count 和 updated_at。
     返回是否成功（False 表示 session 不存在）。
@@ -1662,7 +1751,10 @@ def add_turn(
     order_idx:
         - None（推荐）：自动用 COALESCE(MAX(order_idx), -1)+1，并发安全
         - 显式传值：保留调用方语义（导入场景需要连续 idx）
+    mode: 消息形态 'basic' / 'deep'（检索结果列表）或 'ai'（LLM 回答）
     """
+    if mode not in ("basic", "deep", "ai"):
+        mode = "ai"
     with get_cursor() as cur:
         cur.execute("SELECT id FROM sessions WHERE id=?", (session_id,))
         if not cur.fetchone():
@@ -1680,12 +1772,12 @@ def add_turn(
             """
             INSERT INTO turns
                 (id, session_id, order_idx, question, answer, sources_json, trace_json,
-                 used_provider, liked, error, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 used_provider, liked, error, created_at, mode)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 turn_id, session_id, order_idx, question, answer,
-                sources_json, trace_json, used_provider, 1 if liked else 0, error, created_at,
+                sources_json, trace_json, used_provider, 1 if liked else 0, error, created_at, mode,
             ),
         )
         cur.execute(
@@ -1790,7 +1882,7 @@ def get_turn(session_id: str, turn_id: str) -> dict | None:
         cur.execute(
             """
             SELECT id, session_id, order_idx, question, answer, sources_json, trace_json,
-                   used_provider, liked, error, created_at
+                   used_provider, liked, error, created_at, mode
             FROM turns WHERE session_id=? AND id=?
             """,
             (session_id, turn_id),
@@ -1873,7 +1965,6 @@ def update_kb(
     embedding_model: str | None | _Unset = _UNSET,
     embedding_dim: int | None | _Unset = _UNSET,
     is_default: bool | None | _Unset = _UNSET,
-    retrieval_strategy: str | None | _Unset = _UNSET,
 ) -> bool:
     """更新 KB 元数据。返回是否找到。
 
@@ -1907,12 +1998,6 @@ def update_kb(
     if not isinstance(is_default, _Unset):
         fields.append("is_default=?")
         params.append(1 if is_default else 0)
-    if not isinstance(retrieval_strategy, _Unset):
-        # 校验合法值（None 允许，表示清空，使用默认 'basic'）
-        if retrieval_strategy is not None and retrieval_strategy not in {"basic", "summary", "agentic"}:
-            raise ValueError(f"非法 retrieval_strategy: {retrieval_strategy}")
-        fields.append("retrieval_strategy=?")
-        params.append(retrieval_strategy)
     if not fields:
         return False
 
@@ -1926,42 +2011,41 @@ def update_kb(
         return cur.rowcount > 0
 
 
-def get_kb_retrieval_strategy(kb_id: str) -> str:
-    """读取 KB 当前检索策略（不存在或 NULL 时返回 'basic'）。"""
-    with get_cursor() as cur:
-        cur.execute("SELECT retrieval_strategy FROM kbs WHERE id=?", (kb_id,))
-        row = cur.fetchone()
-        if row is None:
-            return "basic"
-        return row["retrieval_strategy"] or "basic"
-
-
 def update_kb_global_summary(
-    kb_id: str, summary: str, model: str, tokens: int
+    kb_id: str, summary: str, model: str, tokens: int,
+    snapshot: dict | None = None,
 ) -> bool:
-    """更新 KB 全局摘要。返回是否找到 KB。"""
+    """更新 KB 全局摘要。返回是否找到 KB。
+
+    snapshot：生成摘要时的文件快照 {file_id: content_hash}（JSON 存储），
+    用于之后判断摘要是否过期（KB 文件集有变化即过期）。
+    summary 为空（删除摘要）时快照一并清空。
+    """
+    import json
     import time
     now_ms = int(time.time() * 1000)
+    snapshot_json = json.dumps(snapshot) if (snapshot and summary) else None
     with get_cursor() as cur:
         cur.execute(
             """
             UPDATE kbs SET
                 global_summary=?, global_summary_model=?, global_summary_tokens=?,
-                global_summary_created_at=?, updated_at=?
+                global_summary_created_at=?, global_summary_snapshot=?, updated_at=?
             WHERE id=?
             """,
-            (summary, model, tokens, now_ms, now_ms, kb_id),
+            (summary, model, tokens, now_ms, snapshot_json, now_ms, kb_id),
         )
         return cur.rowcount > 0
 
 
 def get_kb_global_summary(kb_id: str) -> dict | None:
-    """读取 KB 全局摘要。返回 None 或 dict(summary, model, tokens, created_at)。"""
+    """读取 KB 全局摘要。返回 None 或 dict(summary, model, tokens, created_at, snapshot)。"""
+    import json
     with get_cursor() as cur:
         cur.execute(
             """
             SELECT global_summary, global_summary_model, global_summary_tokens,
-                   global_summary_created_at
+                   global_summary_created_at, global_summary_snapshot
             FROM kbs WHERE id=?
             """,
             (kb_id,),
@@ -1969,12 +2053,41 @@ def get_kb_global_summary(kb_id: str) -> dict | None:
         row = cur.fetchone()
         if row is None or not row["global_summary"]:
             return None
+        snapshot = None
+        if row["global_summary_snapshot"]:
+            try:
+                snapshot = json.loads(row["global_summary_snapshot"])
+            except (ValueError, TypeError):
+                snapshot = None
         return {
             "summary": row["global_summary"],
             "model": row["global_summary_model"],
             "tokens": row["global_summary_tokens"],
             "created_at": row["global_summary_created_at"],
+            "snapshot": snapshot,
         }
+
+
+def list_kb_file_hashes(kb_id: str) -> dict[str, str]:
+    """KB 下全部已入库（done）文件的 {file_id: content_hash}，用于摘要过期比对。"""
+    with get_cursor() as cur:
+        cur.execute(
+            "SELECT id, content_hash FROM knowledge_files WHERE kb_id=? AND status='done'",
+            (kb_id,),
+        )
+        return {str(r["id"]): r["content_hash"] for r in cur.fetchall()}
+
+
+def is_kb_summary_stale(kb_id: str) -> bool:
+    """KB 全局摘要是否已过期（生成后 KB 文件集有新增/变更/删除）。
+
+    无摘要 → False（不存在过期概念）。
+    有摘要但无快照（升级前的旧摘要）→ False（视为未过期，下次重新生成会写入快照）。
+    """
+    data = get_kb_global_summary(kb_id)
+    if data is None or not data.get("snapshot"):
+        return False
+    return data["snapshot"] != list_kb_file_hashes(kb_id)
 
 
 def delete_kb_record(kb_id: str) -> bool:
@@ -2029,21 +2142,26 @@ def create_upload_task(
     skip_mode: str,
     auto_ingest: bool,
     files: list[dict[str, Any]],
+    *,
+    upload_complete: bool = True,
 ) -> None:
     """创建批量上传任务 + 所有子文件记录（原子）。
 
     files: [{ relative_path, absolute_path, file_size }, ...]
+    upload_complete: False 表示分批上传还没传完（status='uploading'），等 finalize。
     """
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    status = "running" if upload_complete else "uploading"
     with get_cursor() as cur:
         cur.execute("BEGIN")
         try:
             cur.execute(
                 """INSERT INTO upload_tasks
                    (id, kb_id, skip_mode, auto_ingest, total, done, skipped, failed,
-                    status, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, 0, 0, 0, 'running', ?, ?)""",
-                (task_id, kb_id, skip_mode, 1 if auto_ingest else 0, len(files), now_ms, now_ms),
+                    status, upload_complete, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?, ?, ?)""",
+                (task_id, kb_id, skip_mode, 1 if auto_ingest else 0, len(files),
+                 status, 1 if upload_complete else 0, now_ms, now_ms),
             )
             for f in files:
                 cur.execute(
@@ -2058,6 +2176,45 @@ def create_upload_task(
             raise
 
 
+def append_upload_task_files(task_id: str, files: list[dict[str, Any]]) -> int:
+    """向已有任务追加文件记录（分批上传的后续批次），total 同步增加。
+
+    返回实际追加数（同 relative_path 已存在的跳过）。
+    """
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    appended = 0
+    with get_cursor() as cur:
+        cur.execute("BEGIN")
+        try:
+            existing = {
+                r[0] for r in cur.execute(
+                    "SELECT relative_path FROM upload_task_files WHERE task_id=?",
+                    (task_id,),
+                ).fetchall()
+            }
+            for f in files:
+                if f["relative_path"] in existing:
+                    continue
+                cur.execute(
+                    """INSERT INTO upload_task_files
+                       (task_id, relative_path, absolute_path, file_size, status)
+                       VALUES (?, ?, ?, ?, 'queued')""",
+                    (task_id, f["relative_path"], str(f["absolute_path"]), f["file_size"]),
+                )
+                existing.add(f["relative_path"])
+                appended += 1
+            if appended:
+                cur.execute(
+                    "UPDATE upload_tasks SET total = total + ?, updated_at=? WHERE id=?",
+                    (appended, now_ms, task_id),
+                )
+            cur.execute("COMMIT")
+        except Exception:
+            cur.execute("ROLLBACK")
+            raise
+    return appended
+
+
 def get_upload_task(task_id: str) -> dict[str, Any] | None:
     """返回任务详情（不含 files）。"""
     with get_cursor() as cur:
@@ -2067,10 +2224,11 @@ def get_upload_task(task_id: str) -> dict[str, Any] | None:
 
 
 def list_active_upload_tasks() -> list[dict[str, Any]]:
-    """返回所有未完成任务（status='running' 或 'paused'）。"""
+    """返回所有未完成任务（running / paused / uploading）。"""
     with get_cursor() as cur:
         cur.execute(
-            "SELECT * FROM upload_tasks WHERE status IN ('running', 'paused') ORDER BY created_at DESC"
+            "SELECT * FROM upload_tasks WHERE status IN ('running', 'paused', 'uploading') "
+            "ORDER BY created_at DESC"
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -2139,6 +2297,7 @@ def update_upload_task_progress(
     skipped: int | None = _UNSET,
     failed: int | None = _UNSET,
     status: str | None = _UNSET,
+    upload_complete: bool | None = _UNSET,
     current_file_path: str | None = _UNSET,
     current_stage: str | None = _UNSET,
     finished_at: int | None = _UNSET,
@@ -2151,6 +2310,7 @@ def update_upload_task_progress(
         ("skipped", skipped),
         ("failed", failed),
         ("status", status),
+        ("upload_complete", upload_complete if isinstance(upload_complete, _Unset) else (1 if upload_complete else 0)),
         ("current_file_path", current_file_path),
         ("current_stage", current_stage),
         ("finished_at", finished_at),

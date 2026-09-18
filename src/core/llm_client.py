@@ -10,6 +10,7 @@ Embedding：支持本地 sentence-transformers（无需 API key）或 API 模式
 from __future__ import annotations
 
 import logging
+import threading
 from typing import Any, AsyncGenerator
 
 from tenacity import (
@@ -38,6 +39,10 @@ class NoAvailableProviderError(LLMError):
     """所有 provider 都不可用。"""
 
 
+class EmbeddingBusyError(RuntimeError):
+    """embedding 模型正在加载/切换中，需等待完成后再重试。"""
+
+
 class _Provider:
     """单个 LLM provider 的封装 - 支持 OpenAI 和 Anthropic 双协议。"""
 
@@ -62,7 +67,12 @@ class _Provider:
                 logging.getLogger(__name__).warning(
                     f"provider {name} base_url 不安全，已禁用: {e}"
                 )
-                cfg = {**cfg, "enabled": False}
+                cfg = {**cfg, "base_url": "", "_disabled": True}
+
+        # 注入全局超时配置（provider 自身配置可覆盖）
+        llm_cfg = settings.config.get("llm", {})
+        cfg.setdefault("request_timeout_seconds", llm_cfg.get("request_timeout_seconds", 120))
+        cfg.setdefault("test_timeout_seconds", llm_cfg.get("test_timeout_seconds", 10))
 
         # 根据协议类型创建相应的 provider 实例
         # "anthropic-arch" 是特殊协议：通过伪装 Claude Code CLI 绕过 archforce 服务端检测
@@ -72,10 +82,6 @@ class _Provider:
             self._impl = AnthropicProvider(name, cfg, self._api_key)
         else:
             self._impl = OpenAIProvider(name, cfg, self._api_key)
-
-    @property
-    def enabled(self) -> bool:
-        return self._impl.enabled
 
     @property
     def has_api_key(self) -> bool:
@@ -132,6 +138,9 @@ class _LocalEmbedding:
         self._cache_order: list[str] = []
         self._model: Any = None
         self._dimensions: int | None = None
+        # _lock 保护缓存账本（快）；_load_lock 串行化模型加载/切换（慢，可长达数分钟）
+        self._lock = threading.RLock()
+        self._load_lock = threading.Lock()
 
     def _load_into_cache(self, model_name: str) -> Any:
         # cache_size=0：不缓存，每次都新建（不存进 _cache），切换前显式释放旧模型
@@ -157,8 +166,12 @@ class _LocalEmbedding:
         from sentence_transformers import SentenceTransformer
         logger.info(f"加载本地 embedding 模型: {model_name}（首次运行需下载）")
         model = SentenceTransformer(model_name, device=self.device)
+        dim = model.get_sentence_embedding_dimension()
         self._cache[model_name] = model
-        self._cache_dims[model_name] = model.get_sentence_embedding_dimension()
+        self._cache_dims[model_name] = dim
+        # 幂等登记：先移除同名旧条目，防止 _cache_order 出现重复导致误淘汰
+        if model_name in self._cache_order:
+            self._cache_order.remove(model_name)
         self._cache_order.append(model_name)
         while len(self._cache_order) > self._cache_size:
             old = self._cache_order.pop(0)
@@ -168,38 +181,51 @@ class _LocalEmbedding:
             # 主动 GC：SentenceTransformer 占用数百 MB PyTorch 权重
             import gc
             gc.collect()
-        logger.info(f"模型加载完成，维度: {self._cache_dims[model_name]}")
+        logger.info(f"模型加载完成，维度: {dim}")
         return model
 
     def _load(self) -> None:
-        if self._cache_size == 0:
-            # 无缓存：每次都重建（释放旧的）
-            self._model = self._load_into_cache(self.model_name)
-            return
-        if self.model_name in self._cache:
+        with self._lock:
+            if self._cache_size == 0:
+                # 无缓存：每次都重建（释放旧的）
+                self._model = self._load_into_cache(self.model_name)
+                return
+            if self.model_name in self._cache:
+                self._model = self._load_into_cache(self.model_name)
+                self._dimensions = self._cache_dims[self.model_name]
+                return
             self._model = self._load_into_cache(self.model_name)
             self._dimensions = self._cache_dims[self.model_name]
-            return
-        self._model = self._load_into_cache(self.model_name)
-        self._dimensions = self._cache_dims[self.model_name]
 
-    def switch_model(self, model_name: str) -> None:
-        if model_name == self.model_name and (
-            self._cache_size == 0 or self._cache.get(model_name) is not None
-        ):
-            return
-        was_cached = self._cache_size > 0 and model_name in self._cache
-        logger.info(f"切换 embedding 模型: {self.model_name} → {model_name} ({'缓存命中' if was_cached else '首次加载'})")
-        self.model_name = model_name
-        self._load()
+    def switch_model(self, model_name: str) -> bool:
+        """切换模型；返回 False 表示已有加载/切换进行中（本次未执行）。"""
+        if not self._load_lock.acquire(blocking=False):
+            return False
+        try:
+            if model_name == self.model_name and (
+                self._cache_size == 0 or self._cache.get(model_name) is not None
+            ):
+                return True
+            was_cached = self._cache_size > 0 and model_name in self._cache
+            logger.info(f"切换 embedding 模型: {self.model_name} → {model_name} ({'缓存命中' if was_cached else '首次加载'})")
+            self.model_name = model_name
+            self._load()
+            return True
+        finally:
+            self._load_lock.release()
 
     @property
     def dimensions(self) -> int | None:
         return self._dimensions
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        self._load()
-        embeddings = self._model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
+        # 切换进行中直接报错：阻塞等待会导致同批文档混用新旧模型的向量维度
+        if self._load_lock.locked():
+            raise EmbeddingBusyError("embedding 模型正在加载/切换中，请稍后重试")
+        with self._lock:
+            self._load()
+            model = self._model
+        embeddings = model.encode(texts, show_progress_bar=False, normalize_embeddings=True)
         return embeddings.tolist()
 
 
@@ -212,6 +238,7 @@ class LLMClient:
             self._providers[name] = _Provider(name, cfg)
         self._chat_chain = self._build_chat_chain()
         self._local_embed: _LocalEmbedding | None = None
+        self._embed_init_lock = threading.Lock()
         self._embed_mode = self._get_embed_mode()
         self._embed_chain = self._build_embed_chain() if self._embed_mode == "api" else []
 
@@ -245,19 +272,23 @@ class LLMClient:
         ]
 
     def _get_local_embedder(self) -> _LocalEmbedding:
+        # 双检锁：startup 预热线程与首个 embed() 请求可能并发进入，
+        # 不加锁会创建两个实例、重复加载模型
         if self._local_embed is None:
-            emb_cfg = settings.config["llm"].get("embedding", {})
-            model_name = emb_cfg.get("local_model", "BAAI/bge-small-zh-v1.5")
-            device = emb_cfg.get("device", "cpu")
-            cache_size = emb_cfg.get("cache_size", 3)
-            self._local_embed = _LocalEmbedding(model_name, device, cache_size=cache_size)
-            # 预热：把默认模型加载到内存（首次 1-3 秒），后续切换永远秒级
-            # cache_size=0 时跳过预热（用户选择不缓存）
-            if cache_size > 0:
-                try:
-                    self._local_embed._load()
-                except Exception as e:
-                    logger.warning(f"预热 embedding 模型失败（下次用到时再加载）: {e}")
+            with self._embed_init_lock:
+                if self._local_embed is None:
+                    emb_cfg = settings.config["llm"].get("embedding", {})
+                    model_name = emb_cfg.get("local_model", "BAAI/bge-small-zh-v1.5")
+                    device = emb_cfg.get("device", "cpu")
+                    cache_size = emb_cfg.get("cache_size", 3)
+                    self._local_embed = _LocalEmbedding(model_name, device, cache_size=cache_size)
+                    # 预热：把默认模型加载到内存（首次 1-3 秒），后续切换永远秒级
+                    # cache_size=0 时跳过预热（用户选择不缓存）
+                    if cache_size > 0:
+                        try:
+                            self._local_embed._load()
+                        except Exception as e:
+                            logger.warning(f"预热 embedding 模型失败（下次用到时再加载）: {e}")
         return self._local_embed
 
     def set_embedding_cache_size(self, new_size: int) -> dict[str, Any]:
@@ -269,25 +300,26 @@ class LLMClient:
         embedder = self._get_local_embedder()
         new_size = max(0, int(new_size))
 
-        # 1. 更新运行时
-        embedder._cache_size = new_size
+        with embedder._lock:
+            # 1. 更新运行时
+            embedder._cache_size = new_size
 
-        # 2. 如果缩小了，淘汰超出的缓存
-        evicted: list[str] = []
-        while len(embedder._cache_order) > new_size:
-            old = embedder._cache_order.pop(0)
-            embedder._cache.pop(old, None)
-            embedder._cache_dims.pop(old, None)
-            evicted.append(old)
-            logger.info(f"缓存上限缩小，淘汰: {old}")
+            # 2. 如果缩小了，淘汰超出的缓存
+            evicted: list[str] = []
+            while len(embedder._cache_order) > new_size:
+                old = embedder._cache_order.pop(0)
+                embedder._cache.pop(old, None)
+                embedder._cache_dims.pop(old, None)
+                evicted.append(old)
+                logger.info(f"缓存上限缩小，淘汰: {old}")
 
-        # 3. 如果 new_size=0，连当前模型也释放（下次 embed 时重新加载）
-        if new_size == 0:
-            embedder._cache.clear()
-            embedder._cache_dims.clear()
-            embedder._cache_order.clear()
-            # 当前 self._model 保留，因为正在用
-            logger.info("缓存已禁用，所有常驻模型已释放")
+            # 3. 如果 new_size=0，连当前模型也释放（下次 embed 时重新加载）
+            if new_size == 0:
+                embedder._cache.clear()
+                embedder._cache_dims.clear()
+                embedder._cache_order.clear()
+                # 当前 self._model 保留，因为正在用
+                logger.info("缓存已禁用，所有常驻模型已释放")
 
         # 4. 写回 config.yaml（持久化）
         try:
@@ -324,7 +356,9 @@ class LLMClient:
         前端应据此提示用户去 KB 管理页重建。
         """
         embedder = self._get_local_embedder()
-        embedder.switch_model(model_name)
+        # 已有加载/切换在跑时立即报"忙"，而不是排队二次加载
+        if not embedder.switch_model(model_name):
+            raise EmbeddingBusyError("embedding 模型正在加载/切换中，请等待完成后再操作")
         # 同步内存
         settings.config["llm"]["embedding"]["local_model"] = model_name
         # 持久化到 config.yaml
@@ -388,18 +422,26 @@ class LLMClient:
             yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
 
     def get_embedding_status(self) -> dict[str, Any]:
-        """返回当前 embedding 状态。"""
+        """返回当前 embedding 状态。
+
+        只读现有实例，不触发模型加载（保证接口秒回）；
+        未初始化时维度从 config 的 available_models 取。
+        """
         emb_cfg = settings.config["llm"].get("embedding", {})
         available = emb_cfg.get("available_models", [])
         current = emb_cfg.get("local_model", "")
         cache_size = emb_cfg.get("cache_size", 3)
-        embedder = self._get_local_embedder()
+        embedder = self._local_embed
+        cached = list(embedder._cache_order) if embedder is not None else []
+        dimensions = embedder.dimensions if embedder is not None else None
+        if dimensions is None:
+            dimensions = next((m["dimensions"] for m in available if m["name"] == current), None)
         return {
             "mode": self._embed_mode,
             "current_model": current,
-            "dimensions": embedder.dimensions,
+            "dimensions": dimensions,
             "cache_size": cache_size,
-            "cached_models": list(embedder._cache_order) if hasattr(embedder, "_cache_order") else [],
+            "cached_models": cached,
             "available_models": [
                 {
                     "name": m["name"],
@@ -408,7 +450,7 @@ class LLMClient:
                     "dimensions": m["dimensions"],
                     "description": m["description"],
                     "is_active": m["name"] == current,
-                    "is_cached": m["name"] in (embedder._cache_order if hasattr(embedder, "_cache_order") else []),
+                    "is_cached": m["name"] in cached,
                 }
                 for m in available
             ],
@@ -669,7 +711,6 @@ def health_check() -> dict:
     providers_status = {}
     for name, p in cfg["providers"].items():
         providers_status[name] = {
-            "enabled": p.get("enabled", False),
             "has_chat": p.get("chat_model") is not None,
             "has_embedding": p.get("embedding_model") not in (None, False),
             "api_key_configured": bool(settings.resolve_api_key(p)) or name == "local",

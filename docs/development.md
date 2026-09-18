@@ -19,7 +19,7 @@ GitHub (Private)
 - ❌ 虚拟环境（.venv/）：每台机器各自建
 - ❌ API key（.env）：敏感信息
 - ❌ 知识库数据（data/vector_db/, data/metadata.db）：体积大，每台各自跑
-- ❌ 投喂文档（~/AMD-Knowledge-Feeds/）：建议通过云盘同步（iCloud/OneDrive/坚果云）
+- ❌ 投喂文档（~/Insight_Knowledge_Feeds/）：建议通过云盘同步（iCloud/OneDrive/坚果云）
 
 ## 第一次拉代码（任一台新机器）
 
@@ -55,7 +55,7 @@ git add .
 git commit -m "feat: xxx"
 git push
 
-# 2. 等云盘把 ~/AMD-Knowledge-Feeds 同步完
+# 2. 等云盘把 ~/Insight_Knowledge_Feeds 同步完
 ```
 
 ### 切到 Windows

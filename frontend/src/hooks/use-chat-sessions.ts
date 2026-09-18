@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { api, type PersistedTurn, type QaSource, type QaTraceStage, type SessionDetail, type SessionSummary } from '@/lib/api'
+import { api, type PersistedTurn, type QaSource, type QaTraceStage, type RetrievalMode, type SessionDetail, type SessionSummary } from '@/lib/api'
 
 export type ThinkingState = {
   stages: QaTraceStage[]
@@ -25,6 +25,7 @@ export type ChatTurn = {
   liked?: boolean
   feedbackSaved?: boolean
   thinking?: ThinkingState
+  mode?: RetrievalMode
 }
 
 export type ChatSession = Omit<SessionSummary, 'turn_count'> & {
@@ -49,6 +50,7 @@ function persistedToChatTurn(t: PersistedTurn): ChatTurn {
     liked: t.liked,
     error: t.error ?? undefined,
     thinking,
+    mode: t.mode,
   }
 }
 
@@ -63,6 +65,7 @@ function chatTurnToAddRequest(t: ChatTurn, createdAt: number) {
     liked: t.liked ?? false,
     error: t.error,
     created_at: createdAt,
+    mode: t.mode,
   }
 }
 
@@ -121,6 +124,7 @@ export function useChatSessions() {
       updated_at: d.updated_at,
       turn_count: turns.length,
       kb_scope: d.kb_scope ?? null,
+      retrieval_mode: d.retrieval_mode ?? 'ai',
       turns,
     }
   })()
@@ -189,7 +193,7 @@ export function useChatSessions() {
 
   // ===== 对外暴露的方法（保持原有签名兼容）=====
 
-  const createSession = useCallback(async (kbId?: string): Promise<string> => {
+  const createSession = useCallback(async (kbId?: string, mode?: RetrievalMode): Promise<string> => {
     const id = genId('s')
     const now = Date.now()
 
@@ -200,7 +204,7 @@ export function useChatSessions() {
       kb_scope = defaultKb?.id || undefined
     }
 
-    await createMutation.mutateAsync({ id, title: '新会话', created_at: now, kb_scope })
+    await createMutation.mutateAsync({ id, title: '新会话', created_at: now, kb_scope, retrieval_mode: mode })
     // 乐观：在 detail cache 里塞一个空 session，避免 appendTurn 时 activeSession 为空
     const optimistic: SessionDetail = {
       id,
@@ -209,6 +213,7 @@ export function useChatSessions() {
       updated_at: now,
       turn_count: 0,
       kb_scope,
+      retrieval_mode: mode ?? 'ai',
       turns: [],
     }
     qc.setQueryData(['session', id], optimistic)
@@ -288,6 +293,24 @@ export function useChatSessions() {
     [detailQuery.data, _updateTurns],
   )
 
+  // 更新会话的检索模式（随会话持久化，下一轮提问生效）
+  const updateSessionMode = useCallback(
+    async (id: string, mode: RetrievalMode) => {
+      try {
+        await api.sessions.update(id, { retrieval_mode: mode })
+      } catch (e) {
+        console.error('updateSessionMode failed', e)
+        return
+      }
+      // 同步 detail cache，让 UI 立即反映（不等 invalidate refetch）
+      qc.setQueryData<SessionDetail>(['session', id], (old) =>
+        old && old.id === id ? { ...old, retrieval_mode: mode } : old,
+      )
+      qc.invalidateQueries({ queryKey: ['sessions'] })
+    },
+    [qc],
+  )
+
   // 更新会话的 kb_scope（同时清空后端旧 turns，避免旧 KB 的回答污染新 KB）
   const updateSessionKb = useCallback(
     async (id: string, kbScope: string | null) => {
@@ -336,6 +359,7 @@ export function useChatSessions() {
             liked: turn.liked ?? false,
             error: turn.error ?? null,
             created_at: Date.now(),
+            mode: turn.mode,
             thinking: turn.thinking,  // 塞进 cache，让切走再切回时也能拿到 thinking
           } as PersistedTurn & { thinking?: ThinkingState }],
         }
@@ -411,7 +435,8 @@ export function useChatSessions() {
       const usedProvider = override?.usedProvider ?? baseTurn?.thinking?.usedProvider
       const error = override?.error ?? baseTurn?.error
       const liked = baseTurn?.liked ?? false
-      if (!answer && !error) return  // 没东西可持久化
+      // 检索模式 answer 为空但 sources 有命中，也要持久化
+      if (!answer && !error && !sources.length) return  // 没东西可持久化
 
       try {
         await patchTurnMutation.mutateAsync({
@@ -466,6 +491,7 @@ export function useChatSessions() {
     deleteSession,
     renameSession,
     updateSession,
+    updateSessionMode,
     updateSessionKb,
     clearTurns,
     appendTurn,

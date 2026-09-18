@@ -19,6 +19,7 @@ from typing import Any, Callable
 from src.core.config import settings
 from src.db import metadata_db
 from src.knowledge import ingestion
+from src.knowledge.ingestion import TaskCancelledError
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,10 @@ def _process_task(task_id: str) -> None:
         else:
             # 进度回调：把 ingestion 内部的 stage 事件转成 SSE file_progress
             def _on_progress(stage: str, payload: dict) -> None:
+                # 阶段边界检查取消：大文件不必等整个文件跑完才停
+                t = metadata_db.get_upload_task(task_id)
+                if not t or t["status"] == "cancelled":
+                    raise TaskCancelledError()
                 percent = _STAGE_PERCENT.get(stage)
                 if percent is None:
                     return
@@ -207,6 +212,19 @@ def _process_task(task_id: str) -> None:
                         ) or "ingest 失败"
                     else:
                         error_msg = "; ".join(str(e) for e in raw_errors) or "ingest 失败"
+            except TaskCancelledError:
+                # 用户取消：当前文件标记 cancelled，worker 直接退出
+                metadata_db.update_upload_task_file_status(
+                    file_id, "cancelled", finished_at=_now_ms()
+                )
+                _publish(task_id, {
+                    "type": "task_cancelled",
+                    "task_id": task_id,
+                    "file_id": file_id,
+                    "relative_path": rel_path,
+                })
+                logger.info(f"batch_upload task {task_id} cancelled mid-file: {rel_path}")
+                return
             except Exception as e:
                 logger.exception(f"ingest failed for {rel_path}")
                 final_status = "failed"
@@ -434,30 +452,38 @@ def rebuild_kb(kb_id: str) -> dict[str, Any]:
 
 
 def recover_interrupted_tasks() -> int:
-    """启动时调用：检测 status='running' 的任务（进程崩溃留下的）→ 改 paused。
+    """启动时调用：把进程崩溃/关页留下的未完任务改 paused。
 
-    返回恢复的任务数。
+    - status='running'（worker 中断）→ paused
+    - status='uploading'（分批上传没传完，页面关了）→ paused，
+      继续时视为"传完收尾"（只 ingest 已到达的文件）
     """
     recovered = 0
     active = metadata_db.list_active_upload_tasks()
     for task in active:
-        if task["status"] == "running":
+        if task["status"] in ("running", "uploading"):
+            stage = "interrupted" if task["status"] == "running" else "upload_interrupted"
             metadata_db.update_upload_task_progress(
-                task["id"], status="paused", current_stage="interrupted"
+                task["id"], status="paused", current_stage=stage
             )
             recovered += 1
-            logger.info(f"recovered interrupted task: {task['id']}")
+            logger.info(f"recovered interrupted task: {task['id']} (was {task['status']})")
     return recovered
 
 
 def resume_task(task_id: str) -> bool:
-    """用户从 banner 点'继续'：把 paused 改 running，启动 worker。"""
+    """用户从 banner 点'继续'：把 paused 改 running，启动 worker。
+
+    上传中断的任务继续时按"收尾已到达文件"处理（upload_complete=1）。
+    """
     task = metadata_db.get_upload_task(task_id)
     if not task:
         return False
     if task["status"] not in ("paused", "failed"):
         return False
-    metadata_db.update_upload_task_progress(task_id, status="running", current_stage="resuming")
+    metadata_db.update_upload_task_progress(
+        task_id, status="running", current_stage="resuming", upload_complete=True
+    )
     start_task(task_id)
     return True
 

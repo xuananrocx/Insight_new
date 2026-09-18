@@ -4,6 +4,13 @@ import { useQuery } from '@tanstack/react-query'
 
 import { api, type KbGraphNode, type KbGraphEdge } from '@/lib/api'
 import { Card } from '@/components/ui/card'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface Props {
   kbId: string
@@ -205,16 +212,17 @@ function Header({
       </div>
       <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
         最小共享：
-        <select
-          value={minShared}
-          onChange={(e) => setMinShared(Number(e.target.value))}
-          className="rounded border bg-background px-1.5 py-0.5 text-[11px]"
-        >
-          <option value={1}>≥1</option>
-          <option value={2}>≥2</option>
-          <option value={3}>≥3</option>
-          <option value={5}>≥5</option>
-        </select>
+        <Select value={String(minShared)} onValueChange={(v) => setMinShared(Number(v))}>
+          <SelectTrigger className="h-auto w-auto gap-1 px-1.5 py-0.5 text-[11px]">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent className="min-w-0">
+            <SelectItem value="1" className="pl-3 pr-6">≥1</SelectItem>
+            <SelectItem value="2" className="pl-3 pr-6">≥2</SelectItem>
+            <SelectItem value="3" className="pl-3 pr-6">≥3</SelectItem>
+            <SelectItem value="5" className="pl-3 pr-6">≥5</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
     </div>
   )

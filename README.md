@@ -89,14 +89,14 @@ cp .env.example .env
 ### 4. 准备投喂文件夹
 
 ```bash
-# 默认在 ~/AMD-Knowledge-Feeds
-mkdir -p ~/AMD-Knowledge-Feeds
+# 默认在 ~/Insight_Knowledge_Feeds
+mkdir -p ~/Insight_Knowledge_Feeds
 
 # 把 AMD 文档拷进去
-cp /path/to/AMD-*.pdf ~/AMD-Knowledge-Feeds/
-cp /path/to/amd-release-notes.md ~/AMD-Knowledge-Feeds/
+cp /path/to/*.pdf ~/Insight_Knowledge_Feeds/
+cp /path/to/release-notes.md ~/Insight_Knowledge_Feeds/
 # 也可以拷整个压缩包，会自动解压
-cp /path/to/amd-3.5.2.tar.gz ~/AMD-Knowledge-Feeds/
+cp /path/to/example-pkg.tar.gz ~/Insight_Knowledge_Feeds/
 ```
 
 ### 5. 启动服务

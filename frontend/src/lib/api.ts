@@ -93,6 +93,7 @@ export type KB = {
   total_chunks: number
   actual_collection_dim?: number | null
   dim_mismatch?: boolean
+  feed_path?: string
 }
 
 export type KbSession = {
@@ -267,12 +268,34 @@ export type QaStreamDone = {
   sources: QaSource[]
   used_provider?: string
   used_chunks?: number
+  mode?: RetrievalMode
+}
+
+export type RetrievalMode = 'basic' | 'deep' | 'ai'
+
+export type SearchHit = {
+  source_path: string
+  source_name: string
+  title: string
+  section_label: string
+  file_type: string
+  content: string
+  score: number
+  score_pct: number
+  merged_chunks?: number
+}
+
+export type QaStreamResults = {
+  mode: RetrievalMode
+  highlight_terms: string[]
+  hits: SearchHit[]
 }
 
 export type QaStreamCallbacks = {
   onWarmup?: (data: { step: string; msg: string }) => void
   onStage?: (stage: QaTraceStage) => void
   onSources?: (sources: QaSource[]) => void
+  onResults?: (data: QaStreamResults) => void
   onToken?: (token: string) => void
   onDone?: (data: QaStreamDone) => void
   onError?: (data: { message: string; partial?: string; rebuildInProgress?: boolean }) => void
@@ -308,7 +331,7 @@ export type FeedbackItem = {
 
 // ===== 批量上传（v8+）=====
 
-export type UploadTaskStatus = 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
+export type UploadTaskStatus = 'uploading' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
 export type UploadFileStatus = 'queued' | 'processing' | 'done' | 'skipped' | 'failed' | 'cancelled'
 export type SkipMode = 'skip' | 'overwrite'
 
@@ -322,6 +345,7 @@ export type UploadTask = {
   skipped: number
   failed: number
   status: UploadTaskStatus
+  upload_complete?: number  // 0/1：分批上传是否已收尾
   current_file_path: string | null
   current_stage: string | null
   created_at: number
@@ -348,6 +372,7 @@ export type UploadTaskFile = {
 export type UploadBatchResponse = {
   task_id: string
   total: number
+  appended?: number
   rejected?: Array<{ relative_path: string; reason: string }>
 }
 
@@ -483,6 +508,10 @@ export type UploadBatchParams = {
   /** 跟 files 一一对应的相对路径（保留子目录结构）；不传则用 file.name */
   relativePaths?: string[]
   files: File[]
+  /** 追加批次传已有任务 ID；首批不传 */
+  taskId?: string
+  /** false = 还有后续批次；true（默认）= 收尾并启动 ingest */
+  final?: boolean
 }
 
 export type FeedbackListResponse = {
@@ -574,6 +603,11 @@ export const api = {
         `/knowledge/scan${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ''}`,
         { method: 'POST', timeoutMs: 5 * 60_000 },
       ),
+    openFeedFolder: (kbId?: string) =>
+      request<{ ok: boolean; path: string }>(
+        `/knowledge/feed_folder/open${kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ''}`,
+        { method: 'POST' },
+      ),
     supportedTypes: () => request<Record<string, string[]>>('/knowledge/supported-types'),
     remove: (relPath: string, kbId?: string) => {
       const qs = kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ''
@@ -611,6 +645,8 @@ export const api = {
       form.append('kb_id', params.kbId)
       form.append('skip_mode', params.skipMode)
       form.append('auto_ingest', String(params.autoIngest))
+      if (params.taskId) form.append('task_id', params.taskId)
+      form.append('final', String(params.final ?? true))
       // relative_paths 数组跟 files 一一对应
       if (params.relativePaths && params.relativePaths.length === params.files.length) {
         params.relativePaths.forEach((rp) => form.append('relative_paths', rp))
@@ -843,6 +879,7 @@ export const api = {
           tokens: number | null
           created_at: number | null
           doc_count: number | null
+          stale?: boolean
         }>(`/kbs/${id}/global_summary`),
       build: (id: string, force = false) =>
         request<{
@@ -853,6 +890,7 @@ export const api = {
           tokens: number | null
           created_at: number | null
           doc_count: number | null
+          stale?: boolean
         }>(`/kbs/${id}/global_summary/build?force=${force}`, { method: 'POST' }),
       remove: (id: string) =>
         request<{ deleted: boolean; kb_id: string }>(`/kbs/${id}/global_summary`, {
@@ -976,6 +1014,8 @@ export const api = {
       kbScope?: string,
       sessionId?: string,
       turnId?: string,
+      topK?: number,
+      mode?: RetrievalMode,
     ): Promise<void> => {
      try {
       const res = await fetch(`${API_BASE}/qa/ask_stream`, {
@@ -987,6 +1027,8 @@ export const api = {
           kb_scope: kbScope,
           session_id: sessionId,
           turn_id: turnId,
+          top_k: topK,
+          mode,
         }),
         signal,
       })
@@ -1032,6 +1074,9 @@ export const api = {
             break
           case 'sources':
             cb.onSources?.((payload as QaSource[]) || [])
+            break
+          case 'results':
+            cb.onResults?.(payload as QaStreamResults)
             break
           case 'token':
             cb.onToken?.((payload as { text?: string })?.text ?? '')
@@ -1114,6 +1159,8 @@ export const api = {
       request<EmbeddingStatus>('/embedding/switch', {
         method: 'POST',
         body: JSON.stringify({ model_name: modelName }),
+        // 首次切换需下载模型（可达数分钟），默认 30s 超时会让用户误以为失败而重复点击
+        timeoutMs: 600_000,
       }),
     precheck: (modelName: string) =>
       request<EmbeddingPrecheckResult>('/embedding/precheck', {
@@ -1154,6 +1201,12 @@ export const api = {
 
   llm: {
     providers: () => request<LLMProvidersResponse>('/settings/llm_providers'),
+    timeouts: () => request<LLMTimeoutsInfo>('/settings/llm_timeouts'),
+    updateTimeouts: (t: LLMTimeoutsInfo) =>
+      request<LLMTimeoutsInfo>('/settings/llm_timeouts', {
+        method: 'PUT',
+        body: JSON.stringify(t),
+      }),
     switch: (providerName: string) =>
       request<LLMProvidersResponse>('/settings/llm_providers/switch', {
         method: 'POST',
@@ -1171,26 +1224,11 @@ export const api = {
         body: JSON.stringify(config),
         timeoutMs: 90_000,
       }),
-    update: (config: { name: string; base_url?: string; api_key?: string; model?: string; enabled?: boolean }) =>
+    update: (config: { name: string; base_url?: string; api_key?: string; model?: string }) =>
       request<{ name: string }>('/settings/llm_providers/update', {
         method: 'POST',
         body: JSON.stringify(config),
       }),
-  },
-
-  retrieval: {
-    get: (kbId: string) =>
-      request<{ kb_id: string; strategy: string; available_strategies: string[] }>(
-        `/settings/retrieval_strategy?kb_id=${encodeURIComponent(kbId)}`,
-      ),
-    update: (kbId: string, strategy: 'basic' | 'summary' | 'agentic') =>
-      request<{ kb_id: string; strategy: string; available_strategies: string[] }>(
-        '/settings/retrieval_strategy',
-        {
-          method: 'PUT',
-          body: JSON.stringify({ kb_id: kbId, strategy }),
-        },
-      ),
   },
 
   aiSummary: {
@@ -1224,12 +1262,21 @@ export const api = {
   sessions: {
     list: () => request<SessionSummary[]>('/sessions'),
     get: (id: string) => request<SessionDetail>(`/sessions/${encodeURIComponent(id)}`),
-    create: (payload: { id: string; title: string; created_at: number; kb_scope?: string }) =>
+    create: (payload: {
+      id: string
+      title: string
+      created_at: number
+      kb_scope?: string
+      retrieval_mode?: RetrievalMode
+    }) =>
       request<SessionSummary>('/sessions', {
         method: 'POST',
         body: JSON.stringify(payload),
       }),
-    update: (id: string, payload: { title?: string; kb_scope?: string }) =>
+    update: (
+      id: string,
+      payload: { title?: string; kb_scope?: string; retrieval_mode?: RetrievalMode },
+    ) =>
       request<SessionSummary>(`/sessions/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         body: JSON.stringify(payload),
@@ -1248,6 +1295,7 @@ export const api = {
         liked?: boolean
         error?: string
         created_at: number
+        mode?: RetrievalMode
       },
     ) =>
       request<PersistedTurn>(`/sessions/${encodeURIComponent(sessionId)}/turns`, {
@@ -1455,7 +1503,6 @@ export type SystemPromptTestResult = {
 
 export type LLMProviderInfo = {
   name: string
-  enabled: boolean
   has_chat: boolean
   has_embedding: boolean
   api_key_configured: boolean
@@ -1471,6 +1518,11 @@ export type LLMProvidersResponse = {
   fallback_chain: string[]
 }
 
+export type LLMTimeoutsInfo = {
+  test_timeout_seconds: number
+  request_timeout_seconds: number
+}
+
 export type SessionSummary = {
   id: string
   title: string
@@ -1478,6 +1530,7 @@ export type SessionSummary = {
   updated_at: number
   turn_count: number
   kb_scope?: string | null
+  retrieval_mode?: RetrievalMode
 }
 
 export type PersistedTurn = {
@@ -1491,6 +1544,7 @@ export type PersistedTurn = {
   liked: boolean
   error?: string | null
   created_at: number
+  mode?: RetrievalMode
 }
 
 export type SessionDetail = SessionSummary & {

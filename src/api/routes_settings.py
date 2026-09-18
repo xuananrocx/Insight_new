@@ -231,7 +231,6 @@ def update_log_level_endpoint(req: UpdateLogLevelRequest) -> LogLevelInfo:
 
 class LLMProviderInfo(BaseModel):
     name: str
-    enabled: bool
     has_chat: bool
     has_embedding: bool
     api_key_configured: bool
@@ -269,7 +268,6 @@ class UpdateProviderRequest(BaseModel):
     base_url: str | None = None
     api_key: str | None = None
     model: str | None = None
-    enabled: bool | None = None
 
 
 @router.get("/llm_providers", response_model=LLMProvidersResponse)
@@ -296,7 +294,6 @@ def get_llm_providers() -> LLMProvidersResponse:
         providers_info.append(
             LLMProviderInfo(
                 name=name,
-                enabled=info["enabled"],
                 has_chat=info["has_chat"],
                 has_embedding=info["has_embedding"],
                 api_key_configured=info["api_key_configured"],
@@ -329,9 +326,6 @@ def switch_provider(req: SwitchProviderRequest) -> LLMProvidersResponse:
         raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
 
     provider_cfg = providers[provider_name]
-    if not provider_cfg.get("enabled", False):
-        logger.warning(f"LLM Provider: 切换失败，provider '{provider_name}' 未启用")
-        raise HTTPException(status_code=400, detail=f"Provider '{provider_name}' 未启用")
 
     # 检查 API key
     api_key = settings.resolve_api_key(provider_cfg)
@@ -384,6 +378,46 @@ def test_provider(req: TestProviderRequest) -> dict[str, Any]:
         return {"success": False, "error": str(e), "provider": provider_name}
 
 
+class LLMTimeoutsInfo(BaseModel):
+    test_timeout_seconds: int
+    request_timeout_seconds: int
+
+
+@router.get("/llm_timeouts", response_model=LLMTimeoutsInfo)
+def get_llm_timeouts() -> LLMTimeoutsInfo:
+    """获取 LLM 超时配置。"""
+    llm = settings.config.get("llm", {}) or {}
+    return LLMTimeoutsInfo(
+        test_timeout_seconds=llm.get("test_timeout_seconds", 10),
+        request_timeout_seconds=llm.get("request_timeout_seconds", 120),
+    )
+
+
+@router.put("/llm_timeouts", response_model=LLMTimeoutsInfo)
+def update_llm_timeouts(req: LLMTimeoutsInfo) -> LLMTimeoutsInfo:
+    """更新 LLM 超时配置并持久化；重建 provider 连接使新超时生效。"""
+    llm = settings.config.setdefault("llm", {})
+    llm["test_timeout_seconds"] = req.test_timeout_seconds
+    llm["request_timeout_seconds"] = req.request_timeout_seconds
+
+    from src.core.config import USER_CONFIG_PATH
+    with open(USER_CONFIG_PATH, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    raw.setdefault("llm", {})["test_timeout_seconds"] = req.test_timeout_seconds
+    raw["llm"]["request_timeout_seconds"] = req.request_timeout_seconds
+    _secure_write_yaml(USER_CONFIG_PATH, raw)
+
+    # 已缓存的 httpx 客户端带着旧超时，全部释放以便按新配置重建
+    client = llm_client.get_client()
+    for wrapper in client._providers.values():
+        try:
+            wrapper._impl.close(force=True)
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"释放 provider 连接失败: {e}")
+
+    return get_llm_timeouts()
+
+
 @router.post("/llm_providers/test_config")
 def test_provider_config(req: TestProviderConfigRequest) -> dict[str, Any]:
     """测试 provider 配置是否可用（不保存配置）。"""
@@ -416,6 +450,11 @@ def test_provider_config(req: TestProviderConfigRequest) -> dict[str, Any]:
             provider_cfg["api_key"] = req.api_key
         if req.model:
             provider_cfg["chat_model"] = req.model
+
+        # 注入超时配置（与常驻 provider 保持一致）
+        llm_cfg = settings.config.get("llm", {})
+        provider_cfg.setdefault("request_timeout_seconds", llm_cfg.get("request_timeout_seconds", 120))
+        provider_cfg.setdefault("test_timeout_seconds", llm_cfg.get("test_timeout_seconds", 10))
 
         # 根据协议创建临时 provider
         protocol = provider_cfg.get("protocol", "openai")
@@ -483,10 +522,6 @@ def update_provider(req: UpdateProviderRequest) -> dict[str, str]:
         changes.append(f"chat_model: {provider_cfg.get('chat_model')} → {req.model}")
         provider_cfg["chat_model"] = req.model
 
-    if req.enabled is not None:
-        changes.append(f"enabled: {provider_cfg.get('enabled')} → {req.enabled}")
-        provider_cfg["enabled"] = req.enabled
-
     # 处理 API Key：留空=保持不变，非空=更新
     if req.api_key is not None and req.api_key.strip():
         changes.append("api_key: *** → *** (更新)")
@@ -533,59 +568,13 @@ def _save_providers_config_to_file() -> None:
     _secure_write_yaml(config_path, raw)
 
 
-# ===== 检索策略（迭代 3）=====
-
-
-class RetrievalStrategyInfo(BaseModel):
-    kb_id: str
-    strategy: str  # 'basic' | 'summary' | 'agentic'
-    available_strategies: list[str] = ["basic", "summary", "agentic"]
-
-
-class UpdateRetrievalStrategyRequest(BaseModel):
-    kb_id: str = Field(..., min_length=1)
-    strategy: str = Field(..., pattern="^(basic|summary|agentic)$")
-
-
-@router.get("/retrieval_strategy", response_model=RetrievalStrategyInfo)
-def get_retrieval_strategy(kb_id: str = "default") -> RetrievalStrategyInfo:
-    """读取 KB 当前检索策略。"""
-    metadata_db.init_db()
-    kb = metadata_db.get_kb(kb_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
-    return RetrievalStrategyInfo(
-        kb_id=kb_id,
-        strategy=metadata_db.get_kb_retrieval_strategy(kb_id),
-        available_strategies=["basic", "summary", "agentic"],
-    )
-
-
-@router.put("/retrieval_strategy", response_model=RetrievalStrategyInfo)
-def update_retrieval_strategy(req: UpdateRetrievalStrategyRequest) -> RetrievalStrategyInfo:
-    """更新 KB 检索策略。"""
-    metadata_db.init_db()
-    kb = metadata_db.get_kb(req.kb_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail=f"知识库不存在: {req.kb_id}")
-    try:
-        metadata_db.update_kb(req.kb_id, retrieval_strategy=req.strategy)
-        logger.info(f"KB {req.kb_id} 检索策略 → {req.strategy}")
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    return RetrievalStrategyInfo(
-        kb_id=req.kb_id,
-        strategy=req.strategy,
-        available_strategies=["basic", "summary", "agentic"],
-    )
-
-
 # ===== AI 摘要配置（迭代 2 设置页 UI 补丁）=====
 
 
 class AISummaryConfig(BaseModel):
     enabled: bool
     min_word_count: int = 100
+    segment_chars: int | None = None  # 分段摘要段长上限（字符）；None = 未提供，保持现值
 
 
 @router.get("/ai_summary", response_model=AISummaryConfig)
@@ -595,6 +584,7 @@ def get_ai_summary_config() -> AISummaryConfig:
     return AISummaryConfig(
         enabled=bool(cfg.get("enabled", False)),
         min_word_count=int(cfg.get("min_word_count", 100)),
+        segment_chars=int(cfg.get("segment_chars", 30000)),
     )
 
 
@@ -603,6 +593,8 @@ def update_ai_summary_config(req: AISummaryConfig) -> AISummaryConfig:
     """更新 AI 摘要配置（写入 config.yaml）。"""
     if req.min_word_count < 10:
         raise HTTPException(status_code=400, detail="min_word_count 必须 >= 10")
+    if req.segment_chars is not None and req.segment_chars < 2000:
+        raise HTTPException(status_code=400, detail="segment_chars 必须 >= 2000")
     from src.core.config import USER_CONFIG_PATH
     config_path = USER_CONFIG_PATH
     with open(config_path, encoding="utf-8") as f:
@@ -614,9 +606,22 @@ def update_ai_summary_config(req: AISummaryConfig) -> AISummaryConfig:
     settings.config.setdefault("ingest", {}).setdefault("ai_summary", {})
     settings.config["ingest"]["ai_summary"]["enabled"] = req.enabled
     settings.config["ingest"]["ai_summary"]["min_word_count"] = req.min_word_count
+    segment_chars = req.segment_chars
+    if segment_chars is None:
+        # 请求未带该字段：保持现有值（兼容旧前端）
+        segment_chars = int((raw["ingest"]["ai_summary"].get("segment_chars"))
+                            or settings.config["ingest"]["ai_summary"].get("segment_chars")
+                            or 30000)
+    raw["ingest"]["ai_summary"]["segment_chars"] = segment_chars
+    settings.config["ingest"]["ai_summary"]["segment_chars"] = segment_chars
     _secure_write_yaml(config_path, raw)
-    logger.info(f"AI 摘要配置: enabled={req.enabled}, min_word_count={req.min_word_count}")
-    return AISummaryConfig(enabled=req.enabled, min_word_count=req.min_word_count)
+    logger.info(
+        f"AI 摘要配置: enabled={req.enabled}, min_word_count={req.min_word_count}, "
+        f"segment_chars={segment_chars}"
+    )
+    return AISummaryConfig(
+        enabled=req.enabled, min_word_count=req.min_word_count, segment_chars=segment_chars
+    )
 
 
 # ===== UI 默认知识库 =====

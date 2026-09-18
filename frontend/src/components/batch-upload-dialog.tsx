@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   AlertTriangle,
@@ -7,6 +7,7 @@ import {
   FileUp,
   FolderUp,
   Loader2,
+  Minimize2,
   X,
 } from 'lucide-react'
 
@@ -24,6 +25,8 @@ import {
   type UploadFileStatus,
   type UploadTask,
 } from '@/lib/api'
+import { useUploadRunner } from '@/stores/upload-runner'
+import { useUploadUiStore } from '@/stores/upload-ui'
 import { cn, formatBytes } from '@/lib/utils'
 
 type SelectedFile = {
@@ -38,15 +41,20 @@ type Props = {
   kbName: string
   /** 默认 autoIngest；从 config 读 */
   defaultAutoIngest?: boolean
+  /** 直接查看一个进行中的任务（从悬浮条/banner 打开） */
+  initialTaskId?: string | null
   /** 任务完成后回调（让父组件刷新文件列表） */
   onCompleted?: () => void
 }
 
 /**
- * 批量上传 Dialog：选文件 → 预检同名 → 上传 → 实时进度。
+ * 批量上传 Dialog：选文件 → 预检同名 → 分批上传 → 实时进度。
  *
  * 内部状态机：
- *   idle (选文件) → preview (预检同名) → running (上传中) → done (完成)
+ *   idle (选文件) → uploading (分批传输) → running (ingest 进度) → done (完成)
+ *
+ * 「转到后台」：关闭弹窗但传输/ingest 继续（传输循环在 upload-runner store 里，
+ * ingest 在后端 worker 里），全局悬浮条持续展示进度。
  */
 export function BatchUploadDialog({
   open,
@@ -54,9 +62,10 @@ export function BatchUploadDialog({
   kbId,
   kbName,
   defaultAutoIngest = true,
+  initialTaskId,
   onCompleted,
 }: Props) {
-  const [phase, setPhase] = useState<'idle' | 'running'>('idle')
+  const [phase, setPhase] = useState<'idle' | 'uploading' | 'running'>('idle')
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([])
   const [rejectedFiles, setRejectedFiles] = useState<Array<{ name: string; reason: string }>>([])
   const [skipMode, setSkipMode] = useState<SkipMode>('skip')
@@ -77,7 +86,36 @@ export function BatchUploadDialog({
     Record<number, { status: UploadFileStatus; relativePath: string; skipReason?: string | null; error?: string | null }>
   >({})
 
-  // 重置（关闭/重开）
+  const runner = useUploadRunner()
+  const setForegroundTaskId = useUploadUiStore((s) => s.setForegroundTaskId)
+
+  // 打开时决定进入哪个阶段：
+  // - 指定 initialTaskId → 直接看该任务进度
+  // - runner 还在传/刚传完没看过 → 接上上传进度
+  useEffect(() => {
+    if (!open) return
+    if (initialTaskId) {
+      setTaskId(initialTaskId)
+      setPhase('running')
+      api.knowledge
+        .uploadTask(initialTaskId)
+        .then((d) => setTaskSnapshot(d))
+        .catch(() => {})
+      return
+    }
+    if (runner.phase === 'uploading' || runner.phase === 'error') {
+      setPhase('uploading')
+      return
+    }
+    if (runner.phase === 'finished' && runner.taskId && !runner.seen) {
+      setTaskId(runner.taskId)
+      setPhase('running')
+    }
+    // 其余情况保持 idle（新导入）
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialTaskId])
+
+  // 关闭时重置本地展示状态（传输循环在 runner store 里，不受影响）
   useEffect(() => {
     if (!open) {
       const t = setTimeout(() => {
@@ -93,6 +131,24 @@ export function BatchUploadDialog({
       return () => clearTimeout(t)
     }
   }, [open])
+
+  // runner 传输全部完成 → 切到 ingest 进度阶段
+  useEffect(() => {
+    if (phase === 'uploading' && runner.phase === 'finished' && runner.taskId) {
+      setTaskId(runner.taskId)
+      setPhase('running')
+    }
+    if (phase === 'uploading' && runner.phase === 'idle') {
+      // 上传被取消
+      setPhase('idle')
+      setSelectedFiles([])
+    }
+  }, [phase, runner.phase, runner.taskId])
+
+  // 弹窗展示中的任务登记到 UI store（悬浮条避免重复完成提示）
+  useEffect(() => {
+    setForegroundTaskId(open && phase === 'running' && taskId ? taskId : null)
+  }, [open, phase, taskId, setForegroundTaskId])
 
   // 预检：拉 KB 现有文件路径
   const existingPaths = useQuery({
@@ -151,53 +207,24 @@ export function BatchUploadDialog({
     return selectedFiles.filter((sf) => existingSet.has(sf.relativePath))
   }, [existingPaths.data, selectedFiles])
 
-  // 提交批量上传
-  const uploadMutation = useMutation({
-    mutationFn: async () => {
-      const result = await api.knowledge.uploadBatch({
-        kbId,
-        skipMode,
-        autoIngest,
-        relativePaths: selectedFiles.map((sf) => sf.relativePath),
-        files: selectedFiles.map((sf) => sf.file),
-      })
-      return result
-    },
-    onSuccess: (data) => {
-      setTaskId(data.task_id)
-      setPhase('running')
-      if (data.rejected && data.rejected.length > 0) {
-        toast.warning(
-          `后端再次排除 ${data.rejected.length} 个不支持文件（白名单已更新）`,
-        )
-      }
-    },
-    onError: (e: Error) => {
-      // 后端可能因为 detail 是 dict（含 rejected）需要特殊处理
-      const msg = e.message
-      if (msg.includes('"rejected"')) {
-        try {
-          const match = msg.match(/\{.*\}/)
-          if (match) {
-            const parsed = JSON.parse(match[0])
-            if (parsed.rejected?.length) {
-              toast.error(
-                `全部 ${parsed.rejected.length} 个文件被拒绝（扩展名/路径非法）`,
-              )
-              return
-            }
-          }
-        } catch {
-          // ignore
-        }
-      }
-      toast.error(`批量上传失败：${msg}`)
-    },
-  })
+  // 提交批量上传（分批，循环在 upload-runner store 里跑，弹窗可中途转后台）
+  const startUpload = () => {
+    if (selectedFiles.length === 0) return
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => {})
+    }
+    setPhase('uploading')
+    void runner.start({
+      kbId,
+      skipMode,
+      autoIngest,
+      files: selectedFiles,
+    })
+  }
 
   // 订阅任务进度
   useEffect(() => {
-    if (!taskId || phase !== 'running') return
+    if (!taskId || phase !== 'running' || !open) return
     const ctrl = new AbortController()
 
     api.knowledge
@@ -240,9 +267,10 @@ export function BatchUploadDialog({
             )
           },
           onTaskCompleted: () => {
+            useUploadRunner.getState().markSeen()
             // 刷新父组件文件列表
             onCompleted?.()
-            toast.success('批量上传完成')
+            toast.success('批量导入完成')
           },
           onTaskCancelled: () => toast.info('已取消'),
           onTaskCrashed: () => toast.error('任务异常中断，重启后可恢复'),
@@ -257,7 +285,7 @@ export function BatchUploadDialog({
       })
 
     return () => ctrl.abort()
-  }, [taskId, phase, onCompleted])
+  }, [taskId, phase, open, onCompleted])
 
   // 文件选择处理（本地按扩展名预过滤）
   const handleFiles = (fileList: FileList | null, _isFolder: boolean) => {
@@ -311,19 +339,17 @@ export function BatchUploadDialog({
     <Dialog
       open={open}
       onOpenChange={(o) => {
-        if (!o && phase !== 'running') onClose()
+        // 传输/ingest 阶段关闭 = 转到后台（传输在 runner store、ingest 在后端，都会继续）
+        if (!o) onClose()
       }}
     >
       <DialogContent
         className="max-w-2xl"
         aria-describedby={undefined}
         onEscapeKeyDown={(e) => {
-          // 运行中不允许 Esc 关闭
-          if (phase === 'running') e.preventDefault()
-        }}
-        onPointerDownOutside={(e) => {
-          // 运行中不允许点外面关闭
-          if (phase === 'running') e.preventDefault()
+          // Radix 默认 Esc 会关 Dialog，这里统一走 onOpenChange（转后台语义）
+          if (phase === 'uploading' || phase === 'running') e.preventDefault()
+          onClose()
         }}
       >
         <DialogTitle>批量导入到 · {kbName}</DialogTitle>
@@ -562,14 +588,9 @@ export function BatchUploadDialog({
               </Button>
               <Button
                 size="sm"
-                disabled={
-                  selectedFiles.length === 0 || uploadMutation.isPending
-                }
-                onClick={() => uploadMutation.mutate()}
+                disabled={selectedFiles.length === 0}
+                onClick={startUpload}
               >
-                {uploadMutation.isPending ? (
-                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                ) : null}
                 开始导入 {selectedFiles.length || ''}{' '}
                 {selectedFiles.length ? '个文件' : ''}
               </Button>
@@ -577,7 +598,75 @@ export function BatchUploadDialog({
           </div>
         ) : null}
 
+        {/* 分批传输中 */}
+        {phase === 'uploading' ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 text-[13px]">
+              {runner.phase === 'error' ? (
+                <AlertTriangle className="h-4 w-4 text-warning" />
+              ) : (
+                <Loader2 className="h-4 w-4 animate-spin text-primary" />
+              )}
+              {runner.phase === 'error' ? (
+                <span>上传中断：第 {(runner.failedAt ?? 0) + 1} 批失败</span>
+              ) : (
+                <span>
+                  正在上传 第 {Math.min(runner.current + 1, runner.totalBatches)} /
+                  {runner.totalBatches} 批 · {formatBytes(runner.uploadedBytes)} /{' '}
+                  {formatBytes(runner.totalBytes)}
+                </span>
+              )}
+            </div>
+            {/* 传输进度条（按字节） */}
+            <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div
+                className="h-full rounded-full bg-primary transition-all"
+                style={{
+                  width: `${
+                    runner.totalBytes > 0
+                      ? Math.min(100, (runner.uploadedBytes / runner.totalBytes) * 100)
+                      : 0
+                  }%`,
+                }}
+              />
+            </div>
+            {runner.error ? (
+              <div className="rounded-md border border-warning/40 bg-warning/5 p-2 text-[11px] text-muted-foreground">
+                <div className="break-all">{runner.error}</div>
+              </div>
+            ) : null}
+            <div className="flex justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void runner.cancelUpload()}
+              >
+                取消上传
+              </Button>
+              {runner.phase === 'error' ? (
+                <Button size="sm" onClick={() => void runner.retry()}>
+                  重试本批
+                </Button>
+              ) : (
+                <Button variant="outline" size="sm" onClick={onClose}>
+                  <Minimize2 className="mr-1.5 h-3 w-3" />
+                  转到后台
+                </Button>
+              )}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              大批量文件会自动分批传输，中途关闭弹窗不影响上传。
+            </div>
+          </div>
+        ) : null}
+
         {/* 运行中 / 完成 */}
+        {phase === 'running' && !taskSnapshot ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            加载任务进度...
+          </div>
+        ) : null}
         {phase === 'running' && taskSnapshot ? (
           <BatchProgressView
             task={taskSnapshot}
@@ -642,6 +731,10 @@ export function BatchUploadDialog({
               onCompleted?.()
               onClose()
             }}
+            onBackground={() => {
+              onCompleted?.()
+              onClose()
+            }}
           />
         ) : null}
       </DialogContent>
@@ -665,6 +758,7 @@ type BatchProgressViewProps = {
   onCancel: () => Promise<void>
   onRetryFailed: () => Promise<void>
   onDeleteFailed: () => Promise<void>
+  onBackground: () => void
   onClose: () => void
 }
 
@@ -687,6 +781,7 @@ function BatchProgressView({
   onCancel,
   onRetryFailed,
   onDeleteFailed,
+  onBackground,
   onClose,
 }: BatchProgressViewProps) {
   const finished = task.done + task.skipped + task.failed
@@ -877,9 +972,15 @@ function BatchProgressView({
             完成
           </Button>
         ) : (
-          <Button variant="outline" size="sm" onClick={onCancel}>
-            取消未完成
-          </Button>
+          <>
+            <Button variant="ghost" size="sm" onClick={onBackground}>
+              <Minimize2 className="mr-1.5 h-3 w-3" />
+              转到后台
+            </Button>
+            <Button variant="outline" size="sm" onClick={onCancel}>
+              取消未完成
+            </Button>
+          </>
         )}
       </div>
     </div>

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +103,34 @@ def scan(kb_id: str = "default") -> ScanResponse:
         return ScanResponse(ok=True, result=result.to_dict())
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"扫描失败: {e}")
+
+
+@router.post("/feed_folder/open", response_model=dict)
+def open_feed_folder(kb_id: str = "default") -> dict:
+    """在系统文件管理器中打开该 KB 的投喂目录（不存在则先创建）。
+
+    目录规则与上传/扫描一致：default KB → feed 根目录，其他 KB → feed/{kb_id}/。
+    """
+    metadata_db.init_db()
+    if not metadata_db.get_kb(kb_id):
+        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+
+    target = settings.feed_folder if kb_id == "default" else settings.feed_folder / kb_id
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            import os
+
+            os.startfile(str(target))  # noqa: S606
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(target)])
+        else:
+            subprocess.Popen(["xdg-open", str(target)])
+    except Exception as e:
+        logger.exception(f"打开投喂目录失败: kb_id={kb_id}")
+        raise HTTPException(status_code=500, detail=f"打开目录失败: {e}")
+
+    return {"ok": True, "path": str(target)}
 
 
 @router.get("/files", response_model=dict)
@@ -224,8 +254,11 @@ async def upload_batch(
     auto_ingest: bool = Form(True),
     relative_paths: list[str] = Form([]),
     files: list[UploadFile] = File(...),
+    task_id: str | None = Form(None),
+    final: bool = Form(True),
 ) -> dict:
-    """批量上传文件到指定 KB。
+    """批量上传文件到指定 KB。支持分批：首批发 task_id=None & final=False 创建任务，
+    后续批次带 task_id 追加，最后一批 final=True 收尾并启动 ingest。
 
     参数：
         kb_id: 目标知识库 ID
@@ -233,8 +266,10 @@ async def upload_batch(
         auto_ingest: 上传后是否自动 ingest
         relative_paths: 跟 files 一一对应的相对路径（用于保留子目录结构）；为空时用 filename
         files: 多个文件（multipart）
+        task_id: 追加批次传已有任务 ID；首帧不传
+        final: True（默认）= 一次性/收尾批次，上传完立即启动 ingest
 
-    返回 { task_id }，前端用 GET /upload_tasks/{id}/stream 订阅进度。
+    返回 { task_id, total, rejected }，前端用 GET /upload_tasks/{id}/stream 订阅进度。
     """
     metadata_db.init_db()
 
@@ -316,13 +351,43 @@ async def upload_batch(
             "file_size": file_size,
         })
 
-    if not file_records:
+    if not file_records and not (task_id and final):
         # 全部被拒：返回 rejected 详情，让前端展示
         detail = "无有效文件（全部被扩展名白名单拒绝或路径非法）"
         raise HTTPException(
             status_code=400,
             detail={"message": detail, "rejected": rejected},
         )
+
+    if task_id:
+        # 追加批次：校验任务可追加
+        task = metadata_db.get_upload_task(task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail=f"任务不存在: {task_id}")
+        if task["kb_id"] != kb_id:
+            raise HTTPException(status_code=400, detail="task_id 与 kb_id 不匹配")
+        if task["status"] != "uploading":
+            raise HTTPException(
+                status_code=409,
+                detail=f"任务已进入 {task['status']} 状态，不能再追加文件",
+            )
+        appended = metadata_db.append_upload_task_files(task_id, file_records) if file_records else 0
+        if final:
+            metadata_db.update_upload_task_progress(
+                task_id, status="running", current_stage="queued", upload_complete=True
+            )
+            batch_upload.start_task(task_id)
+        task_total = metadata_db.get_upload_task(task_id)["total"]
+        logger.info(
+            f"batch_upload appended: task={task_id} appended={appended} "
+            f"total={task_total} final={final} rejected={len(rejected)}"
+        )
+        return {
+            "task_id": task_id,
+            "total": task_total,
+            "appended": appended,
+            "rejected": rejected,
+        }
 
     task_id = batch_upload.generate_task_id()
     metadata_db.create_upload_task(
@@ -331,13 +396,15 @@ async def upload_batch(
         skip_mode=skip_mode,
         auto_ingest=auto_ingest,
         files=file_records,
+        upload_complete=final,
     )
 
-    batch_upload.start_task(task_id)
+    if final:
+        batch_upload.start_task(task_id)
 
     logger.info(
         f"batch_upload created: task={task_id} kb={kb_id} files={len(file_records)} "
-        f"rejected={len(rejected)} skip={skip_mode} auto_ingest={auto_ingest}"
+        f"rejected={len(rejected)} skip={skip_mode} auto_ingest={auto_ingest} final={final}"
     )
     return {"task_id": task_id, "total": len(file_records), "rejected": rejected}
 

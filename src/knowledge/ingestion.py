@@ -43,6 +43,10 @@ from src.knowledge.parsers.registry import is_supported, parse_file
 ProgressFn = Callable[[str, dict], None]
 
 
+class TaskCancelledError(Exception):
+    """任务被取消。进度回调抛出该异常可中止当前文件的处理（阶段边界生效）。"""
+
+
 @dataclass
 class ScanResult:
     """一次扫描的汇总结果。"""
@@ -286,6 +290,9 @@ def _process_one_document(
             result.updated += 1
         else:
             result.added += 1
+    except TaskCancelledError:
+        # 进度回调检测到任务取消：原样上抛，由 worker 决定文件终态
+        raise
     except ParseError as e:
         result.failed += 1
         result.errors.append({"file": rel_path, "error": f"解析失败: {e}"})

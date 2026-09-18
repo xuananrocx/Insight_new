@@ -35,7 +35,20 @@ else:
 
 # 用户数据目录（跨平台）
 APP_DIR_NAME = "AI-Assistant"
-USER_DATA_DIR = Path(user_data_dir(APP_DIR_NAME, appauthor=False))
+# Windows 下优先用 LOCALAPPDATA 环境变量：platformdirs 默认走 ctypes 的
+# SHGetFolderPathW，在某些受限 shell（如沙箱 bash）里会静默失败返回 "."
+# 导致数据目录落到 CWD；显式读环境变量与 platformdirs 结果一致且更稳。
+# 测试隔离：tests/conftest.py 在 import src 之前设置 AMD_DATA_DIR 指向临时目录。
+# 必须在这里（模块加载期）读取——USER_DATA_DIR 是 import 时解析的常量，
+# 测试模块随后通过 settings.get_path 消费的都是这个根目录。
+_env_data_dir = os.environ.get("AMD_DATA_DIR")
+_win_local = os.environ.get("LOCALAPPDATA")
+if _env_data_dir:
+    USER_DATA_DIR = Path(_env_data_dir)
+elif sys.platform == "win32" and _win_local:
+    USER_DATA_DIR = Path(_win_local) / APP_DIR_NAME
+else:
+    USER_DATA_DIR = Path(user_data_dir(APP_DIR_NAME, appauthor=False))
 
 # 出厂默认配置模板（项目源码里）
 DEFAULT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
@@ -46,7 +59,7 @@ USER_CONFIG_LOCAL_PATH = USER_DATA_DIR / "config.local.yaml"
 APP_META_PATH = USER_DATA_DIR / "app.json"
 
 # 当前 config schema 版本（每次结构变更 +1）
-CURRENT_CONFIG_VERSION = 1
+CURRENT_CONFIG_VERSION = 3
 
 # 启动时加载 .env（如果在）
 load_dotenv(PROJECT_ROOT / ".env")
@@ -132,6 +145,68 @@ def _migrate_config(cfg: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
         logs.append(f"v{current} → v{current + 1}")
         current += 1
     return cfg, logs
+
+
+# v2 收敛后的 provider 槽位
+_V2_PROVIDER_SLOTS = ("deepseek", "openai", "anthropic", "glm", "custom")
+
+
+@_register_migration(1)
+def _migrate_v1_to_v2(cfg: dict[str, Any]) -> dict[str, Any]:
+    """v2: LLM providers 从 8 个预设收敛为 5 槽位；新增超时配置。
+
+    - 废弃槽位（qwen/moonshot/local/anthropic-arch）从用户配置剔除
+    - anthropic-arch 若有实际配置，迁移进 custom 槽位（协议保留）
+    - fallback_chain / chat_provider / embedding_provider 中的失效引用清理
+    """
+    llm = cfg.setdefault("llm", {})
+    providers = llm.setdefault("providers", {})
+
+    template_providers = _load_yaml(DEFAULT_CONFIG_PATH).get("llm", {}).get("providers", {})
+
+    # anthropic-arch 的配置搬进 custom（仅当 custom 还没被用户配置过）
+    arch_cfg = providers.pop("anthropic-arch", None)
+    custom_cfg = providers.get("custom")
+    if arch_cfg and not (custom_cfg and custom_cfg.get("base_url")):
+        providers["custom"] = {**template_providers.get("custom", {}), **arch_cfg}
+
+    # 补齐缺失槽位（新装的 custom 等）
+    for slot in _V2_PROVIDER_SLOTS:
+        if slot not in providers and slot in template_providers:
+            providers[slot] = template_providers[slot]
+
+    # 剔除废弃槽位
+    for name in [k for k in providers if k not in _V2_PROVIDER_SLOTS]:
+        providers.pop(name)
+        print(f"[config 迁移] 剔除废弃 provider 槽位: {name}")
+
+    # 清理引用：fallback 链里 anthropic-arch → custom，再过滤不存在的
+    chain = ["custom" if n == "anthropic-arch" else n for n in llm.get("fallback_chain", [])]
+    llm["fallback_chain"] = [n for n in chain if n in providers]
+
+    if llm.get("chat_provider") not in providers:
+        llm["chat_provider"] = "deepseek" if "deepseek" in providers else _V2_PROVIDER_SLOTS[0]
+    if llm.get("embedding_provider") not in providers:
+        llm["embedding_provider"] = "openai" if "openai" in providers else None
+
+    # 超时配置（模板默认值兜底）
+    tmpl_llm = _load_yaml(DEFAULT_CONFIG_PATH).get("llm", {})
+    llm.setdefault("request_timeout_seconds", tmpl_llm.get("request_timeout_seconds", 120))
+    llm.setdefault("test_timeout_seconds", tmpl_llm.get("test_timeout_seconds", 10))
+    return cfg
+
+
+@_register_migration(2)
+def _migrate_v2_to_v3(cfg: dict[str, Any]) -> dict[str, Any]:
+    """v3: 移除 provider 的 enabled 字段。
+
+    provider 是否参与由「是否配置了 API Key」决定，启用开关已删除。
+    """
+    providers = cfg.get("llm", {}).get("providers", {})
+    for p in providers.values():
+        if isinstance(p, dict):
+            p.pop("enabled", None)
+    return cfg
 
 
 # ===== app.json 应用元数据 =====
@@ -381,6 +456,7 @@ def migrate_legacy_data_once() -> list[str]:
     """
     logs: list[str] = []
     legacy_data = PROJECT_ROOT / "data"
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
     marker = USER_DATA_DIR / ".migrated_v1"
 
     if marker.exists():

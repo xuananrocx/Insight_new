@@ -12,7 +12,7 @@ server:
   web_host: 127.0.0.1
   web_port: 8501
 paths:
-  feed_folder: ~/AMD-Knowledge-Feeds
+  feed_folder: ~/Insight_Knowledge_Feeds
   vector_db: ./data/vector_db
   extracted: ./data/extracted
   feedback_queue: ./data/feedback_queue
@@ -74,12 +74,16 @@ llm:
       size: 1.2GB
       dimensions: 1024
       description: 最高精度，适合大批量文档
+  # 正式对话请求超时（秒）。流式请求 = 相邻数据包最大间隔
+  request_timeout_seconds: 120
+  # 连接测试超时（秒）。建议短，快速暴露不可达/错配
+  test_timeout_seconds: 10
   fallback_chain:
   - deepseek
-  - qwen
-  - moonshot
+  - openai
+  - glm
   - anthropic
-  - anthropic-arch
+  - custom
   providers:
     deepseek:
       api_key_env: DEEPSEEK_API_KEY
@@ -88,24 +92,10 @@ llm:
       embedding_model: false
       max_tokens: 4096
       temperature: 0.3
-      enabled: true
-    qwen:
-      api_key_env: DASHSCOPE_API_KEY
-      base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-      chat_model: qwen-plus
-      embedding_model: text-embedding-v3
-      embedding_dimensions: 1024
-      max_tokens: 4096
-      temperature: 0.3
-      enabled: true
-    moonshot:
-      api_key_env: MOONSHOT_API_KEY
-      base_url: https://api.moonshot.cn/v1
-      chat_model: moonshot-v1-32k
-      embedding_model: false
-      max_tokens: 4096
-      temperature: 0.3
-      enabled: false
+    # OpenAI 格式。base_url 支持三种填法，自动识别：
+    #   https://xxx/v1                    → 走 chat/completions
+    #   https://xxx/v1/chat/completions   → 走 chat/completions
+    #   https://xxx/v1/responses          → 走 Responses API
     openai:
       api_key_env: OPENAI_API_KEY
       base_url: https://api.openai.com/v1
@@ -114,16 +104,6 @@ llm:
       embedding_dimensions: 1536
       max_tokens: 4096
       temperature: 0.3
-      enabled: false
-    local:
-      api_key_env: null
-      base_url: http://localhost:11434/v1
-      chat_model: qwen2.5:14b
-      embedding_model: nomic-embed-text
-      embedding_dimensions: 768
-      max_tokens: 4096
-      temperature: 0.3
-      enabled: false
     anthropic:
       protocol: anthropic
       api_key_env: ANTHROPIC_API_KEY
@@ -132,16 +112,6 @@ llm:
       embedding_model: false
       max_tokens: 4096
       temperature: 0.3
-      enabled: false
-    anthropic-arch:
-      protocol: anthropic-arch
-      api_key_env: ANTHROPIC_AUTH_TOKEN
-      base_url: https://plan.ai.archforce.cn
-      chat_model: glm-5.2
-      embedding_model: false
-      max_tokens: 4096
-      temperature: 0.3
-      enabled: true
     glm:
       protocol: openai
       api_key_env: ZHIPU_API_KEY
@@ -150,7 +120,15 @@ llm:
       embedding_model: false
       max_tokens: 4096
       temperature: 0.3
-      enabled: false
+    # 第三方自定义。protocol 可选：openai / anthropic / anthropic-arch（伪装 Claude Code）
+    custom:
+      protocol: openai
+      api_key_env: CUSTOM_API_KEY
+      base_url: ''
+      chat_model: ''
+      embedding_model: false
+      max_tokens: 4096
+      temperature: 0.3
 ingest:
   text_extensions:
   - md
@@ -196,6 +174,10 @@ ingest:
   ai_summary:
     enabled: false
     min_word_count: 100
+    # 文档摘要的分段上限（字符）：不超过该值的文档单次 LLM 调用全文直出；
+    # 超过则按章节分段 map-reduce（每段出要点笔记再汇总），全文覆盖不截断。
+    # 段长只影响调用粒度与成本，调大可减少调用次数（需 provider 上下文足够）。
+    segment_chars: 30000
 qa:
   top_k: 5
   similarity_threshold: 0.3
@@ -203,6 +185,8 @@ qa:
   rerank:
     enabled: true
     model_name: BAAI/bge-reranker-v2-m3
+    # auto: 优先 ONNX int8（快 ~12x），加载失败回退 CrossEncoder；onnx: 强制 ONNX；torch: 强制 CrossEncoder
+    backend: auto
     retrieve_multiplier: 4
   chat_options:
     temperature: 0.2

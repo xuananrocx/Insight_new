@@ -21,6 +21,8 @@ import {
   ChevronDown,
   Database,
   FileUp,
+  FolderOpen,
+  Copy,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -126,6 +128,22 @@ export function KnowledgePage() {
     },
     onError: (e: Error) => setScanMsg(`扫描失败：${e.message}`),
   })
+
+  const openFolderMutation = useMutation({
+    mutationFn: (kbId: string) => api.knowledge.openFeedFolder(kbId),
+    onError: (e: unknown) =>
+      toast.error(`打开目录失败：${e instanceof Error ? e.message : '未知错误'}`),
+  })
+
+  const copyFeedPath = async () => {
+    if (!currentKb?.feed_path) return
+    try {
+      await navigator.clipboard.writeText(currentKb.feed_path)
+      toast.success('路径已复制')
+    } catch {
+      toast.error('复制失败，请手动选中复制')
+    }
+  }
 
   const deleteMutation = useMutation({
     mutationFn: ({ relPath, kbId }: { relPath: string; kbId?: string }) =>
@@ -335,15 +353,28 @@ export function KnowledgePage() {
               {fileList.length}
             </span>
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 gap-1 text-[11px] text-muted-foreground"
-            onClick={() => files.refetch()}
-          >
-            <RefreshCw className={cn('h-3 w-3', files.isFetching && 'animate-spin')} />
-            刷新
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 text-[11px] text-muted-foreground"
+              onClick={() => selectedKbId && openFolderMutation.mutate(selectedKbId)}
+              disabled={!selectedKbId || openFolderMutation.isPending}
+              title={currentKb?.feed_path || '打开该知识库的投喂目录'}
+            >
+              <FolderOpen className="h-3 w-3" />
+              打开目录
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 text-[11px] text-muted-foreground"
+              onClick={() => files.refetch()}
+            >
+              <RefreshCw className={cn('h-3 w-3', files.isFetching && 'animate-spin')} />
+              刷新
+            </Button>
+          </div>
         </div>
 
         {files.isLoading ? (
@@ -354,7 +385,33 @@ export function KnowledgePage() {
         ) : fileList.length === 0 ? (
           <div className="py-12 text-center text-[12px] text-muted-foreground">
             <div className="mb-1">「{currentKbName}」为空</div>
-            <div>点上方"上传文件"，或把文档放进 ~/AMD-Knowledge-Feeds/ 后点"扫描投喂文件夹"。</div>
+            <div>点上方"添加文档"上传，或把文件放进本库的投喂目录后点"扫描投喂文件夹"</div>
+            {currentKb?.feed_path ? (
+              <div className="mt-3 flex items-center justify-center gap-2">
+                <code className="max-w-[380px] truncate rounded bg-muted px-2 py-1 font-mono text-[11px] text-foreground/80">
+                  {currentKb.feed_path}
+                </code>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1 text-[11px] text-muted-foreground"
+                  onClick={() => selectedKbId && openFolderMutation.mutate(selectedKbId)}
+                  disabled={openFolderMutation.isPending}
+                >
+                  <FolderOpen className="h-3 w-3" />
+                  打开目录
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1 text-[11px] text-muted-foreground"
+                  onClick={copyFeedPath}
+                >
+                  <Copy className="h-3 w-3" />
+                  复制路径
+                </Button>
+              </div>
+            ) : null}
           </div>
         ) : (
           <div className="divide-y">

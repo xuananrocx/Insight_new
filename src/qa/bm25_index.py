@@ -244,7 +244,9 @@ def query(
     # 当指定 kb_id 时，需要扩大候选集以保证过滤后仍有 top_k 条
     scan_limit = len(ranked) if kb_id else top_k
     for i, score in ranked[:scan_limit]:
-        if score <= 0:
+        # score==0 表示词表完全无交集，结束；负分是"命中但词过于常见"
+        # （rank_bm25 的 idf 在 df 接近 N 时为负），仍算命中，交给 RRF 排序
+        if score == 0:
             break
         chunk = dict(chunks_snapshot[i])
         if kb_id is not None:

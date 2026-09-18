@@ -12,7 +12,7 @@ import re
 import time
 import zipfile
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Response
@@ -31,10 +31,11 @@ SOURCE_SNIPPET_MAX = 200
 CANDIDATE_PREVIEW_MAX = 80
 
 
-def _trim_sources(sources: list[dict] | None) -> list[dict]:
-    """裁剪 sources：保留必要字段，content 截到 200 字。"""
+def _trim_sources(sources: list[dict] | None, long_content: bool = False) -> list[dict]:
+    """裁剪 sources：保留必要字段。content 截 200 字；检索结果消息（long_content）截 6000 字并保留 score_pct/merged_chunks。"""
     if not sources:
         return []
+    content_max = 6000 if long_content else SOURCE_SNIPPET_MAX
     out = []
     for s in sources:
         if not isinstance(s, dict):
@@ -47,9 +48,13 @@ def _trim_sources(sources: list[dict] | None) -> list[dict]:
             "file_type": s.get("file_type") or "",
             "score": s.get("score") if isinstance(s.get("score"), (int, float)) else None,
         }
+        if isinstance(s.get("score_pct"), (int, float)):
+            item["score_pct"] = int(s["score_pct"])
+        if isinstance(s.get("merged_chunks"), int):
+            item["merged_chunks"] = s["merged_chunks"]
         content = s.get("content") or s.get("text_snippet") or ""
         if isinstance(content, str):
-            item["content"] = content[:SOURCE_SNIPPET_MAX]
+            item["content"] = content[:content_max]
         out.append(item)
     return out
 
@@ -104,6 +109,7 @@ def _normalize_turn(turn: dict) -> dict:
         "liked": bool(turn.get("liked", False)),
         "error": turn.get("error"),
         "created_at": turn.get("created_at") or 0,
+        "mode": turn.get("mode") or "ai",
     }
 
 
@@ -114,11 +120,13 @@ class CreateSessionRequest(BaseModel):
     title: str = Field("新会话", max_length=80)
     created_at: int = Field(..., ge=0)
     kb_scope: str | None = None
+    retrieval_mode: Literal["basic", "deep", "ai"] = "ai"
 
 
 class UpdateSessionRequest(BaseModel):
     title: str | None = Field(None, max_length=80)
     kb_scope: str | None = None
+    retrieval_mode: Literal["basic", "deep", "ai"] | None = None
 
 
 class TurnModel(BaseModel):
@@ -132,6 +140,7 @@ class TurnModel(BaseModel):
     liked: bool = False
     error: str | None = None
     created_at: int
+    mode: Literal["basic", "deep", "ai"] = "ai"
 
 
 class SessionSummary(BaseModel):
@@ -141,6 +150,7 @@ class SessionSummary(BaseModel):
     updated_at: int
     turn_count: int
     kb_scope: str | None = None
+    retrieval_mode: Literal["basic", "deep", "ai"] = "ai"
 
 
 class SessionDetail(SessionSummary):
@@ -157,6 +167,7 @@ class AddTurnRequest(BaseModel):
     liked: bool = False
     error: str | None = None
     created_at: int = Field(..., ge=0)
+    mode: Literal["basic", "deep", "ai"] | None = None
 
 
 class UpdateTurnRequest(BaseModel):
@@ -193,13 +204,14 @@ def create_session(req: CreateSessionRequest) -> dict:
             created_at=req.created_at,
             updated_at=req.created_at,
             kb_scope=req.kb_scope,
+            retrieval_mode=req.retrieval_mode,
         )
     except Exception as e:
         msg = str(e)
         if "UNIQUE constraint failed" in msg:
             raise HTTPException(status_code=409, detail="会话 ID 已存在")
         raise HTTPException(status_code=500, detail=f"创建失败: {e}")
-    logger.info(f"create session id={req.id} title={req.title!r}")
+    logger.info(f"create session id={req.id} title={req.title!r} mode={req.retrieval_mode}")
     return {
         "id": req.id,
         "title": req.title,
@@ -207,6 +219,7 @@ def create_session(req: CreateSessionRequest) -> dict:
         "updated_at": req.created_at,
         "turn_count": 0,
         "kb_scope": req.kb_scope,
+        "retrieval_mode": req.retrieval_mode,
     }
 
 
@@ -236,8 +249,9 @@ def add_turn(session_id: str, req: AddTurnRequest) -> dict:
     if not metadata_db.get_session(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    sources_trimmed = _trim_sources(req.sources)
+    sources_trimmed = _trim_sources(req.sources, long_content=req.mode in ("basic", "deep"))
     trace_trimmed = _trim_trace(req.trace)
+    mode = req.mode or "ai"
 
     # 让 metadata_db 自己算 order_idx（并发安全，避免 race condition）
     ok = metadata_db.add_turn(
@@ -252,6 +266,7 @@ def add_turn(session_id: str, req: AddTurnRequest) -> dict:
         liked=req.liked,
         error=req.error,
         created_at=req.created_at,
+        mode=mode,
     )
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -262,7 +277,7 @@ def add_turn(session_id: str, req: AddTurnRequest) -> dict:
 
     logger.info(
         f"add turn sid={session_id} tid={req.id} question_len={len(req.question)} "
-        f"answer_len={len(req.answer) if req.answer else 0}"
+        f"answer_len={len(req.answer) if req.answer else 0} mode={mode}"
     )
 
     return {
@@ -276,6 +291,7 @@ def add_turn(session_id: str, req: AddTurnRequest) -> dict:
         "liked": req.liked,
         "error": req.error,
         "created_at": req.created_at,
+        "mode": mode,
     }
 
 

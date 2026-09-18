@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -366,6 +367,161 @@ def _expand_with_concepts(
     return merged, matched_out
 
 
+def _join_with_overlap(a: str, b: str, max_overlap: int = 250) -> str:
+    """拼接两段有重叠切片的文本：若 a 尾部与 b 头部重叠则去重（chunk_overlap 导致）。"""
+    if not a:
+        return b
+    if not b:
+        return a
+    max_l = min(max_overlap, len(a), len(b))
+    for length in range(max_l, 1, -1):
+        if a.endswith(b[:length]):
+            return a + b[length:]
+    return a + b
+
+
+def _neighbor_indexes(h: dict) -> tuple[int | None, int | None]:
+    """返回 hit 在同章节内的 (前一个, 后一个) chunk_index；越界或无元数据返回 None。"""
+    idx = h.get("chunk_index")
+    if not isinstance(idx, int) or idx < 0:
+        return None, None
+    total = h.get("chunk_total_in_section")
+    prev_i = idx - 1 if idx - 1 >= 0 else None
+    next_i = idx + 1 if (not isinstance(total, int) or idx + 1 < total) else None
+    return prev_i, next_i
+
+
+def _merge_neighbor_chunks(
+    hits: list[dict],
+    collection_name: str,
+    trace: TraceCollector,
+) -> list[dict]:
+    """deep 模式：把命中片段与同章节前后相邻 chunk 合并，展示完整段落。
+
+    chunk_index 是 section 内序号，合并不会跨章节；chunk_id 可由
+    source_path + content_hash + index 稳定推出，直接按 id 批量取。
+    缺少 content_hash/chunk_index 元数据的命中（如 feedback Q&A）自动跳过。
+    """
+    if not hits:
+        return hits
+
+    with trace.stage("context_merge", "上下文合并") as s:
+        center_ids = {h.get("id") for h in hits if h.get("id")}
+        want: dict[str, int] = {}  # neighbor_id -> chunk_index
+        for h in hits:
+            prev_i, next_i = _neighbor_indexes(h)
+            for ni in (prev_i, next_i):
+                if ni is None or not h.get("content_hash"):
+                    continue
+                nid = vector_store.make_chunk_id(
+                    source_path=str(h.get("source_path", "")),
+                    content_hash=str(h.get("content_hash")),
+                    chunk_index=ni,
+                )
+                if nid not in center_ids:
+                    want[nid] = ni
+
+        fetched = vector_store.get_chunks_by_ids(list(want.keys()), collection_name=collection_name)
+
+        merged: list[dict] = []
+        merged_count = 0
+        for h in hits:
+            prev_i, next_i = _neighbor_indexes(h)
+            text = h.get("text", "")
+            added = 0
+            if prev_i is not None and h.get("content_hash"):
+                nb = fetched.get(vector_store.make_chunk_id(
+                    source_path=str(h.get("source_path", "")),
+                    content_hash=str(h.get("content_hash")),
+                    chunk_index=prev_i,
+                ))
+                if nb and nb.get("text"):
+                    text = _join_with_overlap(nb["text"], text)
+                    added += 1
+            if next_i is not None and h.get("content_hash"):
+                nb = fetched.get(vector_store.make_chunk_id(
+                    source_path=str(h.get("source_path", "")),
+                    content_hash=str(h.get("content_hash")),
+                    chunk_index=next_i,
+                ))
+                if nb and nb.get("text"):
+                    text = _join_with_overlap(text, nb["text"])
+                    added += 1
+            if added:
+                nh = dict(h)
+                nh["text"] = text
+                nh["merged_chunks"] = added
+                merged.append(nh)
+                merged_count += 1
+            else:
+                merged.append(h)
+        s.set(count=merged_count, notes=f"{len(hits)} 命中中 {merged_count} 条合并了相邻片段")
+    return merged
+
+
+_HIGHLIGHT_STOP_TERMS = {
+    "怎么", "什么", "为什么", "如何", "哪个", "哪些", "请问", "一下", "还是", "这个",
+    "那个", "没有", "可以", "应该", "可能", "出现", "问题", "情况", "使用", "进行",
+    "现在", "时候", "能够", "导致", "the", "and", "for", "how",
+    "what", "why", "with", "查询", "查一下", "看下",
+}
+
+
+def _extract_highlight_terms(question: str, limit: int = 12) -> list[str]:
+    """从问题提取用于高亮的词（jieba 分词，无 jieba 时按非文字符切）。"""
+    try:
+        import jieba
+        tokens = jieba.lcut(question)
+    except Exception:
+        tokens = re.split(r"[^\w\u4e00-\u9fff]+", question)
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tokens:
+        t = t.strip()
+        if len(t) < 2 or t.lower() in _HIGHLIGHT_STOP_TERMS or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _normalize_score_pct(hits: list[dict]) -> None:
+    """把 score 归一化成相对百分比（最高命中 = 100），写回 hit['score_pct']。"""
+    if not hits:
+        return
+    scores = [float(h.get("score") or 0.0) for h in hits]
+    max_s = max(scores)
+    if max_s <= 0:
+        for i, h in enumerate(hits):
+            h["score_pct"] = max(1, 100 - i * 5)
+        return
+    for h, sc in zip(hits, scores):
+        h["score_pct"] = max(1, round(sc / max_s * 100))
+
+
+def _hits_to_search_results(hits: list[dict]) -> list[dict]:
+    """hits → 前端检索结果卡片的 payload（含全文，持久化也用这份）。"""
+    return [
+        {
+            "source_path": h.get("source_path", ""),
+            "source_name": h.get("source_name", ""),
+            "title": h.get("title", ""),
+            "section_label": h.get("section_label", ""),
+            "file_type": h.get("file_type", ""),
+            "content": h.get("text", "")[:6000],
+            "score": h.get("score", 0.0),
+            "score_pct": h.get("score_pct", 0),
+            "merged_chunks": h.get("merged_chunks", 0),
+        }
+        for h in hits
+    ]
+
+
+VALID_MODES = ("basic", "deep", "ai")
+
+
 def _run_pipeline(
     question: str,
     top_k: int | None,
@@ -381,7 +537,10 @@ def _run_pipeline(
 
     参数：
         kb_scope: 知识库 ID（默认 'default'）
-        strategy: 检索策略 'basic' / 'summary'
+        strategy: 检索策略 'basic' / 'deep' / 'agentic'
+            - basic: 仅混合检索（不重排，速度优先）
+            - deep: 混合检索 + 重排 + 概念扩展召回 + 相邻片段合并（无 LLM，结果即片段列表）
+            - agentic: 概念扩展 + 文档摘要/全局摘要注入（AI 模式）
 
     返回：
         (messages, hits, embed_provider)
@@ -394,8 +553,15 @@ def _run_pipeline(
     threshold = float(qa_cfg.get("similarity_threshold", 0.0) or 0.0)
     rerank_cfg = qa_cfg.get("rerank", {}) or {}
     rerank_enabled = bool(rerank_cfg.get("enabled", True))
+    # basic 档定位"速度最快"：跳过 cross-encoder 重排（CPU 上 20 对候选约 30s），
+    # 直接用 RRF 融合顺序；deep/agentic 保留重排换精度
+    rerank_skip_reason: str | None = None
+    if strategy == "basic" and rerank_enabled:
+        rerank_enabled = False
+        rerank_skip_reason = "basic 档跳过重排"
     retrieve_multiplier = int(rerank_cfg.get("retrieve_multiplier", 4) or 4)
     rerank_model = rerank_cfg.get("model_name", reranker.DEFAULT_MODEL)
+    rerank_backend = str(rerank_cfg.get("backend", "auto"))
     hybrid_enabled = bool(qa_cfg.get("hybrid_search", True))
     k_retrieve = k_final * retrieve_multiplier if rerank_enabled else k_final
 
@@ -496,9 +662,9 @@ def _run_pipeline(
             hits = vec_hits
             s.set(count=len(hits), status="skipped", notes="无 BM25 候选，直接采用向量结果")
 
-    # 2.7.5 agentic 概念扩展（在 rerank 前扩大候选池）
+    # 2.7.5 概念扩展（agentic/deep：在 rerank 前扩大候选池）
     agentic_matched_concepts: list[dict] = []
-    if strategy == "agentic":
+    if strategy in ("agentic", "deep"):
         with trace.stage("concept_expansion", "概念扩展") as s:
             try:
                 hits, agentic_matched_concepts = _expand_with_concepts(
@@ -534,7 +700,7 @@ def _run_pipeline(
     # 2.8 rerank
     with trace.stage("rerank", "重排序") as s:
         if not rerank_enabled:
-            s.set(count=len(hits), status="skipped", notes="rerank.enabled=off")
+            s.set(count=len(hits), status="skipped", notes=rerank_skip_reason or "rerank.enabled=off")
             if len(hits) > k_final:
                 hits = hits[:k_final]
         elif not hits or len(hits) <= 1:
@@ -542,7 +708,7 @@ def _run_pipeline(
         else:
             try:
                 pre_count = len(hits)
-                hits = reranker.rerank(question, hits, top_k=k_final, model_name=rerank_model)
+                hits = reranker.rerank(question, hits, top_k=k_final, model_name=rerank_model, backend=rerank_backend)
                 s.set(
                     count=len(hits),
                     notes=f"{pre_count} → {len(hits)}（top {k_final}）",
@@ -565,6 +731,10 @@ def _run_pipeline(
 
     if not hits:
         return None, [], embed_provider
+
+    # 2.9 deep 模式：命中片段与同章节相邻 chunk 合并（无 LLM，直接展示完整段落）
+    if strategy == "deep":
+        hits = _merge_neighbor_chunks(hits, collection_name, trace)
 
     # 3. context_selection
     with trace.stage("context_selection", "上下文组装") as s:
@@ -659,12 +829,8 @@ def ask(
     trace = TraceCollector()
     client = llm_client.get_client()
 
-    # 读 KB 当前检索策略
-    from src.db import metadata_db
-    strategy = metadata_db.get_kb_retrieval_strategy(kb_scope)
-
     messages, hits, embed_provider = _run_pipeline(
-        question, top_k, history, trace, system_override, kb_scope, strategy=strategy,
+        question, top_k, history, trace, system_override, kb_scope, strategy="agentic",
     )
 
     if not hits:
@@ -718,8 +884,10 @@ async def ask_stream(
     history: list[dict] | None = None,
     kb_scope: str = "default",
     *,
+    top_k: int | None = None,
     session_id: str | None = None,
     turn_id: str | None = None,
+    mode: str = "ai",
 ) -> AsyncGenerator[dict, None]:
     """流式问答。逐事件 yield。
 
@@ -727,12 +895,18 @@ async def ask_stream(
         {"type": "warmup", "data": {"step": "embedding", "msg": "..."}}
         {"type": "stage", "data": <stage_dict>}
         {"type": "sources", "data": [<source_dict>, ...]}
+        {"type": "results", "data": {"mode", "hits", ...}}   # basic/deep：检索结果片段
         {"type": "token", "data": {"text": "..."}}
-        {"type": "done", "data": {"answer", "trace", "sources", "used_provider", "used_chunks"}}
+        {"type": "done", "data": {"answer", "trace", "sources", "used_provider", "used_chunks", "mode"}}
         {"type": "error", "data": {"message": "..."}}
 
     参数：
         kb_scope: 知识库 ID（默认 'default'）
+        top_k: 本次检索的最终 chunk 数（None → 走 config qa.top_k）
+        mode: 检索模式 'basic' / 'deep' / 'ai'（非法值回落 'ai'）
+            - basic: 检索后直接返回片段列表，不调 LLM
+            - deep: basic + 概念扩展 + 相邻片段合并，不调 LLM
+            - ai: LLM 流式作答（agentic 全量上下文）
     """
     qa_cfg = settings.config.get("qa", {})
     trace = TraceCollector()
@@ -770,13 +944,14 @@ async def ask_stream(
 
     trace.on_stage_complete(_cancel_check)
 
-    # 读 KB 当前检索策略
-    from src.db import metadata_db
-    strategy = metadata_db.get_kb_retrieval_strategy(kb_scope)
+    # 检索模式 → pipeline 策略（会话级设置，不再读 KB 配置）
+    if mode not in VALID_MODES:
+        mode = "ai"
+    strategy = "agentic" if mode == "ai" else mode
 
     # 启动 pipeline 线程
     pipeline_task = asyncio.create_task(
-        asyncio.to_thread(_run_pipeline, question, None, history, trace, None, kb_scope, strategy)
+        asyncio.to_thread(_run_pipeline, question, top_k, history, trace, None, kb_scope, strategy)
     )
 
     # 持续从 queue 拉 stage 事件，直到 pipeline 完成
@@ -815,6 +990,31 @@ async def ask_stream(
         yield {"type": "error", "data": {"message": str(e)}}
         return
 
+    # basic / deep：不调 LLM，直接返回片段列表
+    if mode in ("basic", "deep"):
+        _normalize_score_pct(hits)
+        results = _hits_to_search_results(hits)
+        yield {
+            "type": "results",
+            "data": {
+                "mode": mode,
+                "highlight_terms": _extract_highlight_terms(question),
+                "hits": results,
+            },
+        }
+        yield {
+            "type": "done",
+            "data": {
+                "answer": "",
+                "trace": trace.to_list(),
+                "sources": results,
+                "used_provider": embed_provider,
+                "used_chunks": len(hits),
+                "mode": mode,
+            },
+        }
+        return
+
     if not hits:
         yield {
             "type": "done",
@@ -824,6 +1024,7 @@ async def ask_stream(
                 "sources": [],
                 "used_provider": embed_provider,
                 "used_chunks": 0,
+                "mode": "ai",
             },
         }
         return
@@ -894,6 +1095,7 @@ async def ask_stream(
             "sources": sources,
             "used_provider": used_provider,
             "used_chunks": len(hits),
+            "mode": "ai",
         },
     }
 

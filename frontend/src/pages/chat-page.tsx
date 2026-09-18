@@ -21,16 +21,20 @@ import { StatsCards } from '@/components/stats-cards'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ThinkingPanel } from '@/components/thinking-panel'
 import { TopKSelect } from '@/components/top-k-select'
+import { RetrievalModeSelect } from '@/components/retrieval-mode-select'
+import { SearchResultsList } from '@/components/search-results-list'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { useLocalStorage } from '@/hooks/use-local-storage'
 import { type ChatTurn } from '@/hooks/use-chat-sessions'
-import { api, type ChatMessage } from '@/lib/api'
+import { api, type ChatMessage, type RetrievalMode, type SearchHit } from '@/lib/api'
 
 export function ChatPage() {
   const ctx = useChatSessionsCtx()
   const session = ctx.activeSession
   const [input, setInput] = useState('')
-  const [topK, setTopK] = useState(5)
+  const [topK, setTopK] = useState(10)
+  // 空状态（无会话）下选的检索模式，首问建会话时带过去
+  const [newSessionMode, setNewSessionMode] = useState<RetrievalMode>('ai')
   const [showStats, setShowStats] = useLocalStorage('amd-ui-show-stats', true)
   const [showKbSwitch, setShowKbSwitch] = useState(false)
   const [searchParams] = useSearchParams()
@@ -126,11 +130,13 @@ export function ChatPage() {
     question: string,
     sessionId: string,
     history: ChatMessage[] | undefined,
+    mode: RetrievalMode,
   ) {
     const turnId = crypto.randomUUID()
     const turn: ChatTurn = {
       id: turnId,
       question,
+      mode,
       thinking: {
         stages: [],
         partialAnswer: '',
@@ -169,6 +175,15 @@ export function ChatPage() {
               thinking: t.thinking ? { ...t.thinking, sources } : t.thinking,
             }))
           },
+          onResults: (data) => {
+            // 检索模式：把命中片段作为 sources 展示（done 事件会再带一次完整数据）
+            ctx.updateTurn(sessionId, turnId, (t) => ({
+              ...t,
+              mode: data.mode,
+              sources: data.hits,
+              thinking: t.thinking ? { ...t.thinking, sources: data.hits } : t.thinking,
+            }))
+          },
           onToken: (token) => {
             ctx.updateTurn(sessionId, turnId, (t) => ({
               ...t,
@@ -199,12 +214,12 @@ export function ChatPage() {
                 : t.thinking,
               usedProvider: data.used_provider,
             }))
-            // 持久化（override 防止异步问题）
+            // 持久化（override 防止异步问题；检索模式 answer 为空但 sources 有命中）
             ctx.persistTurn(sessionId, turnId, {
               answer: data.answer,
               sources: data.sources,
               trace: data.trace,
-              usedProvider: data.used_provider
+              usedProvider: data.used_provider,
             })
             // 自动总结会话标题（异步，不阻塞主流程）
             // 不能依赖闭包里的 session（stale），要 fetch 最新状态
@@ -262,6 +277,8 @@ export function ChatPage() {
         session?.kb_scope ?? selectedKbForNewSession ?? undefined,
         sessionId,
         turnId,
+        topK,
+        mode,
       )
     } finally {
       setStreamingMap((prev) => {
@@ -291,8 +308,9 @@ export function ChatPage() {
 
     let sessionId = ctx.activeId
     let history: ChatMessage[] = []
+    const mode: RetrievalMode = session?.retrieval_mode ?? newSessionMode
     if (!sessionId) {
-      sessionId = await ctx.createSession(selectedKbForNewSession || undefined)
+      sessionId = await ctx.createSession(selectedKbForNewSession || undefined, mode)
     } else if (session) {
       const recentTurns = session.turns.slice(-6)
       for (const t of recentTurns) {
@@ -304,7 +322,7 @@ export function ChatPage() {
     }
 
     setInput('')
-    void handleAsk(q, sessionId, history.length > 0 ? history : undefined)
+    void handleAsk(q, sessionId, history.length > 0 ? history : undefined, mode)
   }
 
   // 标题展示：没活动会话时显示"新对话"
@@ -392,6 +410,10 @@ export function ChatPage() {
               />
               <div className="mt-3 flex items-center justify-between border-t pt-3">
                 <div className="flex items-center gap-1.5">
+                  <RetrievalModeSelect
+                    value={newSessionMode}
+                    onChange={(v) => setNewSessionMode(v)}
+                  />
                   <TopKSelect
                     value={topK}
                     onChange={(v) => setTopK(v)}
@@ -556,10 +578,18 @@ export function ChatPage() {
                 className="min-h-[28px] w-full resize-none bg-transparent text-[14px] leading-tight outline-none placeholder:text-muted-foreground"
               />
               <div className="mt-3 flex items-center justify-between gap-2">
-                <TopKSelect
-                  value={topK}
-                  onChange={(v) => setTopK(v)}
-                />
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <RetrievalModeSelect
+                    value={session?.retrieval_mode ?? 'ai'}
+                    onChange={(v) => {
+                      if (session) void ctx.updateSessionMode(session.id, v)
+                    }}
+                  />
+                  <TopKSelect
+                    value={topK}
+                    onChange={(v) => setTopK(v)}
+                  />
+                </div>
                 <Button type="submit" size="sm" className="gap-1.5 text-[12px]" disabled={isStreaming(ctx.activeId) || !input.trim()}>
                   {isStreaming(ctx.activeId) ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -679,6 +709,7 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
   const [sourcesExpanded, setSourcesExpanded] = useState(false)
   const thinkingStatus = turn.thinking?.status
   const isStreaming = thinkingStatus === 'streaming'
+  const isSearchMode = turn.mode === 'basic' || turn.mode === 'deep'
 
   return (
     <Card className="p-5">
@@ -703,7 +734,13 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
               {turn.error}
             </div>
           ) : null}
-          {!isStreaming && !turn.error && (
+          {!isStreaming && !turn.error && isSearchMode ? (
+            <SearchResultsList
+              hits={(turn.sources ?? []) as SearchHit[]}
+              question={turn.question}
+            />
+          ) : null}
+          {!isStreaming && !turn.error && !isSearchMode && (
             <>
               <MarkdownContent content={turn.answer || ''} />
               <div className="mt-4">
@@ -727,36 +764,38 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
         </div>
       </div>
 
-      <div className="mt-3">
-        <button
-          type="button"
-          onClick={() => setSourcesExpanded(!sourcesExpanded)}
-          className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ChevronRight className={`h-3 w-3 transition-transform ${sourcesExpanded ? 'rotate-90' : ''}`} />
-          引用来源 {turn.sources?.length || 0} 条
-        </button>
+      {!isSearchMode && (
+        <div className="mt-3">
+          <button
+            type="button"
+            onClick={() => setSourcesExpanded(!sourcesExpanded)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ChevronRight className={`h-3 w-3 transition-transform ${sourcesExpanded ? 'rotate-90' : ''}`} />
+            引用来源 {turn.sources?.length || 0} 条
+          </button>
 
-        {sourcesExpanded && turn.sources && turn.sources.length > 0 ? (
-          <div className="mt-2 space-y-1">
-            {turn.sources.map((source: any, idx: number) => (
-              <div
-                key={idx}
-                className="rounded-md bg-muted/20 p-2 text-[11px] text-muted-foreground"
-              >
-                <div className="font-medium text-accent-foreground">
-                  [{idx + 1}] {source.title || '未知来源'}
-                </div>
-                {source.metadata ? (
-                  <div className="mt-0.5">
-                    文件：{source.metadata.file_name || '未知'}
+          {sourcesExpanded && turn.sources && turn.sources.length > 0 ? (
+            <div className="mt-2 space-y-1">
+              {turn.sources.map((source: any, idx: number) => (
+                <div
+                  key={idx}
+                  className="rounded-md bg-muted/20 p-2 text-[11px] text-muted-foreground"
+                >
+                  <div className="font-medium text-accent-foreground">
+                    [{idx + 1}] {source.title || '未知来源'}
                   </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : null}
-      </div>
+                  {source.metadata ? (
+                    <div className="mt-0.5">
+                      文件：{source.metadata.file_name || '未知'}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
     </Card>
   )
 }

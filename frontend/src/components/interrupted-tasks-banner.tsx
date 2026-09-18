@@ -1,22 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { AlertCircle, Loader2, Play, Trash2 } from 'lucide-react'
+import { AlertCircle, Eye, Loader2, Play, Trash2 } from 'lucide-react'
 
 import { api, type UploadTask } from '@/lib/api'
 import { Button } from '@/components/ui/button'
+import { useUploadUiStore } from '@/stores/upload-ui'
 
 /**
- * 检测未完成的批量上传任务（包括 paused / running），顶部 banner 提示用户。
+ * 未完成批量上传任务 banner：
  *
- * - paused（进程崩溃留下的）：显示"继续 / 放弃"
- * - running（其他 tab 正在跑）：只显示状态，不操作
+ * - paused（进程重启/上传中断留下的）：显示"继续 / 放弃"
+ * - running：真实进度 + 「查看」打开详情弹窗
+ * - uploading：分批上传进行中（悬浮条也会显示）
  */
 export function InterruptedTasksBanner() {
   const qc = useQueryClient()
+  const openView = useUploadUiStore((s) => s.openView)
   const { data, isLoading } = useQuery({
     queryKey: ['upload-tasks', 'active'],
     queryFn: () => api.knowledge.uploadTasksActive(),
-    staleTime: 30_000,
+    refetchInterval: 5000,
   })
 
   const resumeMutation = useMutation({
@@ -47,6 +50,7 @@ export function InterruptedTasksBanner() {
           task={task}
           onResume={() => resumeMutation.mutate(task.id)}
           onDelete={() => deleteMutation.mutate(task.id)}
+          onView={() => openView(task.id, task.kb_id)}
           resuming={resumeMutation.isPending}
           deleting={deleteMutation.isPending}
         />
@@ -59,34 +63,60 @@ type TaskRowProps = {
   task: UploadTask
   onResume: () => void
   onDelete: () => void
+  onView: () => void
   resuming: boolean
   deleting: boolean
 }
 
-function TaskRow({ task, onResume, onDelete, resuming, deleting }: TaskRowProps) {
+function TaskRow({ task, onResume, onDelete, onView, resuming, deleting }: TaskRowProps) {
   const finished = task.done + task.skipped + task.failed
   const isPaused = task.status === 'paused'
   const isRunning = task.status === 'running'
+  const isUploading = task.status === 'uploading'
 
   return (
     <div className="flex items-center gap-3 rounded-md border border-warning/40 bg-warning/5 px-3 py-2 text-[12px]">
       <AlertCircle className="h-4 w-4 shrink-0 text-warning" />
       <div className="flex-1">
         {isPaused ? (
-          <span>
-            上次批量导入未完成：{finished}/{task.total}
-            <span className="ml-1 text-muted-foreground">
-              （进程重启后自动暂停）
+          task.current_stage === 'upload_interrupted' ? (
+            <span>
+              上次上传中断：已接收 {task.total} 个文件
+              <span className="ml-1 text-muted-foreground">
+                （继续 = 处理已接收部分，放弃 = 删除任务）
+              </span>
             </span>
-          </span>
+          ) : (
+            <span>
+              上次批量导入未完成：{finished}/{task.total}
+              <span className="ml-1 text-muted-foreground">
+                （进程重启后自动暂停）
+              </span>
+            </span>
+          )
         ) : isRunning ? (
           <span>
             <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
-            后台正在处理：{finished}/{task.total}
-            <span className="ml-1 text-muted-foreground">（其他标签页或会话触发）</span>
+            后台导入中：{finished}/{task.total}
+          </span>
+        ) : isUploading ? (
+          <span>
+            <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
+            分批上传中：已接收 {task.total} 个文件
           </span>
         ) : null}
       </div>
+      {isRunning || isUploading ? (
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1 text-[11px]"
+          onClick={onView}
+        >
+          <Eye className="h-3 w-3" />
+          查看
+        </Button>
+      ) : null}
       {isPaused ? (
         <>
           <Button
