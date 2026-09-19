@@ -25,8 +25,17 @@ import { RetrievalModeSelect } from '@/components/retrieval-mode-select'
 import { SearchResultsList } from '@/components/search-results-list'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { useLocalStorage } from '@/hooks/use-local-storage'
-import { type ChatTurn } from '@/hooks/use-chat-sessions'
+import { type ChatTurn, type ThinkingState } from '@/hooks/use-chat-sessions'
 import { api, type ChatMessage, type RetrievalMode, type SearchHit } from '@/lib/api'
+import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
+
+// thinking 重建守卫：流式期间若 turnsState / detail cache 被 refetch 重置导致 thinking 丢失，
+// 从回调现场重建，避免后续 token 被 `t.thinking ?` 守卫静默丢弃
+function patchThinking(t: ChatTurn, patch: (th: ThinkingState) => ThinkingState): ChatTurn {
+  const base: ThinkingState =
+    t.thinking ?? { stages: [], partialAnswer: '', status: 'streaming', startedAt: Date.now() }
+  return { ...t, thinking: patch(base) }
+}
 
 export function ChatPage() {
   const ctx = useChatSessionsCtx()
@@ -66,9 +75,8 @@ export function ChatPage() {
     activeProvider?.chat_model || providersData?.current_provider || '未配置'
   // 空状态下选择的 KB（第一次提问时用）
   const [selectedKbForNewSession, setSelectedKbForNewSession] = useState<string | null>(null)
-  // 并发流式支持：sessionId -> turnId 映射
-  const [streamingMap, setStreamingMap] = useState<Record<string, string>>({})
-  const abortRefs = useRef<Map<string, AbortController>>(new Map())
+  // 并发流式支持：sessionId -> turnId 映射（zustand 跨组件共享；切会话/离开聊天页不中断）
+  const streamingMap = useAnswerStreams((s) => s.streaming)
   const isStreaming = (sid: string | null | undefined): boolean =>
     !!sid && !!streamingMap[sid]
 
@@ -104,28 +112,6 @@ export function ChatPage() {
     }
   }, [kbListQuery.data, defaultKbQuery.data, selectedKbForNewSession])
 
-  // 注册"切换会话前"回调：abort 当前所有进行中的 SSE（除了即将切换到的目标）
-  // 流式中切会话：旧 SSE 应停止推送 token 到 cache，避免资源泄漏 + 数据错乱
-  useEffect(() => {
-    ctx.registerBeforeSelect((newId) => {
-      for (const [sid, ac] of abortRefs.current.entries()) {
-        if (sid !== newId) {
-          try {
-            ac.abort()
-          } catch (e) {
-            console.warn('abort on select failed', e)
-          }
-          abortRefs.current.delete(sid)
-          setStreamingMap((prev) => {
-            const next = { ...prev }
-            delete next[sid]
-            return next
-          })
-        }
-      }
-    })
-  }, [ctx])
-
   async function handleAsk(
     question: string,
     sessionId: string,
@@ -145,10 +131,11 @@ export function ChatPage() {
       },
     }
     ctx.appendTurn(sessionId, turn)
-    setStreamingMap((prev) => ({ ...prev, [sessionId]: turnId }))
 
     const ac = new AbortController()
-    abortRefs.current.set(sessionId, ac)
+    useAnswerStreams.getState().start(sessionId, turnId, ac)
+    // 本地累积已生成文本：流式中切走再切回（或 cache 被 refetch 重置）时的兜底真值
+    let accumulated = ''
 
     try {
       await api.qa.askStream(
@@ -156,62 +143,46 @@ export function ChatPage() {
         history,
         {
           onWarmup: (d) => {
-            ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...t,
-              thinking: t.thinking ? { ...t.thinking, warmup: d.msg } : t.thinking,
-            }))
+            ctx.updateTurn(sessionId, turnId, (t) =>
+              patchThinking(t, (th) => ({ ...th, warmup: d.msg })),
+            )
           },
           onStage: (stage) => {
-            ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...t,
-              thinking: t.thinking
-                ? { ...t.thinking, stages: [...t.thinking.stages, stage] }
-                : t.thinking,
-            }))
+            ctx.updateTurn(sessionId, turnId, (t) =>
+              patchThinking(t, (th) => ({ ...th, stages: [...th.stages, stage] })),
+            )
           },
           onSources: (sources) => {
-            ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...t,
-              thinking: t.thinking ? { ...t.thinking, sources } : t.thinking,
-            }))
+            ctx.updateTurn(sessionId, turnId, (t) =>
+              patchThinking(t, (th) => ({ ...th, sources })),
+            )
           },
           onResults: (data) => {
             // 检索模式：把命中片段作为 sources 展示（done 事件会再带一次完整数据）
             ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...t,
+              ...patchThinking(t, (th) => ({ ...th, sources: data.hits })),
               mode: data.mode,
               sources: data.hits,
-              thinking: t.thinking ? { ...t.thinking, sources: data.hits } : t.thinking,
             }))
           },
           onToken: (token) => {
-            ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...t,
-              thinking: t.thinking
-                ? { ...t.thinking, partialAnswer: t.thinking.partialAnswer + token }
-                : t.thinking,
-            }))
+            accumulated += token
+            ctx.updateTurn(sessionId, turnId, (t) =>
+              patchThinking(t, (th) => ({ ...th, partialAnswer: accumulated })),
+            )
           },
           onDone: (data) => {
             // P1-13: abort 后即使后端发了 done 也不要 persistTurn（避免数据复活）
-            const ac = abortRefs.current.get(sessionId)
-            if (ac?.signal.aborted) {
-              setStreamingMap((prev) => {
-                const next = { ...prev }
-                delete next[sessionId]
-                return next
-              })
-              abortRefs.current.delete(sessionId)
-              return
-            }
+            if (ac.signal.aborted) return
             ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...t,
+              ...patchThinking(t, (th) => ({
+                ...th,
+                status: 'done',
+                elapsedMs: Date.now() - th.startedAt,
+              })),
               answer: data.answer || '',
               sources: data.sources || [],
               trace: data.trace || [],
-              thinking: t.thinking
-                ? { ...t.thinking, status: 'done', elapsedMs: Date.now() - t.thinking!.startedAt }
-                : t.thinking,
               usedProvider: data.used_provider,
             }))
             // 持久化（override 防止异步问题；检索模式 answer 为空但 sources 有命中）
@@ -238,9 +209,8 @@ export function ChatPage() {
           },
           onError: (error) => {
             ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...t,
+              ...patchThinking(t, (th) => ({ ...th, status: 'error' })),
               error: typeof error === 'string' ? error : (error as any).message || '未知错误',
-              thinking: t.thinking ? { ...t.thinking, status: 'error' } : t.thinking,
             }))
             // rebuild 进行中：toast 友好提示，让用户去看进度
             if ((error as any)?.rebuildInProgress) {
@@ -248,24 +218,21 @@ export function ChatPage() {
             }
           },
           onCancelled: () => {
-            // 用户主动 abort：保留已生成内容，turn 状态置 done（避免 spinner 残留）
-            ctx.updateTurn(sessionId, turnId, (t) => {
-              const partialAnswer = t.thinking?.partialAnswer ?? ''
-              return {
-                ...t,
-                // 已有部分答案：保留并标记完成（不再 spinner）；无答案：标记已取消
-                answer: partialAnswer || t.answer,
-                error: partialAnswer ? undefined : '已取消',
-                thinking: t.thinking
-                  ? { ...t.thinking, status: partialAnswer ? 'done' : 'cancelled' }
-                  : t.thinking,
-              }
-            })
-            // 如果有部分答案，持久化（标记 done 让用户能复用）
-            const currentTurn = ctx.activeSession?.turns.find((t) => t.id === turnId)
-            if (currentTurn?.thinking?.partialAnswer) {
+            // 主动 abort（停止按钮/切 KB/删除会话）：保留已生成内容并落库；
+            // 用本地累积值而非 activeSession（中断时会话可能已切走，activeSession 找不到该 turn）
+            ctx.updateTurn(sessionId, turnId, (t) => ({
+              ...patchThinking(t, (th) => ({
+                ...th,
+                partialAnswer: accumulated,
+                status: accumulated ? 'done' : 'cancelled',
+              })),
+              // 已有部分答案：保留并标记完成；无答案：标记已取消
+              answer: accumulated || t.answer,
+              error: accumulated ? undefined : '已取消',
+            }))
+            if (accumulated) {
               ctx.persistTurn(sessionId, turnId, {
-                answer: currentTurn.thinking.partialAnswer,
+                answer: accumulated,
                 sources: [],
                 trace: [],
                 usedProvider: undefined,
@@ -281,18 +248,14 @@ export function ChatPage() {
         mode,
       )
     } finally {
-      setStreamingMap((prev) => {
-        const next = { ...prev }
-        delete next[sessionId]
-        return next
-      })
+      useAnswerStreams.getState().end(sessionId)
     }
   }
 
   function handleStop(sessionId?: string) {
     const sid = sessionId ?? ctx.activeId
     if (!sid) return
-    abortRefs.current.get(sid)?.abort()
+    abortAnswerStream(sid)
   }
 
   async function handleSubmit(e?: React.FormEvent) {
@@ -310,7 +273,13 @@ export function ChatPage() {
     let history: ChatMessage[] = []
     const mode: RetrievalMode = session?.retrieval_mode ?? newSessionMode
     if (!sessionId) {
-      sessionId = await ctx.createSession(selectedKbForNewSession || undefined, mode)
+      try {
+        sessionId = await ctx.createSession(selectedKbForNewSession || undefined, mode)
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        toast.error(`创建会话失败，问题尚未发送：${message}`)
+        return
+      }
     } else if (session) {
       const recentTurns = session.turns.slice(-6)
       for (const t of recentTurns) {
@@ -322,7 +291,9 @@ export function ChatPage() {
     }
 
     setInput('')
-    void handleAsk(q, sessionId, history.length > 0 ? history : undefined, mode)
+    void handleAsk(q, sessionId, history.length > 0 ? history : undefined, mode).catch((error: unknown) => {
+      toast.error(`发送失败：${error instanceof Error ? error.message : String(error)}`)
+    })
   }
 
   // 标题展示：没活动会话时显示"新对话"

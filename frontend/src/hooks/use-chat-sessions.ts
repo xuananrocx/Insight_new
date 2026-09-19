@@ -221,18 +221,8 @@ export function useChatSessions() {
     return id
   }, [createMutation, qc, kbListQuery.data])
 
-  // 切换会话时 abort 旧 SSE（流式中切会话，旧流应停止推送 token）
-  // 由 chat-page 通过 onBeforeSelect 注册回调
-  const beforeSelectRef = useRef<((newId: string) => void) | null>(null)
-  const registerBeforeSelect = useCallback((fn: (newId: string) => void) => {
-    beforeSelectRef.current = fn
-  }, [])
-  const selectSessionWithAbort = useCallback((id: string) => {
-    try {
-      beforeSelectRef.current?.(id)
-    } catch (e) {
-      console.warn('beforeSelect failed', e)
-    }
+  // 切换会话不中断后台生成中的流（token 继续写入该会话的 query cache，切回即见）
+  const selectSession = useCallback((id: string) => {
     setActiveId(id)
   }, [])
 
@@ -485,8 +475,7 @@ export function useChatSessions() {
     activeSession,
     activeId,
     createSession,
-    selectSession: selectSessionWithAbort,
-    registerBeforeSelect,
+    selectSession,
     clearActive,
     deleteSession,
     renameSession,

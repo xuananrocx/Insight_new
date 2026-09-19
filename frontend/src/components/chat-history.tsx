@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
+import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts
@@ -56,6 +57,7 @@ function saveBlob(blob: Blob, filename: string) {
 export function ChatHistory() {
   const ctx = useChatSessionsCtx()
   const navigate = useNavigate()
+  const streaming = useAnswerStreams((s) => s.streaming)
   const [query, setQuery] = useState('')
   const [exportingAll, setExportingAll] = useState(false)
   const [importing, setImporting] = useState(false)
@@ -192,11 +194,15 @@ export function ChatHistory() {
                     time={relativeTime(s.updated_at)}
                     turnsCount={turnsCount}
                     isActive={isActive}
+                    streaming={!!streaming[s.id]}
                     onSelect={() => {
                       ctx.selectSession(s.id)
                       navigate('/')
                     }}
-                    onDelete={() => ctx.deleteSession(s.id)}
+                    onDelete={() => {
+                      abortAnswerStream(s.id)  // 删除正在生成的会话时先停流
+                      ctx.deleteSession(s.id)
+                    }}
                     onExport={async () => {
                       try {
                         const { blob, filename } = await api.sessions.exportOne(s.id)
@@ -222,6 +228,7 @@ function HistoryItem({
   time,
   turnsCount,
   isActive,
+  streaming,
   onSelect,
   onDelete,
   onExport,
@@ -230,6 +237,7 @@ function HistoryItem({
   time: string
   turnsCount: number
   isActive: boolean
+  streaming: boolean
   onSelect: () => void
   onDelete: () => void
   onExport: () => Promise<void>
@@ -253,7 +261,15 @@ function HistoryItem({
           {turnsCount > 0 ? `${turnsCount} 条 · ${time}` : time}
         </div>
       </div>
-      {confirming ? (
+      {streaming ? (
+        <span className="flex shrink-0 items-center gap-1 text-[10px] text-blue-500" title="后台生成中，切回可见">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
+          </span>
+          生成中
+        </span>
+      ) : confirming ? (
         <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
           <button
             onClick={() => {
