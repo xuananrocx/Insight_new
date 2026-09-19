@@ -271,6 +271,29 @@ def count(collection_name: str = COLLECTION_NAME) -> int:
         return 0
 
 
+def get_context_chunks(hit: dict, collection_name: str, radius: int = 2) -> list[dict]:
+    """Read section-local neighbors by metadata, including preexisting indexes.
+
+    Chunk IDs use file-wide indexes; chunk_index is section-local. Never derive
+    neighbor IDs from it. Missing section/hash metadata is not safe to expand.
+    """
+    index, section = hit.get("chunk_index"), hit.get("section_index")
+    source, content_hash = hit.get("source_path"), hit.get("content_hash")
+    if not isinstance(index, int) or not isinstance(section, int) or not source or not content_hash:
+        return []
+    where = {"$and": [
+        {"source_path": source}, {"content_hash": content_hash},
+        {"section_index": section}, {"chunk_index": {"$gte": max(0, index - radius)}},
+        {"chunk_index": {"$lte": index + radius}},
+    ]}
+    collection = _resolve_collection(collection_name)
+    res = collection.get(where=where, limit=2 * radius + 1, include=["documents", "metadatas"])
+    return sorted([
+        {"id": cid, "text": text or "", **(meta or {})}
+        for cid, text, meta in zip(res["ids"], res["documents"], res["metadatas"])
+    ], key=lambda chunk: chunk.get("chunk_index", 0))
+
+
 def get_collection_dim(collection_name: str = COLLECTION_NAME) -> int:
     """读取 collection 的 embedding 维度。
 

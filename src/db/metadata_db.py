@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator
 
 from src.core.config import settings
+from src.core.retrieval_modes import VALID_MODES
 
 
 # SQLite 连接：每次操作开新连接（避免 threading.local 在 WAL 模式下跨线程读到 stale snapshot）
@@ -1611,7 +1612,7 @@ def create_session(
     kb_scope: str | None = None,
     retrieval_mode: str = "ai",
 ) -> None:
-    if retrieval_mode not in ("basic", "deep", "ai"):
+    if retrieval_mode not in VALID_MODES:
         retrieval_mode = "ai"
     with get_cursor() as cur:
         cur.execute(
@@ -1705,7 +1706,7 @@ def update_session(
         fields.append("kb_scope=?")
         params.append(kb_scope)
     if not isinstance(retrieval_mode, _Unset):
-        if retrieval_mode not in ("basic", "deep", "ai"):
+        if retrieval_mode not in VALID_MODES:
             raise ValueError(f"非法 retrieval_mode: {retrieval_mode}")
         fields.append("retrieval_mode=?")
         params.append(retrieval_mode)
@@ -1753,7 +1754,7 @@ def add_turn(
         - 显式传值：保留调用方语义（导入场景需要连续 idx）
     mode: 消息形态 'basic' / 'deep'（检索结果列表）或 'ai'（LLM 回答）
     """
-    if mode not in ("basic", "deep", "ai"):
+    if mode not in VALID_MODES:
         mode = "ai"
     with get_cursor() as cur:
         cur.execute("SELECT id FROM sessions WHERE id=?", (session_id,))

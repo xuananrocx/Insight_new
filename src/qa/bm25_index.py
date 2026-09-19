@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import pickle
+import re
 from pathlib import Path
 from typing import Any
 
@@ -123,11 +124,14 @@ def _rebuild_bm25() -> None:
     # 阶段 1：持锁做 corpus 快照（list 浅拷贝）
     with _state_lock:
         corpus_snapshot = list(s["corpus"])
+        chunks_snapshot = list(s["chunks"])
     # 阶段 2：锁外构造 BM25Okapi（耗时操作）
     new_bm25 = BM25Okapi(corpus_snapshot) if corpus_snapshot else None
     # 阶段 3：短暂持锁替换引用
     with _state_lock:
         s["bm25"] = new_bm25
+        # Keep the scored documents paired with their model for enhanced queries.
+        s["query_snapshot"] = (new_bm25, chunks_snapshot, corpus_snapshot)
 
 
 def _save() -> None:
@@ -269,3 +273,38 @@ def stats() -> dict[str, Any]:
         "persisted": index_file.exists(),
         "index_file": str(index_file),
     }
+
+
+def identifiers(text: str) -> list[str]:
+    """Preserve API names, error codes, configuration keys and version numbers."""
+    return list(dict.fromkeys(re.findall(r"[A-Za-z0-9_]+(?:[.:-][A-Za-z0-9_]+)*", text.lower())))[:20]
+
+
+def query_enhanced(query_text: str, top_k: int = 20, kb_id: str = "default") -> list[dict]:
+    """Lexical recall with exact identifiers, genuine zero/negative-score matches.
+
+    Uses stored text as well as existing tokens, so old indexes need no rebuild.
+    The legacy AI entry point continues to use query().
+    """
+    s = _state_load()
+    with _state_lock:
+        model, chunks, corpus = s.get("query_snapshot", (None, [], []))
+    if model is None or not chunks:
+        return []
+    tokens = set(_tokenize(query_text))
+    exact = [t for t in identifiers(query_text) if len(t) >= 2]
+    patterns = [re.compile(r"(?<![a-z0-9_])" + re.escape(t) + r"(?![a-z0-9_])", re.I) for t in exact]
+    scores = model.get_scores(list(tokens))
+    ranked = []
+    for chunk, words, score in zip(chunks, corpus, scores):
+        if (chunk.get("kb_id") or "default") != kb_id or chunk.get("chunk_type") == "summary":
+            continue
+        text = " ".join(str(chunk.get(k, "")) for k in ("text", "title", "source_name", "section_label"))
+        exact_count = sum(bool(p.search(text)) for p in patterns)
+        matched = len(tokens.intersection(words))
+        if not matched and not exact_count:
+            continue
+        hit = {**chunk, "bm25_score": float(score), "exact_matches": exact_count}
+        ranked.append((exact_count, matched, float(score), hit))
+    ranked.sort(key=lambda item: (item[0], item[2], item[1]), reverse=True)
+    return [item[3] for item in ranked[:top_k]]

@@ -19,13 +19,10 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 from src.core import llm_client, vector_store
-
-
-class PipelineCancelled(Exception):
-    """用户断开 SSE 后，pipeline 应在 stage 间检查并抛此异常退出。"""
+from src.core.retrieval_modes import VALID_MODES
 from src.core.config import settings
 from src.qa import bm25_index, reranker
-from src.qa.trace import TraceCollector, make_candidate
+from src.qa.trace import PipelineCancelled, TraceCollector, make_candidate
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +101,8 @@ class Answer:
     used_chunks: int = 0
     model_context_tokens: int = 0
     trace: list[dict] = field(default_factory=list)
+    mode: str = "ai"
+    sources: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -113,6 +112,8 @@ class Answer:
             "used_provider": self.used_provider,
             "used_chunks": self.used_chunks,
             "trace": self.trace,
+            "mode": self.mode,
+            "sources": self.sources,
         }
 
 
@@ -519,9 +520,6 @@ def _hits_to_search_results(hits: list[dict]) -> list[dict]:
     ]
 
 
-VALID_MODES = ("basic", "deep", "ai")
-
-
 def _run_pipeline(
     question: str,
     top_k: int | None,
@@ -548,6 +546,11 @@ def _run_pipeline(
         - hits: 最终命中的 chunks
         - embed_provider: embedding 使用的 provider 名
     """
+    if strategy in ("basic", "deep"):
+        from src.qa.retrieval import search
+        hits, provider = search(question, top_k, kb_scope, trace, deep=strategy == "deep")
+        return None, hits, provider
+
     qa_cfg = settings.config.get("qa", {})
     k_final = top_k or qa_cfg.get("top_k", 5)
     threshold = float(qa_cfg.get("similarity_threshold", 0.0) or 0.0)
@@ -818,6 +821,7 @@ def ask(
     kb_scope: str = "default",
     *,
     scene: str = "qa_chat",
+    mode: str = "ai",
 ) -> Answer:
     """同步问答。返回完整 Answer。
 
@@ -825,6 +829,26 @@ def ask(
         kb_scope: 知识库 ID（默认 'default'）
         scene: 调用场景标签（AI 日志用）
     """
+    if mode in VALID_MODES and mode != "ai":
+        async def collect():
+            async for event in ask_stream(question, history, kb_scope, top_k=top_k, mode=mode):
+                if event["type"] == "error":
+                    raise RuntimeError(event["data"]["message"])
+                if event["type"] == "done":
+                    return event["data"]
+            raise RuntimeError("检索未正常完成")
+        data = asyncio.run(collect())
+        sources = data.get("sources", [])
+        citations = [Citation(
+            source_path=s.get("source_path", ""), source_name=s.get("source_name", ""),
+            title=s.get("title", ""), section_label=s.get("section_label", ""),
+            file_type=s.get("file_type", ""), text_snippet=s.get("text_snippet", s.get("content", ""))[:300],
+            score=s.get("score", 0),
+        ) for s in sources]
+        return Answer(question=question, answer=data["answer"], citations=citations,
+                      used_provider=data["used_provider"], used_chunks=data["used_chunks"],
+                      trace=data["trace"], mode=mode, sources=sources)
+
     qa_cfg = settings.config.get("qa", {})
     trace = TraceCollector()
     client = llm_client.get_client()
@@ -903,11 +927,19 @@ async def ask_stream(
     参数：
         kb_scope: 知识库 ID（默认 'default'）
         top_k: 本次检索的最终 chunk 数（None → 走 config qa.top_k）
-        mode: 检索模式 'basic' / 'deep' / 'ai'（非法值回落 'ai'）
+        mode: 检索模式 'basic' / 'deep' / 'ai' / 'deep_ai'（非法值回落 'ai'）
             - basic: 检索后直接返回片段列表，不调 LLM
             - deep: basic + 概念扩展 + 相邻片段合并，不调 LLM
             - ai: LLM 流式作答（agentic 全量上下文）
+            - deep_ai: 问题规划、按需补查和证据核验后返回回答
     """
+    if mode == "deep_ai":
+        from src.qa.deep_ai import ask_stream as deep_ask_stream
+        async for event in deep_ask_stream(question, history, kb_scope, top_k=top_k,
+                                          session_id=session_id, turn_id=turn_id):
+            yield event
+        return
+
     qa_cfg = settings.config.get("qa", {})
     trace = TraceCollector()
     client = llm_client.get_client()
@@ -938,11 +970,11 @@ async def ask_stream(
     import threading
     cancel_event = threading.Event()
 
-    def _cancel_check(stage_data: dict) -> None:
+    def _cancel_check() -> None:
         if cancel_event.is_set():
             raise PipelineCancelled("用户已断开 SSE")
 
-    trace.on_stage_complete(_cancel_check)
+    trace.cancel_check = _cancel_check
 
     # 检索模式 → pipeline 策略（会话级设置，不再读 KB 配置）
     if mode not in VALID_MODES:

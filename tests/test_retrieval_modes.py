@@ -293,8 +293,8 @@ def test_basic_strategy_skips_rerank(monkeypatch):
     monkeypatch.setattr(settings, "_config", {"qa": {"top_k": 3, "similarity_threshold": 0.0}})
     monkeypatch.setattr(lc, "get_client", lambda: type("C", (), {"embed": staticmethod(lambda t: ([[0.1, 0.2, 0.3]], "fake-provider"))})())
     monkeypatch.setattr(mdb, "get_kb", lambda kb_id: {"id": kb_id, "collection_name": "kb_test"})
-    monkeypatch.setattr(vs, "query_collections", lambda *a, **k: [{"id": f"c{i}", "text": f"内容{i}", "score": 0.9 - i * 0.1} for i in range(10)])
-    monkeypatch.setattr(bi, "query", lambda *a, **k: [])
+    monkeypatch.setattr(vs, "query_by_embedding", lambda *a, **k: [{"id": f"c{i}", "text": f"内容{i}", "score": 0.9 - i * 0.1} for i in range(10)])
+    monkeypatch.setattr(bi, "query_enhanced", lambda *a, **k: [])
 
     def boom(*a, **k):
         raise AssertionError("basic 档不应调用 rerank")

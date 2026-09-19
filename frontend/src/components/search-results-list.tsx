@@ -96,15 +96,15 @@ export function SearchResultsList({ hits, question }: Props) {
                   {hit.source_name}
                 </span>
                 <span className="uppercase">{hit.file_type}</span>
-                {hit.merged_chunks && hit.merged_chunks > 1 ? (
+                {hit.merged_chunks && hit.merged_chunks > 0 ? (
                   <span className="inline-flex items-center gap-0.5">
                     <Layers className="h-3 w-3" />
-                    合并 {hit.merged_chunks} 段
+                    补全 {hit.merged_chunks} 段
                   </span>
                 ) : null}
               </div>
             </div>
-            <div className="flex shrink-0 items-center gap-1.5" title={`相关度 ${hit.score_pct}%`}>
+            <div className="flex shrink-0 items-center gap-1.5" title={`相对匹配度 ${hit.score_pct}%（与本次最高结果比较，不代表正确概率）`}>
               <div className="h-1 w-14 overflow-hidden rounded-full bg-muted">
                 <div className={`h-full ${scoreColor(hit.score_pct)}`} style={{ width: `${hit.score_pct}%` }} />
               </div>
@@ -114,6 +114,14 @@ export function SearchResultsList({ hits, question }: Props) {
           <div className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed text-foreground/90">
             <Highlighted text={bestWindow(hit.content, terms)} terms={terms} />
           </div>
+          {hit.content.length > 400 ? (
+            <details className="mt-2 text-[11px]">
+              <summary className="cursor-pointer text-primary">查看完整片段</summary>
+              <div className="mt-2 whitespace-pre-wrap break-words text-[12px] leading-relaxed">
+                <Highlighted text={hit.content} terms={terms} />
+              </div>
+            </details>
+          ) : null}
         </div>
       ))}
     </div>

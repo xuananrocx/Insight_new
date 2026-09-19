@@ -12,13 +12,14 @@ import re
 import time
 import zipfile
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Response
 from pydantic import BaseModel, Field
 
 from src.db import metadata_db
+from src.core.retrieval_modes import RetrievalMode, VALID_MODES
 
 logger = logging.getLogger(__name__)
 
@@ -120,13 +121,13 @@ class CreateSessionRequest(BaseModel):
     title: str = Field("新会话", max_length=80)
     created_at: int = Field(..., ge=0)
     kb_scope: str | None = None
-    retrieval_mode: Literal["basic", "deep", "ai"] = "ai"
+    retrieval_mode: RetrievalMode = "ai"
 
 
 class UpdateSessionRequest(BaseModel):
     title: str | None = Field(None, max_length=80)
     kb_scope: str | None = None
-    retrieval_mode: Literal["basic", "deep", "ai"] | None = None
+    retrieval_mode: RetrievalMode | None = None
 
 
 class TurnModel(BaseModel):
@@ -140,7 +141,7 @@ class TurnModel(BaseModel):
     liked: bool = False
     error: str | None = None
     created_at: int
-    mode: Literal["basic", "deep", "ai"] = "ai"
+    mode: RetrievalMode = "ai"
 
 
 class SessionSummary(BaseModel):
@@ -150,7 +151,7 @@ class SessionSummary(BaseModel):
     updated_at: int
     turn_count: int
     kb_scope: str | None = None
-    retrieval_mode: Literal["basic", "deep", "ai"] = "ai"
+    retrieval_mode: RetrievalMode = "ai"
 
 
 class SessionDetail(SessionSummary):
@@ -167,7 +168,7 @@ class AddTurnRequest(BaseModel):
     liked: bool = False
     error: str | None = None
     created_at: int = Field(..., ge=0)
-    mode: Literal["basic", "deep", "ai"] | None = None
+    mode: RetrievalMode | None = None
 
 
 class UpdateTurnRequest(BaseModel):
@@ -249,7 +250,7 @@ def add_turn(session_id: str, req: AddTurnRequest) -> dict:
     if not metadata_db.get_session(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    sources_trimmed = _trim_sources(req.sources, long_content=req.mode in ("basic", "deep"))
+    sources_trimmed = _trim_sources(req.sources, long_content=req.mode in ("basic", "deep", "deep_ai"))
     trace_trimmed = _trim_trace(req.trace)
     mode = req.mode or "ai"
 
@@ -302,8 +303,10 @@ def update_turn(session_id: str, turn_id: str, req: UpdateTurnRequest) -> dict:
 
     # sources 和 trace 需要序列化为 JSON 字符串
     if "sources" in update_fields:
+        turn = metadata_db.get_turn(session_id, turn_id)
+        long_content = bool(turn and turn.get("mode") in ("basic", "deep", "deep_ai"))
         update_fields["sources_json"] = json.dumps(
-            _trim_sources(update_fields.pop("sources")), ensure_ascii=False
+            _trim_sources(update_fields.pop("sources"), long_content=long_content), ensure_ascii=False
         )
     if "trace" in update_fields:
         update_fields["trace_json"] = json.dumps(
@@ -380,6 +383,7 @@ def _build_session_payload(session_id: str) -> dict | None:
             "created_at": s["created_at"],
             "updated_at": s["updated_at"],
             "kb_scope": s.get("kb_scope"),
+            "retrieval_mode": s.get("retrieval_mode", "ai"),
         },
         "turns": s.get("turns", []),
     }
@@ -494,6 +498,7 @@ def _import_one_session(payload: dict) -> dict:
             created_at=now_ms,
             updated_at=now_ms,
             kb_scope=sess.get("kb_scope"),
+            retrieval_mode=sess.get("retrieval_mode") if sess.get("retrieval_mode") in VALID_MODES else "ai",
         )
     except Exception as e:
         raise ValueError(f"创建会话失败: {e}")
@@ -518,6 +523,7 @@ def _import_one_session(payload: dict) -> dict:
                 liked=bool(t.get("liked", False)),
                 error=t.get("error"),
                 created_at=int(t.get("created_at") or now_ms),
+                mode=t.get("mode") if t.get("mode") in VALID_MODES else "ai",
             )
             imported_turn_count += 1
         except Exception as e:

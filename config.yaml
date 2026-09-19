@@ -180,6 +180,21 @@ ingest:
     segment_chars: 30000
 qa:
   top_k: 5
+  # 普通/深度检索支持按业务配置术语别名；旧 AI 增强继续使用原检索流程。
+  retrieval:
+    aliases: {}
+    rerank_candidates: 24
+    rerank_batch_size: 4
+    rerank_seconds: 20
+  # 独立的深度 AI 流程；已有用户配置缺少此节时使用同样的代码默认值。
+  deep_ai:
+    top_k: 8
+    context_chars: 20000
+    max_tokens: 4096
+    step_timeout_seconds: 20
+    generation_timeout_seconds: 60
+    verification_timeout_seconds: 45
+    total_timeout_seconds: 180
   similarity_threshold: 0.3
   hybrid_search: true
   rerank:

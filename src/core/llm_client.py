@@ -26,13 +26,10 @@ from src.core.llm_providers import (
     AnthropicProvider,
     BaseLLMProvider,
     OpenAIProvider,
+    LLMError,
 )
 
 logger = logging.getLogger(__name__)
-
-
-class LLMError(Exception):
-    """LLM 调用失败。"""
 
 
 class NoAvailableProviderError(LLMError):
@@ -539,7 +536,7 @@ class LLMClient:
         log_meta: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AsyncGenerator[tuple[str, str], None]:
-        """流式对话。逐 provider 尝试，第一个能 yield 的开始流式；中途失败切下一个。
+        """流式对话。首个 token 前可切换 provider；已输出内容后失败则中止，避免拼接两份答案。
 
         yield 模式：每个 item 是 (token, provider_name)；provider 名只在首个 token 时非空，
         后续 token 的 provider 字段为空字符串（前端可只看首个识别 provider）。
@@ -592,7 +589,11 @@ class LLMClient:
                 except LLMError as e:
                     last_err = e
                     used_provider = name
-                    logger.warning(f"provider {name} chat_stream 失败，尝试下一个: {e}")
+                    logger.warning(f"provider {name} chat_stream 失败: {e}")
+                    if collected_tokens:
+                        # Once tokens have been emitted, a new provider cannot restart
+                        # the same answer without mixing incompatible partial answers.
+                        raise
                     continue
             raise NoAvailableProviderError(f"所有 chat provider 都失败: {last_err}")
         except Exception as e:

@@ -5,7 +5,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, AsyncGenerator, Literal
+from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from src.core import llm_client
 from src.core.config import settings
 from src.qa.rag import ask, ask_stream
+from src.core.retrieval_modes import RetrievalMode, VALID_MODES
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ class AskRequest(BaseModel):
     turn_id: str | None = None
     # 检索模式：basic/deep 不调 LLM 直接返回片段；ai 走 LLM 流式作答。
     # 不传时读会话的 retrieval_mode，都没有则 ai。
-    mode: Literal["basic", "deep", "ai"] | None = None
+    mode: RetrievalMode | None = None
 
 
 class CitationModel(BaseModel):
@@ -50,6 +51,8 @@ class AskResponse(BaseModel):
     used_provider: str
     used_chunks: int
     trace: list[dict[str, Any]] = Field(default_factory=list)
+    mode: RetrievalMode = "ai"
+    sources: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @router.post("/ask", response_model=AskResponse)
@@ -67,6 +70,7 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
             top_k=req.top_k,
             history=req.history,
             kb_scope=req.kb_scope,
+            mode=_resolve_mode(req),
         )
     except llm_client.NoAvailableProviderError as e:
         raise HTTPException(
@@ -83,6 +87,8 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
         used_provider=result.used_provider,
         used_chunks=result.used_chunks,
         trace=result.trace,
+        mode=result.mode,
+        sources=result.sources,
     )
 
 
@@ -94,7 +100,7 @@ def _resolve_mode(req: AskRequest) -> str:
         from src.db import metadata_db
         try:
             s = metadata_db.get_session(req.session_id)
-            if s and s.get("retrieval_mode") in ("basic", "deep", "ai"):
+            if s and s.get("retrieval_mode") in VALID_MODES:
                 return s["retrieval_mode"]
         except Exception:
             pass

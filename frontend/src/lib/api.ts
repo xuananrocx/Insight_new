@@ -271,7 +271,7 @@ export type QaStreamDone = {
   mode?: RetrievalMode
 }
 
-export type RetrievalMode = 'basic' | 'deep' | 'ai'
+export type RetrievalMode = 'basic' | 'deep' | 'ai' | 'deep_ai'
 
 export type SearchHit = {
   source_path: string
