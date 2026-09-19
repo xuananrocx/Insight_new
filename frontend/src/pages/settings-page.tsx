@@ -513,6 +513,8 @@ export function SettingsPage() {
   const qc = useQueryClient()
   const [confirmDisable, setConfirmDisable] = useState(false)
   const [showLogs, setShowLogs] = useLocalStorage<boolean>('amd-ui-show-logs', false)
+  const [showThinking, setShowThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
+  const [showCitations, setShowCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
   const { theme } = useTheme()
   const { background, set: setBackground } = useBackground()
   const [glassOpacity, setGlassOpacity] = useGlassOpacity()
@@ -767,6 +769,36 @@ export function SettingsPage() {
       <DefaultKbCard />
 
       <SidebarSettingsCard />
+
+      <Card className="mb-4 p-5">
+        <div className="mb-3 text-[14px] font-medium">对话显示</div>
+        <div className="flex items-center justify-between gap-4 rounded-md border bg-muted/20 p-3">
+          <span>
+            <span className="block text-[13px] font-medium">显示思考过程</span>
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">默认折叠，可手动展开；回答完成后保留。关闭仅隐藏步骤，不影响记录保存。</span>
+          </span>
+          <button
+            type="button" role="switch" aria-label="显示思考过程" aria-checked={showThinking}
+            onClick={() => setShowThinking(!showThinking)}
+            className={cn('relative h-5 w-9 shrink-0 rounded-full transition-colors', showThinking ? 'bg-primary' : 'bg-muted')}
+          >
+            <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all', showThinking ? 'left-[18px]' : 'left-0.5')} />
+          </button>
+        </div>
+        <div className="mt-3 flex items-center justify-between gap-4 rounded-md border bg-muted/20 p-3">
+          <span>
+            <span className="block text-[13px] font-medium">显示引用</span>
+            <span className="mt-0.5 block text-[11px] text-muted-foreground">同时显示答案中的 [1][2] 等引用编号和引用来源，默认关闭。</span>
+          </span>
+          <button
+            type="button" role="switch" aria-label="显示引用" aria-checked={showCitations}
+            onClick={() => setShowCitations(!showCitations)}
+            className={cn('relative h-5 w-9 shrink-0 rounded-full transition-colors', showCitations ? 'bg-primary' : 'bg-muted')}
+          >
+            <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all', showCitations ? 'left-[18px]' : 'left-0.5')} />
+          </button>
+        </div>
+      </Card>
 
       <Card className="mb-4 p-5">
         <div className="mb-3 flex items-center gap-2">

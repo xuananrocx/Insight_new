@@ -2,12 +2,26 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useState } from 'react'
 import { Check, Copy } from 'lucide-react'
+import { remarkCitations } from '@/lib/remark-citations'
 
-export function MarkdownContent({ content }: { content: string }) {
+export function MarkdownContent({ content, citationCount = 0, citationPrefix = 'citation', onCitationClick, hideCitations = false }: {
+  content: string
+  citationCount?: number
+  citationPrefix?: string
+  onCitationClick?: (number: number) => void
+  hideCitations?: boolean
+}) {
   return (
     <div className="md-body text-[13px] leading-relaxed">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-        a: ({ node, ...props }) => <a target="_blank" rel="noreferrer" {...props} />,
+      <ReactMarkdown remarkPlugins={[remarkGfm, [remarkCitations, { count: onCitationClick ? citationCount : 0, prefix: citationPrefix, hidden: hideCitations }]]} components={{
+        a: ({ node, ...props }) => {
+          const prefix = `#${citationPrefix}-`
+          const number = props.href?.startsWith(prefix) ? Number(props.href.slice(prefix.length)) : 0
+          if (onCitationClick && Number.isInteger(number) && number > 0 && number <= citationCount) {
+            return <a {...props} aria-label={`查看引用 ${number}`} onClick={e => { e.preventDefault(); onCitationClick(number) }} />
+          }
+          return <a target="_blank" rel="noreferrer" {...props} />
+        },
         pre: ({ children }) => <>{children}</>,
         code: ({ className, children, ...props }: any) => {
           const text = Array.isArray(children) ? children.join('') : String(children ?? '')

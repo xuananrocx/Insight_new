@@ -31,18 +31,15 @@ export function StageRow({ stage }: { stage: QaTraceStage }) {
   const status = stage.status ?? 'ok'
 
   return (
-    <div className="mb-2 last:mb-0">
-      <div className="flex items-center gap-2 text-[11px]">
+    <div className="mb-2 min-w-0 [overflow-wrap:anywhere] last:mb-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
         <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_STYLE[status] ?? STATUS_STYLE.ok)} />
-        <span className="font-medium text-foreground/90">{stage.label}</span>
-        <span className="rounded bg-muted/60 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+        <span className="min-w-0 font-medium text-foreground/90">{stage.label}</span>
+        <span className="shrink-0 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
           {stage.count ?? 0} 候选
         </span>
         {stage.duration_ms ? (
-          <span className="text-[10px] tabular-nums text-muted-foreground/70">{formatMs(stage.duration_ms)}</span>
-        ) : null}
-        {stage.notes ? (
-          <span className="truncate text-[10px] text-muted-foreground/70">· {stage.notes}</span>
+          <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">{formatMs(stage.duration_ms)}</span>
         ) : null}
         {hasCandidates ? (
           <button
@@ -53,6 +50,12 @@ export function StageRow({ stage }: { stage: QaTraceStage }) {
           </button>
         ) : null}
       </div>
+
+      {stage.notes ? (
+        <div className="mt-1 whitespace-pre-wrap pl-3.5 text-[10px] leading-relaxed text-muted-foreground/70">
+          {stage.notes}
+        </div>
+      ) : null}
 
       {showCandidates && hasCandidates ? (
         <div className="mt-1 space-y-0.5 border-l border-border/40 pl-3">

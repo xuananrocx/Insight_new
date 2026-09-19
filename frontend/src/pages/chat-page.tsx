@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -20,6 +20,7 @@ import { Card } from '@/components/ui/card'
 import { StatsCards } from '@/components/stats-cards'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ThinkingPanel } from '@/components/thinking-panel'
+import { CitationSources } from '@/components/citation-sources'
 import { TopKSelect } from '@/components/top-k-select'
 import { RetrievalModeSelect } from '@/components/retrieval-mode-select'
 import { SearchResultsList } from '@/components/search-results-list'
@@ -677,27 +678,38 @@ export function ChatPage() {
 
 function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
   const [copied, setCopied] = useState(false)
-  const [sourcesExpanded, setSourcesExpanded] = useState(false)
+  const [showThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
+  const [showCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
+  const citationPrefix = `citation-${useId()}`
+  const [citationSelection, setCitationSelection] = useState<{ number: number; request: number } | null>(null)
   const thinkingStatus = turn.thinking?.status
   const isStreaming = thinkingStatus === 'streaming'
   const isSearchMode = turn.mode === 'basic' || turn.mode === 'deep'
+  const stages = !isStreaming && turn.trace?.length ? turn.trace : turn.thinking?.stages ?? []
+  const thinking: ThinkingState = {
+    ...turn.thinking,
+    stages,
+    status: thinkingStatus ?? (turn.error ? 'error' : 'done'),
+    startedAt: turn.thinking?.startedAt ?? 0,
+    partialAnswer: turn.thinking?.partialAnswer ?? '',
+  }
 
   return (
     <Card className="p-5">
       <div className="mb-3 flex items-start gap-2">
-        <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded bg-secondary text-[10px] font-medium text-secondary-foreground">
+        <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-secondary text-[10px] font-medium text-secondary-foreground">
           Q
         </span>
-        <div className="flex-1 text-[13px] font-medium leading-relaxed">{turn.question}</div>
+        <div className="min-w-0 flex-1 text-[13px] font-medium leading-relaxed [overflow-wrap:anywhere]">{turn.question}</div>
       </div>
 
       <div className="flex items-start gap-2">
-        <span className="mt-0.5 inline-flex h-5 w-5 items-center justify-center rounded bg-primary text-[10px] font-medium text-primary-foreground">
+        <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-primary text-[10px] font-medium text-primary-foreground">
           A
         </span>
-        <div className="flex-1">
-          {isStreaming && turn.thinking ? (
-            <ThinkingPanel thinking={turn.thinking} onStop={onStop} />
+        <div className="min-w-0 flex-1">
+          {isStreaming || (showThinking && stages.length > 0) ? (
+            <ThinkingPanel thinking={thinking} onStop={onStop} showDetails={showThinking} showCitations={showCitations} />
           ) : null}
           {!isStreaming && turn.error ? (
             <div className="flex items-center gap-2 text-destructive text-[12px]">
@@ -713,7 +725,13 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
           ) : null}
           {!isStreaming && !turn.error && !isSearchMode && (
             <>
-              <MarkdownContent content={turn.answer || ''} />
+              <MarkdownContent
+                content={turn.answer || ''}
+                hideCitations={!showCitations}
+                citationCount={turn.sources?.length ?? 0}
+                citationPrefix={citationPrefix}
+                onCitationClick={number => setCitationSelection(previous => ({ number, request: (previous?.request ?? 0) + 1 }))}
+              />
               <div className="mt-4">
                 <button
                   type="button"
@@ -735,37 +753,8 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
         </div>
       </div>
 
-      {!isSearchMode && (
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() => setSourcesExpanded(!sourcesExpanded)}
-            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronRight className={`h-3 w-3 transition-transform ${sourcesExpanded ? 'rotate-90' : ''}`} />
-            引用来源 {turn.sources?.length || 0} 条
-          </button>
-
-          {sourcesExpanded && turn.sources && turn.sources.length > 0 ? (
-            <div className="mt-2 space-y-1">
-              {turn.sources.map((source: any, idx: number) => (
-                <div
-                  key={idx}
-                  className="rounded-md bg-muted/20 p-2 text-[11px] text-muted-foreground"
-                >
-                  <div className="font-medium text-accent-foreground">
-                    [{idx + 1}] {source.title || '未知来源'}
-                  </div>
-                  {source.metadata ? (
-                    <div className="mt-0.5">
-                      文件：{source.metadata.file_name || '未知'}
-                    </div>
-                  ) : null}
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
+      {!isSearchMode && showCitations && (
+        <CitationSources sources={turn.sources ?? []} prefix={citationPrefix} selection={citationSelection} />
       )}
     </Card>
   )
