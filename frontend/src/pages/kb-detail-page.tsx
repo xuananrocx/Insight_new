@@ -1,4 +1,6 @@
 // KB 详情页：单个知识库的元信息 / 统计 / 文档预览 / 绑定的会话
+import { useAuth } from '@/hooks/use-auth'
+import { Grants } from '@/pages/account-page'
 import { useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -42,6 +44,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 
 export default function KbDetailPage() {
+  const { can } = useAuth()
   const { id = '' } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -75,7 +78,7 @@ export default function KbDetailPage() {
   const filesQuery = useQuery({
     queryKey: ['knowledge', 'files', id],
     queryFn: () => api.knowledge.files(id),
-    enabled: !!id,
+    enabled: can("documents.view") && !!id,
   })
 
   const kb = kbQuery.data
@@ -109,6 +112,7 @@ export default function KbDetailPage() {
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-8">
+      {["owner", "manager"].includes(kb.role || "") && <Card className="mb-5 p-5"><Grants path={`/kbs/${kb.id}`} isKb /></Card>}
       {/* 顶部：返回 + 标题 + 操作 */}
       <div className="mb-6">
         <Button
@@ -146,19 +150,19 @@ export default function KbDetailPage() {
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" asChild>
-              <a href={api.kb.exportUrl(kb.id)}>
+            <Button variant="outline" size="sm" asChild disabled={!kb.capabilities.includes("export")}>
+              <a aria-disabled={!kb.capabilities.includes("export")} href={kb.capabilities.includes("export") ? api.kb.exportUrl(kb.id) : undefined}>
                 <Download className="mr-1.5 h-3.5 w-3.5" />
                 导出
               </a>
             </Button>
-            {kb.source !== 'builtin' && (
+            {['owner', 'manager'].includes(kb.role || '') && kb.source !== 'builtin' && (
               <Button variant="outline" size="sm" onClick={() => navigate('/kbs')}>
                 <Pencil className="mr-1.5 h-3.5 w-3.5" />
                 编辑
               </Button>
             )}
-            {kb.source !== 'builtin' && !kb.is_default && (
+            {kb.role === 'owner' && kb.source !== 'builtin' && !kb.is_default && (
               <Button
                 variant="outline"
                 size="sm"
@@ -315,6 +319,7 @@ export default function KbDetailPage() {
                   >
                     {STATUS_LABEL[f.status] ?? f.status}
                   </span>
+                  {kb.capabilities.includes('download') && <Button size="sm" variant="ghost" asChild><a href={`/api/v1/knowledge/download/${f.id}?kb_id=${encodeURIComponent(kb.id)}`}>下载</a></Button>}
                 </div>
               )
             })}
@@ -323,7 +328,7 @@ export default function KbDetailPage() {
       </Card>
 
       {/* KB 全局概览（迭代 6）*/}
-      <KbGlobalSummaryCard kbId={kb.id} />
+      <KbGlobalSummaryCard kbId={kb.id} canManage={kb.capabilities.includes('manage')} />
 
       {/* 核心概念（迭代 4）*/}
       <KbConceptsTable kbId={kb.id} />

@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Globe, RefreshCw, Trash2, Sparkles, AlertCircle, AlertTriangle } from 'lucide-react'
 
 import { api } from '@/lib/api'
@@ -8,12 +8,14 @@ import { Card } from '@/components/ui/card'
 
 interface Props {
   kbId: string
+  canManage?: boolean
 }
 
-export function KbGlobalSummaryCard({ kbId }: Props) {
+export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
   const queryClient = useQueryClient()
   const [expanded, setExpanded] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  useEffect(() => { setConfirmDelete(false) }, [kbId, canManage])
 
   const query = useQuery({
     queryKey: ['kb-global-summary', kbId],
@@ -22,14 +24,20 @@ export function KbGlobalSummaryCard({ kbId }: Props) {
   })
 
   const buildMutation = useMutation({
-    mutationFn: (force: boolean) => api.kb.globalSummary.build(kbId, force),
+    mutationFn: (force: boolean) => {
+      if (!canManage) throw new Error('没有管理此知识库的权限')
+      return api.kb.globalSummary.build(kbId, force)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kb-global-summary', kbId] })
     },
   })
 
   const deleteMutation = useMutation({
-    mutationFn: () => api.kb.globalSummary.remove(kbId),
+    mutationFn: () => {
+      if (!canManage) throw new Error('没有管理此知识库的权限')
+      return api.kb.globalSummary.remove(kbId)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['kb-global-summary', kbId] })
       setConfirmDelete(false)
@@ -63,13 +71,13 @@ export function KbGlobalSummaryCard({ kbId }: Props) {
             </span>
           ) : null}
         </div>
-        <div className="flex items-center gap-1">
+        {canManage && <div className="flex items-center gap-1">
           {hasSummary ? (
             <>
               <button
                 type="button"
                 onClick={() => buildMutation.mutate(true)}
-                disabled={buildMutation.isPending}
+                disabled={buildMutation.isPending || deleteMutation.isPending}
                 className="inline-flex items-center gap-1 rounded border bg-background px-2 py-1 text-[11px] font-medium hover:bg-accent/30 disabled:opacity-50"
                 title="强制重新生成（基于最新文档摘要）"
               >
@@ -81,7 +89,7 @@ export function KbGlobalSummaryCard({ kbId }: Props) {
                   <button
                     type="button"
                     onClick={() => deleteMutation.mutate()}
-                    disabled={deleteMutation.isPending}
+                    disabled={buildMutation.isPending || deleteMutation.isPending}
                     className="rounded border border-destructive bg-destructive/10 px-2 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/20"
                   >
                     {deleteMutation.isPending ? '删除中...' : '确认删除'}
@@ -98,6 +106,7 @@ export function KbGlobalSummaryCard({ kbId }: Props) {
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(true)}
+                  disabled={buildMutation.isPending || deleteMutation.isPending}
                   className="inline-flex items-center gap-1 rounded border bg-background px-2 py-1 text-[11px] hover:bg-accent/30"
                   title="删除全局摘要"
                 >
@@ -109,17 +118,18 @@ export function KbGlobalSummaryCard({ kbId }: Props) {
             <button
               type="button"
               onClick={() => buildMutation.mutate(false)}
-              disabled={buildMutation.isPending}
+              disabled={buildMutation.isPending || deleteMutation.isPending}
               className="inline-flex items-center gap-1 rounded border border-primary bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               <Sparkles className="h-3 w-3" />
               {buildMutation.isPending ? '生成中...' : '生成全局摘要'}
             </button>
           )}
-        </div>
+        </div>}
       </div>
 
       <div className="px-5 py-4">
+        {(query.error || buildMutation.error || deleteMutation.error) && <p role="alert" className="mb-3 text-xs text-destructive">{(query.error || buildMutation.error || deleteMutation.error)?.message}</p>}
         {query.isLoading ? (
           <div className="py-4 text-center text-[12px] text-muted-foreground">加载中...</div>
         ) : hasSummary && data?.summary ? (
@@ -152,13 +162,8 @@ export function KbGlobalSummaryCard({ kbId }: Props) {
             <AlertCircle className="mx-auto mb-2 h-5 w-5 opacity-40" />
             还没有 KB 全局摘要。
             <div className="mt-1 text-[10px]">
-              点击右上角"生成全局摘要"按钮（基于已投喂的文档摘要）。需要先在投喂时启用 AI 摘要。
+              {canManage ? '点击右上角“生成全局摘要”按钮（基于已投喂的文档摘要）。需要先在投喂时启用 AI 摘要。' : '请联系知识库所有者或具有管理权限的用户生成概览。'}
             </div>
-            {buildMutation.isError ? (
-              <div className="mt-2 text-[10px] text-destructive">
-                生成失败：{(buildMutation.error as Error)?.message || '未知错误'}
-              </div>
-            ) : null}
           </div>
         )}
       </div>

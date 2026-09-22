@@ -1,126 +1,101 @@
-"""日志查看 / 管理 API。
-
-端点：
-- GET /api/v1/logs/info - 当前日志文件信息
-- GET /api/v1/logs/tail?lines=200 - 最近 N 行
-- DELETE /api/v1/logs - 清空所有日志
-- GET /api/v1/logs/download - 下载 zip（含所有 .log*）
-"""
+﻿"""Application runtime logs. Account audit records use /admin/audit."""
 from __future__ import annotations
 
 import io
+import logging
 import time
 import zipfile
+from collections import deque
 from pathlib import Path
-from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
-
-from src.core.logging_config import LOG_DIR, LOG_FILE
+from fastapi import APIRouter, HTTPException, Query, Response
+from src.core import logging_config, permissions as p
 
 router = APIRouter(prefix="/api/v1/logs", tags=["logs"])
 
 
-@router.get("/info")
-def logs_info() -> dict[str, Any]:
-    """返回日志目录的所有文件信息。"""
-    if not LOG_DIR.exists():
-        return {"files": [], "total_size": 0, "oldest_mtime": None, "newest_mtime": None}
+def log_files() -> list[Path]:
+    return sorted(
+        (f for f in logging_config.LOG_DIR.glob("app.log*") if f.is_file() and not f.is_symlink()),
+        key=lambda f: f.name,
+    )
 
+
+@router.get("/info")
+def logs_info():
+    p.require("logs.view")
     files = []
-    total = 0
-    oldest: float | None = None
-    newest: float | None = None
-    for f in sorted(LOG_DIR.glob("app.log*"), key=lambda p: p.name):
+    for f in log_files():
         try:
             stat = f.stat()
-        except Exception:
-            continue
-        files.append({
-            "name": f.name,
-            "size": stat.st_size,
-            "mtime": stat.st_mtime,
-        })
-        total += stat.st_size
-        if oldest is None or stat.st_mtime < oldest:
-            oldest = stat.st_mtime
-        if newest is None or stat.st_mtime > newest:
-            newest = stat.st_mtime
-
-    return {
-        "files": files,
-        "total_size": total,
-        "oldest_mtime": oldest,
-        "newest_mtime": newest,
-    }
+            files.append({"name": f.name, "size": stat.st_size, "mtime": stat.st_mtime})
+        except FileNotFoundError:
+            continue  # A file may rotate while we list it.
+    times = [f["mtime"] for f in files]
+    return {"files": files, "total_size": sum(f["size"] for f in files),
+            "oldest_mtime": min(times, default=None), "newest_mtime": max(times, default=None)}
 
 
 @router.get("/tail")
-def logs_tail(lines: int = Query(200, ge=1, le=2000)) -> dict[str, Any]:
-    """返回 app.log 末尾 N 行。"""
-    if not LOG_FILE.exists():
-        return {"lines": []}
-
+def logs_tail(lines: int = Query(200, ge=1, le=2000)):
+    p.require("logs.view")
     try:
-        # 反向读取，避免大文件全读
-        with open(LOG_FILE, "rb") as f:
-            f.seek(0, 2)
-            file_size = f.tell()
-            block_size = 8192
-            collected: list[bytes] = []
-            remaining = lines
-            pos = file_size
-            while pos > 0 and remaining > 0:
-                read_size = min(block_size, pos)
-                pos -= read_size
-                f.seek(pos)
-                chunk = f.read(read_size)
-                collected.append(chunk)
-                # 简化：解析换行符
-                newline_count = chunk.count(b"\n")
-                if newline_count >= remaining:
-                    break
-
-            data = b"".join(reversed(collected))
-            text = data.decode("utf-8", errors="replace")
-            all_lines = text.splitlines()
-            tail_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
-            return {"lines": tail_lines}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"读取日志失败: {e}")
+        # Read backwards so work depends on requested lines, not the whole file.
+        with logging_config.LOG_FILE.open("rb") as stream:
+            position = stream.seek(0, 2)
+            chunks: deque[bytes] = deque()
+            newlines = 0
+            while position > 0 and newlines <= lines:
+                size = min(position, 8192)
+                position -= size
+                stream.seek(position)
+                chunk = stream.read(size)
+                chunks.appendleft(chunk)
+                newlines += chunk.count(b"\n")
+        return {"lines": b"".join(chunks).decode("utf-8", errors="replace").splitlines()[-lines:]}
+    except FileNotFoundError:
+        return {"lines": []}
+    except OSError as exc:
+        raise HTTPException(500, "读取系统日志失败") from exc
 
 
-@router.delete("", status_code=204, response_model=None)
-def logs_clear() -> None:
-    """清空所有日志文件（删 .log* + 重建空 app.log）。"""
-    if not LOG_DIR.exists():
-        return
-    for f in LOG_DIR.glob("app.log*"):
-        try:
-            f.unlink()
-        except Exception:
-            pass
-    # 重建空 app.log（这样 RotatingFileHandler 不会因为文件消失而报错）
-    LOG_FILE.touch()
+@router.delete("", status_code=204)
+def logs_clear():
+    p.require("logs.clear")
+    target = logging_config.LOG_FILE.resolve()
+    handlers = [h for h in logging.getLogger().handlers
+                if isinstance(h, logging.FileHandler) and Path(h.baseFilename).resolve() == target]
+    for handler in handlers:
+        handler.acquire()
+    try:
+        for handler in handlers:
+            handler.flush()
+        logging_config.LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if logging_config.LOG_FILE.is_symlink():
+            raise HTTPException(400, "无法清空符号链接日志文件")
+        # Keep the active file in place so open handlers keep working on Windows/Linux.
+        logging_config.LOG_FILE.write_bytes(b"")
+        for f in log_files():
+            if f != logging_config.LOG_FILE:
+                f.unlink(missing_ok=True)
+    except OSError as exc:
+        raise HTTPException(500, "清空系统日志失败") from exc
+    finally:
+        for handler in reversed(handlers):
+            handler.release()
+    return Response(status_code=204)
 
 
 @router.get("/download")
-def logs_download() -> StreamingResponse:
-    """下载所有 .log* 文件打包成 zip。"""
+def logs_download():
+    p.require("logs.view")
     buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        if LOG_DIR.exists():
-            for f in sorted(LOG_DIR.glob("app.log*"), key=lambda p: p.name):
-                try:
-                    zf.write(f, arcname=f.name)
-                except Exception:
-                    pass
-    buf.seek(0)
-    timestamp = time.strftime("%Y%m%d-%H%M%S")
-    filename = f"logs-{timestamp}.zip"
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as archive:
+        for f in log_files():
+            try:
+                archive.write(f, arcname=f.name)
+            except FileNotFoundError:
+                continue
+    filename = f"system-logs-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    return Response(buf.getvalue(), media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})

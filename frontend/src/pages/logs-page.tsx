@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { ConfirmDialog } from '@/components/confirm-dialog'
+import { useAuth } from '@/hooks/use-auth'
 import { api, type LogsInfo } from '@/lib/api'
 import { cn, formatBytes, formatTimestamp } from '@/lib/utils'
 
@@ -38,6 +39,7 @@ function levelColor(line: string): string {
 }
 
 export function LogsPage() {
+  const { can } = useAuth()
   const qc = useQueryClient()
   const [lines, setLines] = useState(200)
   const [autoRefresh, setAutoRefresh] = useState(false)
@@ -86,15 +88,15 @@ export function LogsPage() {
   const logLines: string[] = tailQuery.data?.lines ?? []
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-8">
-      <div className="mb-6 flex items-start justify-between">
+    <div className="mx-auto max-w-5xl px-4 py-6 md:px-8 md:py-8">
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-tight">
             <ScrollText className="h-5 w-5" />
             系统日志
           </h1>
           <p className="mt-1 text-[13px] text-muted-foreground">
-            应用运行日志（自动清理 7 天以上；单文件 10MB，最多 5 份）
+            应用运行日志、错误信息和异常堆栈，与操作日志分开保存。
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -113,7 +115,7 @@ export function LogsPage() {
               下载 zip
             </Button>
           </a>
-          <Button
+          {can('logs.clear') && <Button
             variant="outline"
             size="sm"
             className="gap-1.5 text-[12px] text-destructive hover:text-destructive"
@@ -121,21 +123,24 @@ export function LogsPage() {
           >
             <Trash2 className="h-3.5 w-3.5" />
             清空
-          </Button>
+          </Button>}
         </div>
       </div>
+
+      {(infoQuery.error || tailQuery.error || clearMutation.error || levelQuery.error || levelMutation.error) &&
+        <p role="alert" className="mb-4 text-sm text-destructive">{(infoQuery.error || tailQuery.error || clearMutation.error || levelQuery.error || levelMutation.error)?.message}</p>}
 
       <Card className="mb-4 p-5">
         <div className="mb-3 flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 text-muted-foreground" />
           <span className="text-[14px] font-medium">日志级别</span>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {levelQuery.data?.available.map((lv) => (
             <button
               key={lv}
               onClick={() => levelMutation.mutate(lv)}
-              disabled={levelMutation.isPending}
+              disabled={!can('system.edit') || levelMutation.isPending}
               className={cn(
                 'rounded-md px-3 py-1 text-[12px] transition-colors',
                 levelQuery.data?.current === lv
@@ -177,7 +182,7 @@ export function LogsPage() {
       </Card>
 
       <Card className="p-5">
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <span className="text-[14px] font-medium">最近日志</span>
             <div className="flex items-center gap-1">
@@ -248,7 +253,7 @@ export function LogsPage() {
 
       {showClearConfirm ? (
         <ConfirmDialog
-          title="清空所有日志？"
+          title="清空系统日志？"
           message="将删除所有 app.log* 文件（含轮转的），仅保留一个空的 app.log。此操作不可撤销。"
           confirmText="确认清空"
           danger

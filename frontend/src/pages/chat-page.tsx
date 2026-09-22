@@ -27,7 +27,7 @@ import { SearchResultsList } from '@/components/search-results-list'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { useLocalStorage } from '@/hooks/use-local-storage'
 import { type ChatTurn, type ThinkingState } from '@/hooks/use-chat-sessions'
-import { api, type ChatMessage, type RetrievalMode, type SearchHit } from '@/lib/api'
+import { api, type ChatMessage, type RetrievalMode, type SearchHit, type QaSource, type QaTraceStage } from '@/lib/api'
 import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
 
 // thinking 重建守卫：流式期间若 turnsState / detail cache 被 refetch 重置导致 thinking 丢失，
@@ -78,6 +78,8 @@ export function ChatPage() {
   const [selectedKbForNewSession, setSelectedKbForNewSession] = useState<string | null>(null)
   // 并发流式支持：sessionId -> turnId 映射（zustand 跨组件共享；切会话/离开聊天页不中断）
   const streamingMap = useAnswerStreams((s) => s.streaming)
+  const [strictKnowledge] = useLocalStorage('amd-ai-strict-knowledge', false)
+  const [apiRetryCount] = useLocalStorage('amd-ai-api-retry-count', 5)
   const isStreaming = (sid: string | null | undefined): boolean =>
     !!sid && !!streamingMap[sid]
 
@@ -97,6 +99,8 @@ export function ChatPage() {
     queryFn: api.defaultKb.get,
     staleTime: 60_000,
   })
+  const currentKbId = session?.kb_scope || selectedKbForNewSession
+  const canAskKb = !!currentKbId && !!kbListQuery.data?.some(kb => kb.id === currentKbId)
 
   // 初始化 selectedKbForNewSession：配置的默认 KB > is_default 字段
   useEffect(() => {
@@ -119,6 +123,7 @@ export function ChatPage() {
     history: ChatMessage[] | undefined,
     mode: RetrievalMode,
   ) {
+    const providerId = providersData?.current_provider
     const turnId = crypto.randomUUID()
     const turn: ChatTurn = {
       id: turnId,
@@ -131,14 +136,15 @@ export function ChatPage() {
         startedAt: Date.now(),
       },
     }
-    ctx.appendTurn(sessionId, turn)
-
     const ac = new AbortController()
     useAnswerStreams.getState().start(sessionId, turnId, ac)
     // 本地累积已生成文本：流式中切走再切回（或 cache 被 refetch 重置）时的兜底真值
     let accumulated = ''
+    let accumulatedSources: QaSource[] = []
+    const accumulatedStages: QaTraceStage[] = []
 
     try {
+      await ctx.appendTurn(sessionId, turn)
       await api.qa.askStream(
         question,
         history,
@@ -149,11 +155,13 @@ export function ChatPage() {
             )
           },
           onStage: (stage) => {
+            accumulatedStages.push(stage)
             ctx.updateTurn(sessionId, turnId, (t) =>
               patchThinking(t, (th) => ({ ...th, stages: [...th.stages, stage] })),
             )
           },
           onSources: (sources) => {
+            accumulatedSources = sources
             ctx.updateTurn(sessionId, turnId, (t) =>
               patchThinking(t, (th) => ({ ...th, sources })),
             )
@@ -178,7 +186,7 @@ export function ChatPage() {
             ctx.updateTurn(sessionId, turnId, (t) => ({
               ...patchThinking(t, (th) => ({
                 ...th,
-                status: 'done',
+                status: data.outcome === 'partial' || data.verification === 'partial' ? 'partial' : 'done',
                 elapsedMs: Date.now() - th.startedAt,
               })),
               answer: data.answer || '',
@@ -199,7 +207,7 @@ export function ChatPage() {
               try {
                 const latest = await api.sessions.get(sessionId)
                 if (latest.title !== '新会话' || !data.answer) return
-                const result = await api.qa.summarizeTitle(question, data.answer)
+                const result = await api.qa.summarizeTitle(question, data.answer, providerId, sessionId)
                 if (result.title) {
                   await ctx.renameSession(sessionId, result.title)
                 }
@@ -209,36 +217,46 @@ export function ChatPage() {
             })()
           },
           onError: (error) => {
+            if (ac.signal.aborted) return
+            const message = error.message || '未知错误'
+            const answer = error.partial || accumulated
+            const trace = error.trace?.length ? error.trace : [...accumulatedStages, {
+              stage: 'answer_result', label: '回答未完成', status: 'error', notes: message,
+            }]
             ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...patchThinking(t, (th) => ({ ...th, status: 'error' })),
-              error: typeof error === 'string' ? error : (error as any).message || '未知错误',
+              ...patchThinking(t, (th) => ({ ...th, status: 'error', elapsedMs: Date.now() - th.startedAt })),
+              answer, trace, sources: accumulatedSources, error: message,
             }))
+            void ctx.persistTurn(sessionId, turnId, { answer, trace, sources: accumulatedSources, error: message })
             // rebuild 进行中：toast 友好提示，让用户去看进度
             if ((error as any)?.rebuildInProgress) {
               toast.error('向量库重建中，请等待完成后再提问')
             }
           },
           onCancelled: () => {
+            const trace = [...accumulatedStages, { stage: 'answer_result', label: '已停止回答', status: 'cancelled', notes: '用户已停止生成，保留已收到的内容' }]
             // 主动 abort（停止按钮/切 KB/删除会话）：保留已生成内容并落库；
             // 用本地累积值而非 activeSession（中断时会话可能已切走，activeSession 找不到该 turn）
             ctx.updateTurn(sessionId, turnId, (t) => ({
               ...patchThinking(t, (th) => ({
                 ...th,
                 partialAnswer: accumulated,
-                status: accumulated ? 'done' : 'cancelled',
+                status: 'cancelled',
+                elapsedMs: Date.now() - th.startedAt,
               })),
               // 已有部分答案：保留并标记完成；无答案：标记已取消
               answer: accumulated || t.answer,
-              error: accumulated ? undefined : '已取消',
+              error: '已停止生成',
+              trace,
+              sources: accumulatedSources,
             }))
-            if (accumulated) {
-              ctx.persistTurn(sessionId, turnId, {
+            void ctx.persistTurn(sessionId, turnId, {
                 answer: accumulated,
-                sources: [],
-                trace: [],
+                sources: accumulatedSources,
+                trace,
+                error: '已停止生成',
                 usedProvider: undefined,
               })
-            }
           },
         },
         ac.signal,
@@ -247,6 +265,9 @@ export function ChatPage() {
         turnId,
         topK,
         mode,
+        providerId,
+        strictKnowledge,
+        apiRetryCount,
       )
     } finally {
       useAnswerStreams.getState().end(sessionId)
@@ -262,6 +283,14 @@ export function ChatPage() {
   async function handleSubmit(e?: React.FormEvent) {
     e?.preventDefault()
     const q = input.trim()
+    if (!canAskKb) {
+      toast.error(session ? '此知识库权限已撤销或知识库已删除。历史会话仍可查看，请新建对话并选择可用知识库。' : '请先创建或选择一个有权限的知识库。')
+      return
+    }
+    if (['ai', 'deep_ai'].includes(session?.retrieval_mode ?? newSessionMode) && !activeProvider) {
+      toast.error('请先在设置中添加并选择个人 API，或选择管理员授权的团队 API。')
+      return
+    }
     // 只在"当前会话"有 stream 时禁止发新问题（其他会话的 stream 不影响）
     if (!q || isStreaming(ctx.activeId)) return
     // U-3: 超长问题前端预检（后端会 422，预检避免 error turn 残留）
@@ -381,7 +410,7 @@ export function ChatPage() {
                 className="min-h-[60px] w-full resize-none bg-transparent text-[14px] outline-none placeholder:text-muted-foreground"
               />
               <div className="mt-3 flex items-center justify-between border-t pt-3">
-                <div className="flex items-center gap-1.5">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                   <RetrievalModeSelect
                     value={newSessionMode}
                     onChange={(v) => setNewSessionMode(v)}
@@ -527,6 +556,7 @@ export function ChatPage() {
         </div>
 
         <div className="border-t border-white/10 px-8 py-3">
+          {!canAskKb && <p className="mx-auto mb-3 max-w-4xl text-sm text-muted-foreground">当前知识库已不可用，历史会话保留。请新建对话并选择有权限的知识库。</p>}
           <form onSubmit={handleSubmit} className="mx-auto max-w-4xl">
             <Card className="p-3">
               <textarea
@@ -686,10 +716,12 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
   const isStreaming = thinkingStatus === 'streaming'
   const isSearchMode = turn.mode === 'basic' || turn.mode === 'deep'
   const stages = !isStreaming && turn.trace?.length ? turn.trace : turn.thinking?.stages ?? []
+  const resultStage = stages.findLast(stage => stage.stage === 'answer_result')
+  const restoredStatus = resultStage?.status === 'partial' ? 'partial' : resultStage?.status === 'cancelled' ? 'cancelled' : turn.error ? 'error' : 'done'
   const thinking: ThinkingState = {
     ...turn.thinking,
     stages,
-    status: thinkingStatus ?? (turn.error ? 'error' : 'done'),
+    status: thinkingStatus ?? restoredStatus,
     startedAt: turn.thinking?.startedAt ?? 0,
     partialAnswer: turn.thinking?.partialAnswer ?? '',
   }
@@ -717,13 +749,14 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
               {turn.error}
             </div>
           ) : null}
+          {!isStreaming && !turn.error && resultStage?.status === 'partial' && <p className="mb-2 text-xs text-muted-foreground">部分完成 · {resultStage.notes || '回答未完整生成'}</p>}
           {!isStreaming && !turn.error && isSearchMode ? (
             <SearchResultsList
               hits={(turn.sources ?? []) as SearchHit[]}
               question={turn.question}
             />
           ) : null}
-          {!isStreaming && !turn.error && !isSearchMode && (
+          {!isStreaming && (!turn.error || !!turn.answer) && !isSearchMode && (
             <>
               <MarkdownContent
                 content={turn.answer || ''}

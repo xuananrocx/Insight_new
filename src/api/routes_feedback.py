@@ -72,6 +72,10 @@ class ReviewRequest(BaseModel):
 @router.post("/{feedback_id}/review", response_model=dict)
 def review(feedback_id: int, req: ReviewRequest) -> dict:
     """审批反馈。"""
+    from src.core import accounts
+    if accounts.enabled:
+        metadata_db.review_feedback(feedback_id,req.decision,reviewer=accounts.user()['username'],note=req.note)
+        return {"ok":True,"feedback_id":feedback_id}
     if req.decision == "approved":
         result = approval.approve(feedback_id, reviewer=req.reviewer, note=req.note)
     else:

@@ -40,7 +40,8 @@ def submit_feedback(
     ).get("auto_feedback", {})
     auto_enabled = auto_feedback_cfg.get("enabled", False)
 
-    if auto_enabled and not auto_feedback_cfg.get("require_approval", True):
+    from src.core import accounts
+    if not accounts.enabled and auto_enabled and not auto_feedback_cfg.get("require_approval", True):
         # 直接入库（不推荐，但允许）
         add_approved_qa(question, answer)
         return None

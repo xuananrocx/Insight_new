@@ -120,6 +120,9 @@ def _process_task(task_id: str) -> None:
     })
 
     while True:
+        from src.core import accounts
+        if accounts.enabled:
+            accounts.require_kb(kb_id, "editor")
         # 每次循环重新拉 queued（支持 retry 时把 failed 重置为 queued）
         queued_files = metadata_db.list_upload_task_files(task_id, status="queued")
         if not queued_files:
@@ -317,8 +320,20 @@ def _run_in_thread(task_id: str) -> None:
 
 def start_task(task_id: str) -> None:
     """启动一个后台线程处理任务（异步立即返回）。"""
+    import contextvars
+    from src.core import accounts
+    if accounts.enabled:
+        current = accounts.user()
+        accounts.execute('INSERT INTO auth_job_context VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET user_id=excluded.user_id,provider_id=excluded.provider_id,started_at=excluded.started_at',
+                         (task_id,current['id'],accounts.selected_provider.get(),_now_ms()))
+        accounts.audit('upload_started', task_id)
+    context = contextvars.copy_context()
+    if accounts.enabled:
+        # Already-authorized background jobs keep the actor, not a browser cookie.
+        # Account disablement and KB/API revocation are still checked during work.
+        context.run(accounts.identity.set, current)
     thread = threading.Thread(
-        target=_run_in_thread, args=(task_id,), daemon=True, name=f"batch-upload-{task_id}"
+        target=context.run, args=(_run_in_thread, task_id), daemon=True, name=f"batch-upload-{task_id}"
     )
     thread.start()
     logger.info(f"batch_upload worker thread started for task {task_id}")

@@ -102,6 +102,13 @@ def log_call(
             logger.debug(f"ai_call_log scene={scene} disabled, skip")
             return
 
+        from src.core import accounts
+        frozen = accounts.provider_snapshot.get()
+        if error_message and frozen:
+            secret = accounts.provider_config(frozen)['api_key']
+            if secret:
+                error_message = error_message.replace(secret, '[redacted]')
+
         # 根据配置过滤字段
         log_data: dict[str, Any] = {
             "provider": provider,
@@ -121,6 +128,10 @@ def log_call(
             log_data["system_prompt"] = system_prompt
 
         # 入队
+        from src.core import accounts
+        current = accounts.identity.get()
+        log_data["owner_id"] = current["id"] if current else None
+        log_data["provider_id"] = accounts.selected_provider.get() or None
         with _queue_lock:
             _log_queue.append(log_data)
             # 队列过长保护（避免极端情况下内存爆炸）

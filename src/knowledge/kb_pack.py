@@ -423,7 +423,7 @@ def import_kb_from_zip(
                     relative_path=new_rel_path,
                     absolute_path=str(target),
                     content_hash=f_info.get("content_hash", ""),
-                    file_size=f_info.get("file_size", len(data)),
+                    file_size=target.stat().st_size,
                     file_type=f_info.get("file_type", ""),
                     source_package=None,
                     kb_id=new_kb_id,
@@ -493,8 +493,17 @@ def _import_vectors_from_pack(
             # 更新 metadata：把旧的 kb_id / file_id 替换成新的
             meta = dict(chunk.get("metadata") or {})
             meta["kb_id"] = new_kb_id
-            cid = chunk["id"]
-            rel = chunk_id_to_rel.get(cid)
+            original_id = str(chunk['id'])
+            rel = chunk_id_to_rel.get(original_id)
+            # BM25 IDs are global: importing the same pack into a private KB must
+            # not overwrite the original owner's index records.
+            import hashlib
+            meta['source_path'] = f"{new_kb_id}/{meta.get('source_path', rel or original_id)}"
+            if meta.get('content_hash') and isinstance(meta.get('chunk_index'), int):
+                cid = vector_store.make_chunk_id(meta['source_path'], str(meta['content_hash']), meta['chunk_index'])
+            else:
+                cid = hashlib.sha256(f'{new_kb_id}:{original_id}'.encode()).hexdigest()
+            meta.pop('file_id', None)
             if rel and rel in file_id_map:
                 meta["file_id"] = file_id_map[rel]
                 file_chunks[file_id_map[rel]].append(cid)

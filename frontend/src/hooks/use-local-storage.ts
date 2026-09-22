@@ -1,9 +1,11 @@
+import { accountKey } from '@/lib/account-api'
 import { useCallback, useEffect, useState } from 'react'
 
 // 自定义事件名：用于同 tab 内多个 useLocalStorage 实例同步
 const LS_CHANGE_EVENT = 'amd-ui-local-storage-change'
 
 export function useLocalStorage<T>(key: string, initialValue: T) {
+  key = accountKey(key)
   const [value, setValue] = useState<T>(() => {
     if (typeof window === 'undefined') return initialValue
     try {

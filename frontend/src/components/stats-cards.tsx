@@ -1,3 +1,4 @@
+import { useAuth } from '@/hooks/use-auth'
 import { useQuery } from '@tanstack/react-query'
 import {
   Library,
@@ -11,12 +12,16 @@ import { Card } from '@/components/ui/card'
 import { api } from '@/lib/api'
 
 export function StatsCards() {
+  const { can } = useAuth()
+  const allowed = can('analysis.view') || can('documents.view') || can('feedback.view')
   const { data, isLoading } = useQuery({
     queryKey: ['knowledge', 'stats'],
     queryFn: () => api.knowledge.stats(),
     refetchInterval: 10000,
+    enabled: allowed,
   })
 
+  if (!allowed) return null
   const stats = [
     {
       label: '文档总数',

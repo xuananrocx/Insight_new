@@ -473,6 +473,10 @@ class LLMClient:
             scene: 调用场景标签（用于 AI 日志分类）
             log_meta: { session_id, turn_id, kb_id } 关联信息（可选）
         """
+        from src.core import accounts
+        if accounts.enabled and not getattr(self, "_account_scoped", False):
+            from src.core.account_llm import chat_client
+            return chat_client().chat(messages, scene=scene, log_meta=log_meta, **kwargs)
         import time as _time
         from src.core.ai_call_logger import log_call as _log_call
 
@@ -545,6 +549,12 @@ class LLMClient:
             scene: 调用场景标签
             log_meta: { session_id, turn_id, kb_id } 关联信息
         """
+        from src.core import accounts
+        if accounts.enabled and not getattr(self, "_account_scoped", False):
+            from src.core.account_llm import chat_client
+            async for item in chat_client().chat_stream(messages, scene=scene, log_meta=log_meta, **kwargs):
+                yield item
+            return
         import time as _time
         from src.core.ai_call_logger import log_call as _log_call
 

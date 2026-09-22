@@ -585,7 +585,8 @@ def _run_pipeline(
     collection_name = kb["collection_name"]
 
     search_collections = [collection_name]
-    if settings.is_enabled("feedback_loop.manual_feedback"):
+    from src.core import accounts
+    if not accounts.enabled and settings.is_enabled("feedback_loop.manual_feedback"):
         search_collections.append(vector_store.FEEDBACK_COLLECTION_NAME)
 
     with trace.stage("vector_retrieval", "向量召回") as s:
@@ -822,6 +823,8 @@ def ask(
     *,
     scene: str = "qa_chat",
     mode: str = "ai",
+    strict_knowledge: bool = False,
+    api_retry_count: int = 5,
 ) -> Answer:
     """同步问答。返回完整 Answer。
 
@@ -831,7 +834,7 @@ def ask(
     """
     if mode in VALID_MODES and mode != "ai":
         async def collect():
-            async for event in ask_stream(question, history, kb_scope, top_k=top_k, mode=mode):
+            async for event in ask_stream(question, history, kb_scope, top_k=top_k, mode=mode, strict_knowledge=strict_knowledge, api_retry_count=api_retry_count):
                 if event["type"] == "error":
                     raise RuntimeError(event["data"]["message"])
                 if event["type"] == "done":
@@ -912,6 +915,8 @@ async def ask_stream(
     session_id: str | None = None,
     turn_id: str | None = None,
     mode: str = "ai",
+    strict_knowledge: bool = False,
+    api_retry_count: int = 5,
 ) -> AsyncGenerator[dict, None]:
     """流式问答。逐事件 yield。
 
@@ -931,13 +936,16 @@ async def ask_stream(
             - basic: 检索后直接返回片段列表，不调 LLM
             - deep: basic + 概念扩展 + 相邻片段合并，不调 LLM
             - ai: LLM 流式作答（agentic 全量上下文）
-            - deep_ai: 问题规划、按需补查和证据核验后返回回答
+            - deep_ai: AI 主动调用知识库工具，结合原文及明确标注的通用知识回答
     """
     if mode == "deep_ai":
-        from src.qa.deep_ai import ask_stream as deep_ask_stream
-        async for event in deep_ask_stream(question, history, kb_scope, top_k=top_k,
-                                          session_id=session_id, turn_id=turn_id):
-            yield event
+        from contextlib import aclosing
+        from src.qa.tool_agent import ask_stream as deep_ask_stream
+        async with aclosing(deep_ask_stream(question, history, kb_scope, top_k=top_k,
+                                           session_id=session_id, turn_id=turn_id, strict_knowledge=strict_knowledge,
+                                           api_retry_count=api_retry_count)) as stream:
+            async for event in stream:
+                yield event
         return
 
     qa_cfg = settings.config.get("qa", {})

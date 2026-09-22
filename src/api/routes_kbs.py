@@ -14,18 +14,21 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
 
 from src.core import llm_client, vector_store
 from src.core.config import settings
+from src.core import accounts, permissions
 from src.db import metadata_db
 from src.knowledge import batch_upload, kb_pack
 
@@ -38,6 +41,7 @@ router = APIRouter(prefix="/api/v1/kbs", tags=["kbs"])
 
 
 class CreateKBRequest(BaseModel):
+    scope: Literal["private", "team"] = "private"
     name: str = Field(..., min_length=1, max_length=100, description="知识库名称")
     description: str = Field("", max_length=500, description="知识库描述（可选）")
 
@@ -48,6 +52,9 @@ class UpdateKBRequest(BaseModel):
 
 
 class KBResponse(BaseModel):
+    role: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    scope: str = "private"
     id: str
     name: str
     description: str | None
@@ -120,6 +127,9 @@ def list_kbs() -> list[KBResponse]:
 
         result.append(
             KBResponse(
+                role=accounts.kb_role(kb_id) if accounts.enabled else None,
+        capabilities=permissions.resource("kb",kb_id)["actions"] if accounts.enabled else permissions.KB_ACTIONS,
+        scope=permissions.kb_policy(kb_id)["scope"] if accounts.enabled else "private",
                 id=kb["id"],
                 name=kb["name"],
                 description=kb.get("description"),
@@ -167,6 +177,9 @@ def get_kb(kb_id: str) -> KBResponse:
     )
 
     return KBResponse(
+        role=accounts.kb_role(kb_id) if accounts.enabled else None,
+        capabilities=permissions.resource("kb",kb_id)["actions"] if accounts.enabled else permissions.KB_ACTIONS,
+        scope=permissions.kb_policy(kb_id)["scope"] if accounts.enabled else "private",
         id=kb["id"],
         name=kb["name"],
         description=kb.get("description"),
@@ -241,6 +254,8 @@ def create_kb(req: CreateKBRequest) -> KBResponse:
             logger.warning(f"failed to rollback Chroma collection: {collection_name}")
         raise HTTPException(status_code=500, detail=f"创建知识库失败: {e}")
 
+    if accounts.enabled:
+        accounts.execute("INSERT OR REPLACE INTO permission_kbs VALUES (?,?,1)",(kb_id,req.scope))
     # 返回详情
     return get_kb(kb_id)
 
@@ -575,9 +590,14 @@ def export_kb(kb_id: str) -> Any:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
 
     # 用临时文件存 ZIP，下载完自动删
-    tmp = Path(tempfile.mkstemp(suffix=".zip", prefix=f"kbpack_{kb_id}_")[1])
+    fd, tmp_name = tempfile.mkstemp(suffix=".zip", prefix=f"kbpack_{kb_id}_")
+    os.close(fd)
+    tmp = Path(tmp_name)
     try:
         kb_pack.export_kb_to_zip(kb_id, tmp)
+        if accounts.enabled:
+            permissions.require_resource("kb",kb_id,"export")
+            accounts.audit("kb_export",kb_id)
         # 文件名：{kb_name}_{YYYYMMDD_HHMMSS}.zip
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in kb["name"])[:50]
         timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -587,7 +607,7 @@ def export_kb(kb_id: str) -> Any:
             media_type="application/zip",
             filename=download_name,
             # 用 background task 在响应完成后删除临时文件
-            background=None,
+            background=BackgroundTask(tmp.unlink, missing_ok=True),
         )
     except Exception as e:
         logger.exception(f"导出 KB 失败: {e}")
@@ -855,6 +875,8 @@ def get_kb_global_summary_api(kb_id: str) -> KbGlobalSummaryResponse:
 @router.post("/{kb_id}/global_summary/build", response_model=KbGlobalSummaryResponse)
 def build_kb_global_summary(kb_id: str, force: bool = False) -> KbGlobalSummaryResponse:
     """生成/更新 KB 全局摘要。"""
+    if accounts.enabled:
+        permissions.require_resource("kb", kb_id, "manage")
     from src.knowledge.ai_summarizer import generate_kb_global_summary
     kb = metadata_db.get_kb(kb_id)
     if not kb:
@@ -886,6 +908,8 @@ def build_kb_global_summary(kb_id: str, force: bool = False) -> KbGlobalSummaryR
 @router.delete("/{kb_id}/global_summary", response_model=dict)
 def delete_kb_global_summary(kb_id: str) -> dict:
     """删除 KB 全局摘要。"""
+    if accounts.enabled:
+        permissions.require_resource("kb", kb_id, "manage")
     kb = metadata_db.get_kb(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")

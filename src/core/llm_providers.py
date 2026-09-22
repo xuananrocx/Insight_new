@@ -80,7 +80,8 @@ class BaseLLMProvider(ABC):
 def _normalize_openai_base_url(url: str) -> tuple[str, str]:
     """规范化 OpenAI 格式 base_url，自动识别 API 风格。
 
-    支持三种填法：
+    支持以下填法：
+      https://xxx                     → https://xxx/v1（仅域名自动补标准前缀）
       https://xxx/v1                  → chat（SDK 拼 /chat/completions）
       https://xxx/v1/chat/completions → chat（去掉后缀）
       https://xxx/v1/responses        → responses（Responses API，去掉后缀）
@@ -91,6 +92,13 @@ def _normalize_openai_base_url(url: str) -> tuple[str, str]:
         return u[: -len("/responses")], "responses"
     if u.endswith("/chat/completions"):
         return u[: -len("/chat/completions")], "chat"
+    # A bare origin is the common UI shorthand for the OpenAI /v1 API.
+    # Explicit endpoints above and custom prefixes below remain authoritative.
+    if u:
+        from urllib.parse import urlsplit
+        parsed = urlsplit(u)
+        if parsed.scheme in ("http", "https") and parsed.netloc and not parsed.path:
+            return parsed._replace(path="/v1").geturl(), "chat"
     return u, "chat"
 
 

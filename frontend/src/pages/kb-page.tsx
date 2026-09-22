@@ -2,6 +2,7 @@
 // 提供 KB 的 CRUD 操作：列出所有 KB、新建 KB、重命名 KB、删除 KB（仅非 builtin 且非默认 KB）
 //                + 导出 KB Pack + 导入 KB Pack（SSE 流式进度）
 import { useRef, useState } from 'react'
+import { useAuth } from '@/hooks/use-auth'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
@@ -31,6 +32,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
 export default function KbPage() {
+  const { can } = useAuth()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -353,12 +355,12 @@ export default function KbPage() {
           <Button
             variant="outline"
             onClick={() => importFileInput.current?.click()}
-            disabled={importStep !== 'idle'}
+            disabled={!can('kb.create') || importStep !== 'idle'}
           >
             <Upload className="mr-2 h-4 w-4" />
             导入 Pack
           </Button>
-          <Button onClick={() => setShowCreateDialog(true)}>
+          <Button disabled={!can('kb.create')} onClick={() => setShowCreateDialog(true)}>
             <Plus className="mr-2 h-4 w-4" />
             新建知识库
           </Button>
@@ -451,12 +453,13 @@ export default function KbPage() {
                 <Button
                   variant="ghost"
                   size="sm"
+                  disabled={!kb.capabilities.includes("export")}
                   onClick={() => handleExport(kb)}
                   title="导出 Pack"
                 >
                   <Download className="h-4 w-4" />
                 </Button>
-                {kb.source !== 'builtin' && (
+                {['owner', 'manager'].includes(kb.role || '') && kb.source !== 'builtin' && (
                   <Button
                     variant="ghost"
                     size="sm"
@@ -467,7 +470,7 @@ export default function KbPage() {
                     <RefreshCw className="h-4 w-4" />
                   </Button>
                 )}
-                {kb.source !== 'builtin' && (
+                {['owner', 'manager'].includes(kb.role || '') && kb.source !== 'builtin' && (
                   <>
                     <Button
                       variant="ghost"
@@ -476,7 +479,7 @@ export default function KbPage() {
                     >
                       <Pencil className="h-4 w-4" />
                     </Button>
-                    {!kb.is_default && (
+                    {kb.role === 'owner' && !kb.is_default && (
                       <Button
                         variant="ghost"
                         size="sm"

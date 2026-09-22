@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from src.core.config import settings
@@ -87,6 +88,14 @@ def stats(kb_id: str | None = None) -> dict:
     参数：
         kb_id: 可选，按知识库过滤；不传则统计全部
     """
+    from src.core import accounts
+    if accounts.enabled and not kb_id:
+        result = {k:0 for k in ['files_total','files_done','files_pending','files_failed','total_chunks','total_size_bytes','feedback_pending','feedback_approved']}
+        for kid in accounts.visible_kb_ids():
+            for key,value in metadata_db.get_stats(kid).items():
+                if not key.startswith('feedback_'):
+                    result[key] = result.get(key,0) + (value or 0)
+        return result
     metadata_db.init_db()
     return metadata_db.get_stats(kb_id=kb_id)
 
@@ -144,13 +153,46 @@ def list_files(
     参数：
         kb_id: 可选，按知识库过滤；不传则返回全部
     """
+    from src.core import accounts
+    if accounts.enabled and not kb_id:
+        files = []
+        for kid in accounts.visible_kb_ids():
+            files.extend(metadata_db.list_files(status=status,limit=min(limit,1000),kb_id=kid))
+        files = files[:max(0,min(limit,1000))]
+        for f in files:
+            f.pop('absolute_path',None)
+        return {'files':files,'count':len(files)}
     metadata_db.init_db()
     files = metadata_db.list_files(status=status, limit=limit, kb_id=kb_id)
     # 转换 chunk_ids_json 字段
     import json
     for f in files:
         f["chunk_ids"] = json.loads(f.pop("chunk_ids_json", "[]"))
+        if accounts.enabled:
+            f.pop('absolute_path', None)
     return {"files": files, "count": len(files)}
+
+
+@router.get('/download/{file_id}')
+def download_file(file_id: int, kb_id: str):
+    from src.core import accounts, permissions
+    permissions.require_resource('kb', kb_id, 'download')
+    found = accounts.rows('SELECT absolute_path,relative_path,source_package FROM knowledge_files WHERE id=? AND kb_id=?', (file_id, kb_id))
+    if not found:
+        raise HTTPException(404, '文件不存在')
+    target = Path(found[0]['absolute_path']).resolve()
+    base = (settings.feed_folder if kb_id == 'default' else settings.feed_folder / kb_id).resolve()
+    extracted = settings.get_path('extracted').resolve()
+    within = target.is_relative_to(base) or (bool(found[0]['source_package']) and target.is_relative_to(extracted))
+    if not within or not target.is_file():
+        raise HTTPException(404, '原文件不存在或不在知识库目录中')
+    if kb_id == 'default':
+        # The default feed root also contains other KB directories.
+        for other in accounts.rows("SELECT id FROM kbs WHERE id<>'default'"):
+            if target.is_relative_to((settings.feed_folder / other['id']).resolve()):
+                raise HTTPException(403, '文件不属于此知识库')
+    accounts.audit('kb_file_download', f'{kb_id}:{file_id}')
+    return FileResponse(target, filename=target.name, media_type='application/octet-stream')
 
 
 @router.delete("/files/{rel_path:path}")
@@ -204,7 +246,7 @@ async def upload_file(file: UploadFile = File(...), kb_id: str = "default") -> d
     feed = settings.feed_folder
     # 按 KB 分子目录存储（default 例外，保持向后兼容）
     if kb_id == "default":
-        target_dir = feed
+        target_dir = feed / 'default'
     else:
         target_dir = feed / kb_id
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -293,7 +335,7 @@ async def upload_batch(
 
     feed = settings.feed_folder
     if kb_id == "default":
-        target_dir = feed
+        target_dir = feed / 'default'
     else:
         target_dir = feed / kb_id
 
@@ -324,6 +366,10 @@ async def upload_batch(
             continue
 
         target_path = target_dir / rel_path
+        if not target_path.resolve().is_relative_to(target_dir.resolve()):
+            rejected.append({'relative_path': rel_path, 'reason': 'invalid_path'})
+            await upload_file.close()
+            continue
         target_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -414,6 +460,9 @@ def list_active_upload_tasks() -> dict:
     """返回所有未完成的批量上传任务（running / paused）。"""
     metadata_db.init_db()
     tasks = metadata_db.list_active_upload_tasks()
+    from src.core import accounts
+    if accounts.enabled:
+        tasks = [t for t in tasks if accounts.owns('task', t['id']) and accounts.kb_role(t['kb_id']) in ('owner','manager','editor')]
     # 补充每个任务的 failed/skipped 文件计数（前端 banner 需要）
     for t in tasks:
         files = metadata_db.list_upload_task_files(t["id"])
@@ -546,6 +595,9 @@ async def stream_upload_task(task_id: str):
 
             # 接收订阅事件直到任务结束
             while True:
+                from src.core import accounts
+                if accounts.enabled:
+                    accounts.require_kb(snapshot['kb_id'], 'editor')
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30.0)
                 except asyncio.TimeoutError:

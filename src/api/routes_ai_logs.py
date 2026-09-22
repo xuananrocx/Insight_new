@@ -139,7 +139,8 @@ def cleanup() -> dict:
     """按 retention_days 配置清理过期日志。"""
     metadata_db.init_db()
     retention = settings.config.get("feature_flags", {}).get("ai_call_log", {}).get("retention_days", 30)
-    deleted = metadata_db.cleanup_expired_ai_call_logs(retention_days=retention)
+    import time
+    deleted = metadata_db.delete_ai_call_logs_batch(before_ts=int((time.time() - retention * 86400) * 1000))
     logger.info(f"cleanup ai_call_logs: retention={retention}d deleted={deleted}")
     return {"ok": True, "deleted": deleted, "retention_days": retention}
 

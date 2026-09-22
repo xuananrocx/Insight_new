@@ -35,6 +35,9 @@ import {
 import { cn, formatTimestamp, formatBytes } from '@/lib/utils'
 
 const SCENE_LABEL: Record<string, string> = {
+  deep_ai_tools: '深度 AI · 工具规划',
+  deep_ai_answer: '深度 AI · 生成回答',
+  knowledge_tool: '深度 AI · 查阅知识库',
   qa_chat: '问答',
   summarize: '摘要',
   concept_extract: '概念提取',
@@ -506,6 +509,16 @@ function DayChart({ data }: { data: Array<{ date: string; total: number; success
 
 // ===== 列表行 =====
 
+function errorSummary(message: string) {
+  try {
+    const detail = JSON.parse(message)
+    if (!detail?.call_id || !detail?.phase) return message
+    const cause = detail.exception_chain?.[0]
+    return [detail.phase, detail.http_status != null ? `HTTP ${detail.http_status}` : '未收到 HTTP 响应',
+      detail.response_error || cause?.message || cause?.type, `调用 ${detail.call_id}`].filter(Boolean).join(' · ')
+  } catch { return message }
+}
+
 function LogRow({
   item,
   onClick,
@@ -539,7 +552,7 @@ function LogRow({
       </div>
       <div className="flex-1 truncate font-mono text-[11px] text-muted-foreground">
         {item.error_message ? (
-          <span className="text-destructive">{item.error_message}</span>
+          <span className="text-destructive">{errorSummary(item.error_message)}</span>
         ) : (
           <span>{item.response_size ? formatBytes(item.response_size) : '-'}</span>
         )}
@@ -611,7 +624,7 @@ function DetailContent({ log }: { log: AiCallLogDetail }) {
 
       <div className="flex-1 space-y-3 overflow-y-auto -mx-5 px-5 pb-5">
         {/* 跳转到对应会话（仅 qa_chat 且有 session_id） */}
-        {log.scene === 'qa_chat' && log.session_id ? (
+        {['qa_chat', 'deep_ai_tools', 'deep_ai_answer', 'knowledge_tool'].includes(log.scene) && log.session_id ? (
           <div className="flex justify-end">
             <Button
               variant="outline"
@@ -642,7 +655,7 @@ function DetailContent({ log }: { log: AiCallLogDetail }) {
               <AlertCircle className="h-3.5 w-3.5" />
               错误信息
             </div>
-            <pre className="overflow-x-auto whitespace-pre-wrap text-[11px] text-destructive">
+            <pre className="max-h-96 overflow-auto whitespace-pre-wrap [overflow-wrap:anywhere] text-[11px] text-destructive">
               {log.error_message}
             </pre>
           </div>

@@ -20,7 +20,7 @@ const SelectTrigger = React.forwardRef<
       'hover:border-primary/40 focus:outline-none focus:ring-1 focus:ring-ring',
       'disabled:cursor-not-allowed disabled:opacity-50',
       'data-[placeholder]:font-normal data-[placeholder]:text-muted-foreground',
-      '[&>span]:truncate',
+      'min-w-0 [&>span]:truncate',
       className,
     )}
     {...props}
@@ -42,8 +42,9 @@ const SelectContent = React.forwardRef<
       ref={ref}
       position={position}
       sideOffset={4}
+      collisionPadding={8}
       className={cn(
-        'z-50 max-h-72 min-w-[8rem] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg',
+        'z-[80] max-h-[min(18rem,var(--radix-select-content-available-height))] max-w-[calc(100vw-1rem)] min-w-[max(8rem,var(--radix-select-trigger-width))] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-lg',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',
@@ -55,7 +56,7 @@ const SelectContent = React.forwardRef<
         className={cn(
           'p-1',
           position === 'popper' &&
-            'h-[var(--radix-select-content-available-height)] max-h-72 min-w-[var(--radix-select-trigger-width)] w-full',
+            'max-h-[min(18rem,var(--radix-select-content-available-height))] min-w-0 max-w-full w-full',
         )}
       >
         {children}
@@ -73,7 +74,7 @@ const SelectItem = React.forwardRef<
     ref={ref}
     className={cn(
       'relative flex w-full cursor-default select-none items-center rounded-sm py-1.5 pl-2.5 pr-7',
-      'text-[12px] text-foreground outline-none',
+      'text-[12px] text-foreground outline-none whitespace-normal [overflow-wrap:anywhere]',
       'data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground',
       'data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
       className,
@@ -90,7 +91,36 @@ const SelectItem = React.forwardRef<
 ))
 SelectItem.displayName = SelectPrimitive.Item.displayName
 
+type OptionSelectProps = {
+  value: string
+  onValueChange: (value: string) => void
+  options: { value: string; label: string; disabled?: boolean }[]
+  'aria-label': string
+  className?: string
+  disabled?: boolean
+}
+
+// Encode every value so empty options can still be selected and restored.
+function OptionSelect({ value, onValueChange, options, className, disabled, 'aria-label': label }: OptionSelectProps) {
+  const prefix = 'option:'
+  return (
+    <Select value={prefix + value} onValueChange={next => onValueChange(next.slice(prefix.length))} disabled={disabled}>
+      <SelectTrigger aria-label={label} className={className}>
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent className="w-[var(--radix-select-trigger-width)]">
+        {options.map(option => (
+          <SelectItem key={option.value} value={prefix + option.value} disabled={option.disabled}>
+            {option.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
 export {
+  OptionSelect,
   Select,
   SelectGroup,
   SelectValue,

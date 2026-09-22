@@ -18,6 +18,19 @@ def test_normalize_plain_v1_url():
     )
 
 
+def test_normalize_bare_origin_uses_v1():
+    assert _normalize_openai_base_url("https://example.test") == ("https://example.test/v1", "chat")
+    assert _normalize_openai_base_url("https://example.test/") == ("https://example.test/v1", "chat")
+    assert _normalize_openai_base_url("http://localhost:1234") == ("http://localhost:1234/v1", "chat")
+
+
+def test_normalize_explicit_endpoints_and_custom_prefixes_are_preserved():
+    for base in ("https://example.test/api/paas/v4", "https://example.test/compatible-mode/v1"):
+        assert _normalize_openai_base_url(base) == (base, "chat")
+    assert _normalize_openai_base_url("https://example.test/chat/completions") == ("https://example.test", "chat")
+    assert _normalize_openai_base_url("https://example.test/responses") == ("https://example.test", "responses")
+
+
 def test_normalize_chat_completions_suffix():
     """完整端点 /v1/chat/completions：去掉后缀。"""
     assert _normalize_openai_base_url(

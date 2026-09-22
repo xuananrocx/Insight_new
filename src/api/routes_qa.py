@@ -22,6 +22,9 @@ router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
 
 class AskRequest(BaseModel):
+    api_retry_count: int = Field(5, ge=0, le=10, strict=True)
+    strict_knowledge: bool = False
+    provider_id: str | None = None
     question: str = Field(..., min_length=1, max_length=4000)
     top_k: int | None = Field(None, ge=1, le=20)
     history: list[dict] | None = None
@@ -71,6 +74,8 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
             history=req.history,
             kb_scope=req.kb_scope,
             mode=_resolve_mode(req),
+            strict_knowledge=req.strict_knowledge,
+            api_retry_count=req.api_retry_count,
         )
     except llm_client.NoAvailableProviderError as e:
         raise HTTPException(
@@ -80,6 +85,10 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"问答失败: {e}")
 
+    from src.core import accounts
+    if accounts.enabled:
+        accounts.require_kb(req.kb_scope)
+        if accounts.selected_provider.get(): accounts.resolve_provider(accounts.selected_provider.get())
     return AskResponse(
         question=result.question,
         answer=result.answer,
@@ -111,9 +120,8 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
     """把 ask_stream 的事件流转成 SSE 格式，15s 无事件时发 ping。"""
     queue: asyncio.Queue = asyncio.Queue()
     start_time = time.time()
-    q_preview = req.question[:50].replace("\n", " ")
-    mode = _resolve_mode(req)
-    logger.info(f"ask_stream start q={q_preview!r} mode={mode} history_len={len(req.history) if req.history else 0}")
+    mode = await asyncio.to_thread(_resolve_mode, req)
+    logger.info(f"ask_stream start mode={mode}")
 
     async def producer() -> None:
         try:
@@ -125,6 +133,8 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
                 session_id=req.session_id,
                 turn_id=req.turn_id,
                 mode=mode,
+                strict_knowledge=req.strict_knowledge,
+                api_retry_count=req.api_retry_count,
             ):
                 await queue.put(evt)
         except asyncio.CancelledError:
@@ -139,27 +149,62 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
 
     final_answer_len = 0
     final_chunks = 0
+    outcome = "cancelled"
+    pending = None
+
+    def check_access():
+        from src.core import accounts
+        if accounts.enabled:
+            accounts.require_kb(req.kb_scope)
+            if accounts.selected_provider.get():
+                accounts.resolve_provider(accounts.selected_provider.get())
+
     try:
         while True:
             try:
-                evt = await asyncio.wait_for(queue.get(), timeout=15.0)
+                evt = pending if pending is not None else await asyncio.wait_for(queue.get(), timeout=15.0)
+                pending = None
             except asyncio.TimeoutError:
                 yield b": ping\n\n"
                 continue
             if evt is None:
                 break
+            # Validate once per output batch; never run SQLite on the event loop.
+            if evt.get("type") == "token":
+                texts = [evt["data"]["text"]]
+                while not queue.empty():
+                    following = queue.get_nowait()
+                    if following is None:
+                        queue.put_nowait(None)
+                        break
+                    if following.get("type") != "token":
+                        pending = following
+                        break
+                    texts.append(following["data"]["text"])
+                evt = {"type": "token", "data": {"text": "".join(texts)}}
+            if evt.get('type') != 'error':
+                try:
+                    await asyncio.wait_for(asyncio.to_thread(check_access), 5)
+                except HTTPException as exc:
+                    evt = {'type':'error','data':{'message':exc.detail}}
+                except asyncio.TimeoutError:
+                    evt = {'type':'error','data':{'message':'权限检查超时，请稍后重试。'}}
             evt_type = evt.get("type", "message")
             data = evt.get("data", {})
             if evt_type == "done":
+                outcome = data.get("outcome", "success")
                 final_answer_len = len(data.get("answer", "")) if isinstance(data, dict) else 0
                 final_chunks = data.get("used_chunks", 0) if isinstance(data, dict) else 0
+            elif evt_type == "error":
+                outcome = "failed"
             payload = f"event: {evt_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
             yield payload.encode("utf-8")
             if evt_type == "done" or evt_type == "error":
                 break
     finally:
         duration_ms = (time.time() - start_time) * 1000
-        logger.info(f"ask_stream done {duration_ms:.0f}ms chunks={final_chunks} answer_len={final_answer_len}")
+        logger.info("ask_stream finished session=%s turn=%s outcome=%s %.0fms chunks=%s answer_len=%s",
+                    req.session_id, req.turn_id, outcome, duration_ms, final_chunks, final_answer_len)
         if not producer_task.done():
             producer_task.cancel()
             try:
@@ -198,6 +243,7 @@ async def ask_stream_endpoint(req: AskRequest):
 
 
 class SummarizeTitleRequest(BaseModel):
+    provider_id: str | None = None
     question: str = Field(..., min_length=1, max_length=4000)
     answer: str = Field("", max_length=8000)
     session_id: str | None = None  # 用于 AI 日志关联

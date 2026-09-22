@@ -61,3 +61,7 @@ python-magic==0.4.27 ; sys_platform != "win32"       # Mac/Linux
 pytest==8.3.4
 pytest-asyncio==0.25.0
 ruff==0.8.4                    # linter/formatter
+
+# Account security
+argon2-cffi>=23.1,<26
+cryptography>=44,<51

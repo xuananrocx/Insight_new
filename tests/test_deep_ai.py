@@ -1,4 +1,4 @@
-"""Exercise the entire deep-AI stream with deterministic model/provider responses."""
+"""Regression coverage of the retained legacy deep-AI pipeline (not the live entry)."""
 import asyncio
 import json
 
@@ -47,7 +47,7 @@ def setup(monkeypatch, responses, hits=None):
 
 
 async def collect(history=None, question="它的接入步骤是什么"):
-    return [e async for e in rag.ask_stream(question, history, "kb_one", mode="deep_ai")]
+    return [e async for e in deep_ai.ask_stream(question, history, "kb_one", top_k=None, session_id=None, turn_id=None)]
 
 
 def done(events):

@@ -13,7 +13,7 @@ export const RETRIEVAL_MODES: { key: RetrievalMode; label: string; desc: string 
   { key: 'basic', label: '基础检索', desc: '扩大召回、精确词匹配与去重，不调用 AI' },
   { key: 'deep', label: '深度检索', desc: '重排相关资料、补全段落与分散来源，不调用 AI' },
   { key: 'ai', label: 'AI 增强', desc: '检索后由 AI 基于知识库生成流式回答' },
-  { key: 'deep_ai', label: '深度AI', desc: '结合对话理解问题、按需补查证据并核验引用，适合复杂问题，耗时更长' },
+  { key: 'deep_ai', label: '深度AI', desc: 'AI 主动检索和阅读知识库，结合明确标注的通用知识与推断作答，需要 API 支持工具调用' },
 ]
 
 type Props = {

@@ -1488,9 +1488,10 @@ def get_stats(kb_id: str | None = None) -> dict[str, Any]:
             params,
         )
         row = cur.fetchone()
-        cur.execute("SELECT COUNT(*) AS c FROM feedback_queue WHERE status='pending'")
+        scope, scope_args = _owner_scope('feedback')
+        cur.execute(f"SELECT COUNT(*) AS c FROM feedback_queue WHERE status='pending' AND {scope}", scope_args)
         fb = cur.fetchone()
-        cur.execute("SELECT COUNT(*) AS c FROM feedback_queue WHERE status='approved'")
+        cur.execute(f"SELECT COUNT(*) AS c FROM feedback_queue WHERE status='approved' AND {scope}", scope_args)
         approved = cur.fetchone()
         return {
             "files_total": row["total"] or 0,
@@ -1526,14 +1527,18 @@ def enqueue_feedback(
             """,
             (question, answer, json.dumps(sources, ensure_ascii=False), used_provider, rating, user_comment),
         )
-        return int(cur.fetchone()["id"])
+        fid = int(cur.fetchone()["id"])
+        from src.core import accounts
+        accounts.claim("feedback", str(fid), cur=cur)
+        return fid
 
 
 def list_feedback(status: str = "pending", limit: int = 100) -> list[dict]:
+    scope, scope_args = _owner_scope("feedback")
     with get_cursor() as cur:
         cur.execute(
-            "SELECT * FROM feedback_queue WHERE status=? ORDER BY id DESC LIMIT ?",
-            (status, limit),
+            f"SELECT * FROM feedback_queue WHERE status=? AND {scope} ORDER BY id DESC LIMIT ?",
+            (status,*scope_args,limit),
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -1622,19 +1627,22 @@ def create_session(
             """,
             (session_id, title[:80] or "未命名会话", created_at, updated_at, kb_scope, retrieval_mode),
         )
+        from src.core import accounts
+        accounts.claim("session", session_id, cur=cur)
 
 
 def list_sessions(limit: int = 200) -> list[dict]:
     """列表（不含 turns，节省带宽）。"""
+    scope, scope_args = _owner_scope("session")
     with get_cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode
-            FROM sessions
+            FROM sessions WHERE {scope}
             ORDER BY updated_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (*scope_args,limit),
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -1917,19 +1925,28 @@ def create_kb(
             """,
             (kb_id, name[:100] or "未命名知识库", description[:500] or None, collection_name, source, embedding_model, embedding_dim, 1 if is_default else 0, now_ms, now_ms),
         )
+        from src.core import accounts
+        accounts.claim("kb", kb_id, cur=cur)
 
 
 def list_kbs(limit: int = 100) -> list[dict]:
     """列表（不含 documents）。"""
+    from src.core import accounts
+    current = accounts.identity.get()
+    scope = "1=1"
+    scope_args = []
+    if current:
+        scope_args = accounts.visible_kb_ids()
+        scope = "id IN (" + ','.join('?' for _ in scope_args) + ")" if scope_args else "0=1"
     with get_cursor() as cur:
         cur.execute(
-            """
+            f"""
             SELECT id, name, description, collection_name, source, embedding_model, embedding_dim, is_default, created_at, updated_at
-            FROM kbs
+            FROM kbs WHERE {scope}
             ORDER BY is_default DESC, updated_at DESC
             LIMIT ?
             """,
-            (limit,),
+            (*scope_args,limit),
         )
         return [dict(r) for r in cur.fetchall()]
 
@@ -2164,6 +2181,8 @@ def create_upload_task(
                 (task_id, kb_id, skip_mode, 1 if auto_ingest else 0, len(files),
                  status, 1 if upload_complete else 0, now_ms, now_ms),
             )
+            from src.core import accounts
+            accounts.claim("task", task_id, cur=cur)
             for f in files:
                 cur.execute(
                     """INSERT INTO upload_task_files
@@ -2386,6 +2405,8 @@ def insert_ai_call_log(
     session_id: str | None = None,
     turn_id: str | None = None,
     kb_id: str | None = None,
+    owner_id: str | None = None,
+    provider_id: str | None = None,
 ) -> int:
     """记录一次 AI 调用。返回插入的 id。
 
@@ -2418,7 +2439,12 @@ def insert_ai_call_log(
                 now_ms,
             ),
         )
-        return cur.lastrowid or 0
+        log_id = cur.lastrowid or 0
+        from src.core import accounts
+        accounts.claim("log", str(log_id), cur=cur, owner_id=owner_id)
+        if accounts.enabled and provider_id:
+            cur.execute("INSERT INTO permission_call_usage VALUES (?,?)",(log_id,provider_id))
+        return log_id
 
 
 def get_ai_call_log(log_id: int) -> dict[str, Any] | None:
@@ -2454,8 +2480,9 @@ def list_ai_call_logs(
 
     列表用简略视图（不含大字段），详情用 get_ai_call_log。
     """
-    where_parts: list[str] = []
-    params: list[Any] = []
+    scope, scope_args = _owner_scope("log")
+    where_parts: list[str] = [scope]
+    params: list[Any] = scope_args
     if provider:
         where_parts.append("provider=?")
         params.append(provider)
@@ -2520,8 +2547,9 @@ def delete_ai_call_logs_batch(
     - provider: 删除指定 provider 的
     - scene: 删除指定 scene 的
     """
-    where_parts: list[str] = []
-    params: list[Any] = []
+    scope, scope_args = _owner_scope("log")
+    where_parts: list[str] = [scope]
+    params: list[Any] = scope_args
     if before_ts is not None:
         where_parts.append("created_at<?")
         params.append(before_ts)
@@ -2568,8 +2596,9 @@ def get_ai_call_log_stats(
         by_day: [{date, total, success, failed}],  # 按天聚合（最近 30 天）
     }
     """
-    where_parts: list[str] = []
-    params: list[Any] = []
+    scope, scope_args = _owner_scope("log")
+    where_parts: list[str] = [scope]
+    params: list[Any] = scope_args
     if start_ts is not None:
         where_parts.append("created_at>=?")
         params.append(start_ts)
@@ -2649,3 +2678,11 @@ def cleanup_expired_ai_call_logs(retention_days: int = 30) -> int:
     """清理超过保留期的日志。返回清理的行数。"""
     threshold_ms = int((datetime.now(timezone.utc).timestamp() - retention_days * 86400) * 1000)
     return delete_ai_call_logs_batch(before_ts=threshold_ms)
+
+
+def _owner_scope(kind: str, column: str = "id") -> tuple[str, list]:
+    from src.core import accounts
+    current = accounts.identity.get()
+    if not current:
+        return "1=1", []
+    return f"{column} IN (SELECT object_id FROM auth_objects WHERE kind=? AND owner_id=?)", [kind,current['id']]

@@ -273,77 +273,21 @@ class UpdateProviderRequest(BaseModel):
 @router.get("/llm_providers", response_model=LLMProvidersResponse)
 def get_llm_providers() -> LLMProvidersResponse:
     """获取所有 LLM providers 状态。"""
-    client = llm_client.get_client()
-    health = llm_client.health_check()
-
-    providers_info = []
-    for name, info in health["providers"].items():
-        # 从配置中获取更多信息
-        provider_cfg = settings.config["llm"]["providers"].get(name, {})
-
-        # 生成 API Key 预览（前 8 位）+ 完整 key（用于编辑框预填）
-        api_key_preview = None
-        full_api_key = None
-        if info["api_key_configured"]:
-            api_key = settings.resolve_api_key(provider_cfg)
-            if api_key:
-                full_api_key = api_key
-                if len(api_key) >= 8:
-                    api_key_preview = f"{api_key[:8]}..."
-
-        providers_info.append(
-            LLMProviderInfo(
-                name=name,
-                has_chat=info["has_chat"],
-                has_embedding=info["has_embedding"],
-                api_key_configured=info["api_key_configured"],
-                api_key_preview=api_key_preview,
-                api_key=full_api_key,
-                protocol=provider_cfg.get("protocol", "openai"),
-                base_url=provider_cfg.get("base_url"),
-                chat_model=provider_cfg.get("chat_model"),
-                is_active=health.get("current_chat_provider") == name,
-            )
-        )
-
-    return LLMProvidersResponse(
-        current_provider=health.get("current_chat_provider", ""),
-        providers=providers_info,
-        fallback_chain=health.get("fallback_chain", []),
-    )
+    from src.api.routes_accounts import providers
+    data = providers()
+    current = data['default_provider'] or ''
+    return LLMProvidersResponse(current_provider=current, fallback_chain=[], providers=[LLMProviderInfo(
+        name=p['id'],has_chat=True,has_embedding=False,api_key_configured=p['has_api_key'],
+        api_key_preview=None,api_key=None,protocol=p['protocol'],base_url=p['base_url'],
+        chat_model=p['chat_model'],is_active=p['id']==current
+    ) for p in data['items'] if p['usable']])
 
 
 @router.post("/llm_providers/switch")
 def switch_provider(req: SwitchProviderRequest) -> LLMProvidersResponse:
     """切换活跃的 LLM provider。"""
-    provider_name = req.provider_name
-    logger.info(f"LLM Provider: 切换到 {provider_name}")
-
-    # 验证 provider 存在且可用
-    providers = settings.config["llm"]["providers"]
-    if provider_name not in providers:
-        logger.warning(f"LLM Provider: 切换失败，provider '{provider_name}' 不存在")
-        raise HTTPException(status_code=404, detail=f"Provider '{provider_name}' 不存在")
-
-    provider_cfg = providers[provider_name]
-
-    # 检查 API key
-    api_key = settings.resolve_api_key(provider_cfg)
-    if not api_key and provider_name != "local":
-        logger.warning(f"LLM Provider: 切换失败，provider '{provider_name}' 缺少 API key")
-        raise HTTPException(status_code=400, detail=f"Provider '{provider_name}' 缺少 API key")
-
-    # 切换 provider
-    try:
-        _save_provider_to_config(provider_name)
-        # 重置 client 单例，强制重新初始化
-        llm_client.reset_client()
-        logger.info(f"LLM Provider: 成功切换到 {provider_name}")
-    except Exception as e:
-        logger.error(f"LLM Provider: 切换到 {provider_name} 失败: {e}")
-        raise HTTPException(status_code=500, detail=f"切换失败: {e}")
-
-    # 返回更新后的状态
+    from src.api.routes_accounts import choose_provider, DefaultProvider
+    choose_provider(DefaultProvider(provider_id=req.provider_name))
     return get_llm_providers()
 
 
@@ -661,8 +605,10 @@ def _resolve_default_kb() -> tuple[str | None, str | None, str]:
 @router.get("/default_kb", response_model=DefaultKbInfo)
 def get_default_kb() -> DefaultKbInfo:
     """读取当前默认知识库。"""
-    kb_id, name, source = _resolve_default_kb()
-    return DefaultKbInfo(kb_id=kb_id, name=name, source=source)
+    from src.core import accounts
+    available = accounts.db.list_kbs()
+    kb = available[0] if available else None
+    return DefaultKbInfo(kb_id=kb['id'] if kb else None, name=kb['name'] if kb else None, source='account')
 
 
 @router.put("/default_kb", response_model=DefaultKbInfo)

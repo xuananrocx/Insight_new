@@ -111,8 +111,8 @@ export function ChatHistory() {
   }
 
   return (
-    <div className="flex flex-col">
-      <div className="flex items-center justify-between px-2 py-1">
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center justify-between px-2 py-1">
         <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
           历史会话
         </span>
@@ -155,7 +155,7 @@ export function ChatHistory() {
       />
 
       {ctx.sessions.length > 5 ? (
-        <div className="mb-1.5 px-2">
+        <div className="mb-1.5 shrink-0 px-2">
           <div className="flex items-center gap-1.5 rounded-md bg-muted/40 px-2 py-1">
             <Search className="h-3 w-3 text-muted-foreground" />
             <input
@@ -177,7 +177,7 @@ export function ChatHistory() {
           未匹配到「{query}」
         </div>
       ) : (
-        <div className="max-h-[280px] space-y-0.5 overflow-y-auto px-1.5">
+        <div aria-label="历史会话列表" className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-1.5">
           {groups.map((group) => (
             <div key={group.label} className="mb-1">
               <div className="px-2 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground/70">

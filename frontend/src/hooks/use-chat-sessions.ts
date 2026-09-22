@@ -1,3 +1,4 @@
+import { accountKey } from '@/lib/account-api'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -6,7 +7,7 @@ import { api, type PersistedTurn, type QaSource, type QaTraceStage, type Retriev
 export type ThinkingState = {
   stages: QaTraceStage[]
   partialAnswer: string
-  status: 'streaming' | 'done' | 'stopped' | 'error' | 'cancelled'
+  status: 'streaming' | 'done' | 'partial' | 'stopped' | 'error' | 'cancelled'
   startedAt: number
   elapsedMs?: number
   warmup?: string
@@ -32,7 +33,7 @@ export type ChatSession = Omit<SessionSummary, 'turn_count'> & {
   turns: ChatTurn[]
 }
 
-const ACTIVE_KEY = 'amd-ui-chat-active'
+function activeKey() { return accountKey('amd-ui-chat-active') }
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
@@ -73,7 +74,7 @@ export function useChatSessions() {
   const qc = useQueryClient()
   const [activeId, setActiveId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null
-    return localStorage.getItem(ACTIVE_KEY) || null
+    return localStorage.getItem(activeKey()) || null
   })
   // 本地 turns state，封装 sessionId 防止跨会话污染
   const [turnsState, setTurnsState] = useState<{ sessionId: string; turns: ChatTurn[] } | null>(null)
@@ -103,8 +104,8 @@ export function useChatSessions() {
 
   // activeId 持久化到 localStorage
   useEffect(() => {
-    if (activeId) localStorage.setItem(ACTIVE_KEY, activeId)
-    else localStorage.removeItem(ACTIVE_KEY)
+    if (activeId) localStorage.setItem(activeKey(), activeId)
+    else localStorage.removeItem(activeKey())
   }, [activeId])
 
   // activeSession 计算时严格检查 detailQuery.data.id 匹配（避免切换瞬间显示上一个会话数据）
@@ -329,7 +330,7 @@ export function useChatSessions() {
   }, [activeId])
 
   const appendTurn = useCallback(
-    (id: string, turn: ChatTurn) => {
+    async (id: string, turn: ChatTurn) => {
       _updateTurns(id, (turns) => [...turns, turn])
       // 同步更新 detail cache，确保流式中切走再切回时 fallback 到 cache 能拿到 turn
       // 否则 detail cache 里 turns=[] → activeSession.turns=[] → 显示空状态 UI
@@ -354,11 +355,8 @@ export function useChatSessions() {
           } as PersistedTurn & { thinking?: ThinkingState }],
         }
       })
-      // 异步 POST 到 API（fire-and-forget）
-      addTurnMutation.mutate(
-        { sessionId: id, payload: chatTurnToAddRequest(turn, Date.now()) },
-        { onError: (e) => console.error('appendTurn POST failed', e) },
-      )
+      // Create before sending the question, so a fast failure cannot PATCH a missing turn.
+      await addTurnMutation.mutateAsync({ sessionId: id, payload: chatTurnToAddRequest(turn, Date.now()) })
     },
     [_updateTurns, addTurnMutation],
   )

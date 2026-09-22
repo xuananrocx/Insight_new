@@ -13,7 +13,10 @@ import logging
 import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
+from src.api.access import AuthenticationMiddleware, authorize
+from src.api.routes_accounts import router as accounts_router
+from src.core import accounts
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -46,12 +49,19 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title=settings.app_name,
     version=__version__,
-    docs_url="/docs",
-    redoc_url="/redoc",
+    dependencies=[Depends(authorize)],
+    docs_url=None,
+    openapi_url=None,
+    redoc_url=None,
 )
 
 
 # 全局异常处理器：业务异常转中文 HTTP 响应
+app.add_middleware(AuthenticationMiddleware)
+from src.api.routes_permissions import router as permissions_router
+app.include_router(permissions_router)
+app.include_router(accounts_router)
+
 @app.exception_handler(EmbeddingDimensionMismatchError)
 async def _handle_dim_mismatch(request: Request, exc: EmbeddingDimensionMismatchError):
     logger.warning(
@@ -108,9 +118,9 @@ _ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
-    allow_credentials=False,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    allow_headers=["Content-Type", "Authorization", "X-CSRF-Token", "X-Insight-Request"],
 )
 
 
@@ -135,6 +145,7 @@ def _on_startup() -> None:
     settings.ensure_data_dirs()
     # 初始化数据库 + schema 迁移
     metadata_db.init_db()
+    accounts.init_auth()
 
     # BM25 依赖预检：缺失时 ingest 的 add_chunks 会静默失败（只记 warning），
     # 历史上因此建过空索引，这里显式报错提醒安装
@@ -256,17 +267,9 @@ class HealthResponse(BaseModel):
 # ===== 健康检查 =====
 
 
-@app.get("/health", response_model=HealthResponse)
-def health() -> HealthResponse:
-    return HealthResponse(
-        status="ok",
-        version=__version__,
-        app_name=settings.app_name,
-        vector_db=vector_store.health_check(),
-        llm=llm_client.health_check(),
-        feed_folder=str(settings.feed_folder),
-        feature_flags=settings.config.get("feature_flags", {}),
-    )
+@app.get("/health")
+def health() -> dict:
+    return {"status": "ok"}
 
 
 @app.get("/api/info")
@@ -393,7 +396,13 @@ def embedding_rebuild_and_switch(req: EmbeddingSwitchRequest) -> dict:
 def embedding_rebuild_status() -> dict:
     """查询重建进度。"""
     from src.knowledge import rebuild
-    return rebuild.get_status()
+    status = rebuild.get_status()
+    # System settings viewers have no implicit access to private file names or error fragments.
+    if accounts.enabled:
+        status['current_file'] = ''
+        status['stage'] = {'idle':'空闲','in_progress':'系统向量重建中','succeeded':'完成','failed':'失败，请联系服务器维护人员查看运行日志'}.get(status.get('status'),'处理中')
+        if status.get('error'): status['error'] = '重建失败，详细信息保留在服务器运行日志中'
+    return status
 
 
 class EmbeddingCacheConfigRequest(BaseModel):
@@ -436,7 +445,9 @@ if FRONTEND_DIST.exists():
             raise HTTPException(status_code=404, detail="Not Found")
 
         # 1. 直接命中静态文件（如 favicon.ico、logo.png）
-        candidate = FRONTEND_DIST / full_path
+        candidate = (FRONTEND_DIST / full_path).resolve()
+        if not candidate.is_relative_to(FRONTEND_DIST.resolve()):
+            raise HTTPException(404, "Not found")
         if candidate.is_file():
             return FileResponse(candidate)
 

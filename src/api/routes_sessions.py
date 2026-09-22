@@ -53,6 +53,14 @@ def _trim_sources(sources: list[dict] | None, long_content: bool = False) -> lis
             item["score_pct"] = int(s["score_pct"])
         if isinstance(s.get("merged_chunks"), int):
             item["merged_chunks"] = s["merged_chunks"]
+        # Preserve the evidence snapshot identity when a document is later changed or removed.
+        for key in ("citation_id", "document_id", "section_index", "offset", "page"):
+            if isinstance(s.get(key), (str, int)):
+                item[key] = str(s[key])[:128] if isinstance(s[key], str) else s[key]
+        if isinstance(s.get("content_hash"), str):
+            item["content_hash"] = s["content_hash"][:128]
+        if isinstance(s.get("chunk_ids"), list):
+            item["chunk_ids"] = [c[:200] for c in s["chunk_ids"][:10000] if isinstance(c, str)]
         content = s.get("content") or s.get("text_snippet") or ""
         if isinstance(content, str):
             item["content"] = content[:content_max]
@@ -212,7 +220,7 @@ def create_session(req: CreateSessionRequest) -> dict:
         if "UNIQUE constraint failed" in msg:
             raise HTTPException(status_code=409, detail="会话 ID 已存在")
         raise HTTPException(status_code=500, detail=f"创建失败: {e}")
-    logger.info(f"create session id={req.id} title={req.title!r} mode={req.retrieval_mode}")
+    logger.info(f"create session id={req.id} mode={req.retrieval_mode}")
     return {
         "id": req.id,
         "title": req.title,

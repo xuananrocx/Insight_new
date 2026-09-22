@@ -1,3 +1,4 @@
+import { useAuth } from '@/hooks/use-auth'
 import { Plus } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 
@@ -6,12 +7,13 @@ import { ThemeToggle } from '@/components/theme-toggle'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 
 export function Topbar() {
+  const { user, logout } = useAuth()
   const ctx = useChatSessionsCtx()
   const navigate = useNavigate()
 
   return (
     <header className="flex h-12 items-center justify-between border-b bg-background px-4">
-      <div className="flex items-center gap-2">
+      <div className="hidden items-center gap-2 sm:flex">
         <span className="text-[12px] text-muted-foreground">Workspace</span>
         <span className="text-[12px] text-muted-foreground">/</span>
         <span className="text-[13px] font-medium">Insight</span>
@@ -31,6 +33,8 @@ export function Topbar() {
           <Plus className="h-3.5 w-3.5" />
           <span>新提问</span>
         </Button>
+        <Button size="sm" variant="ghost" onClick={() => navigate("/settings")}>{user.username}</Button>
+        <Button size="sm" variant="ghost" onClick={logout}>退出登录</Button>
         <ThemeToggle />
       </div>
     </header>

@@ -23,9 +23,9 @@ export function CitationSources({ sources, prefix, selection }: {
       const path = text(source, 'source_path', 'file_path', 'rel_path') || text(metadata, 'source_path', 'file_path', 'rel_path')
       const version = text(source, 'version') || text(metadata, 'version')
       const kb = text(source, 'kb_id', 'kb_scope') || text(metadata, 'kb_id', 'kb_scope')
-      const fileId = source.file_id ?? metadata.file_id
+      const fileId = source.document_id ?? source.file_id ?? metadata.file_id
       // A title alone is not a document identity; unknown sources stay separate.
-      const key = JSON.stringify([kb, fileId ?? (path || `unknown-${index}`), path, version])
+      const key = JSON.stringify([kb, fileId ?? (path || `unknown-${index}`), path, version, text(source, 'content_hash')])
       let group = result.get(key)
       if (!group) {
         group = { key, title: text(source, 'source_name', 'title') || text(metadata, 'file_name') || '未知来源', path, version, kb, entries: [] }

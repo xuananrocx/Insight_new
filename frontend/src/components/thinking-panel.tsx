@@ -22,7 +22,7 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
   const duration = isStreaming ? elapsedMs : thinking.elapsedMs
   const timing = duration == null ? '' : ` · ${(duration / 1000).toFixed(1)}s`
   const partial = isStreaming ? thinking.partialAnswer?.trim() : ''
-  const statusLabel = thinking.status === 'done' ? '已完成' : thinking.status === 'error' ? '未完成' : '已停止'
+  const statusLabel = thinking.status === 'done' ? '已完成' : thinking.status === 'partial' ? '部分完成' : thinking.status === 'error' ? '未完成' : '已停止'
   const latestStage = thinking.stages.at(-1)?.label
   const label = isStreaming
     ? `${showDetails ? '思考中' : '生成中'}${showDetails && latestStage ? ` · ${latestStage}` : ''}${timing}`

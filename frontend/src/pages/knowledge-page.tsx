@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { useAuth } from '@/hooks/use-auth'
 import { Card } from '@/components/ui/card'
 import { BatchUploadDialog } from '@/components/batch-upload-dialog'
 import { InterruptedTasksBanner } from '@/components/interrupted-tasks-banner'
@@ -56,6 +57,7 @@ function fileInfo(f: KnowledgeFile) {
 }
 
 export function KnowledgePage() {
+  const { can } = useAuth()
   const qc = useQueryClient()
   const [scanMsg, setScanMsg] = useState<string | null>(null)
   const [selectedKbId, setSelectedKbId] = useState<string | null>(null)
@@ -167,6 +169,8 @@ export function KnowledgePage() {
   const s = stats.data
   const fileList = files.data ?? []
   const currentKb = kbList.data?.find((kb) => kb.id === selectedKbId)
+  const canEdit = ["owner", "manager", "editor"].includes(currentKb?.role || "")
+  const canManage = ["owner", "manager"].includes(currentKb?.role || "")
   const currentKbName = currentKb?.name ?? '默认'
 
   return (
@@ -239,8 +243,8 @@ export function KnowledgePage() {
             variant="outline"
             size="sm"
             className="gap-1.5 text-[12px]"
+            disabled={!canEdit || !selectedKbId}
             onClick={() => setBatchOpen(true)}
-            disabled={!selectedKbId}
             title={!selectedKbId ? '请先选择知识库' : '支持单文件/多文件/文件夹，含进度与重试'}
           >
             <FileUp className="h-3.5 w-3.5" />
@@ -252,7 +256,7 @@ export function KnowledgePage() {
               size="sm"
               className="gap-1.5 border-destructive/40 text-[12px] text-destructive hover:bg-destructive/10"
               onClick={() => setClearFailedOpen(true)}
-              disabled={clearFailedMutation.isPending}
+              disabled={!canManage || clearFailedMutation.isPending}
               title="清理当前 KB 内所有失败文件（跨 task）"
             >
               {clearFailedMutation.isPending ? (
@@ -267,7 +271,7 @@ export function KnowledgePage() {
             size="sm"
             className="gap-1.5 text-[12px]"
             onClick={() => scanMutation.mutate()}
-            disabled={scanMutation.isPending || !selectedKbId}
+            disabled={!canEdit || scanMutation.isPending || !selectedKbId}
             title={!selectedKbId ? '请先选择知识库' : undefined}
           >
             {scanMutation.isPending ? (
@@ -359,7 +363,7 @@ export function KnowledgePage() {
               size="sm"
               className="h-7 gap-1 text-[11px] text-muted-foreground"
               onClick={() => selectedKbId && openFolderMutation.mutate(selectedKbId)}
-              disabled={!selectedKbId || openFolderMutation.isPending}
+              disabled={!can('system.edit') || !selectedKbId || openFolderMutation.isPending}
               title={currentKb?.feed_path || '打开该知识库的投喂目录'}
             >
               <FolderOpen className="h-3 w-3" />
@@ -396,7 +400,7 @@ export function KnowledgePage() {
                   size="sm"
                   className="h-7 gap-1 text-[11px] text-muted-foreground"
                   onClick={() => selectedKbId && openFolderMutation.mutate(selectedKbId)}
-                  disabled={openFolderMutation.isPending}
+                  disabled={!can('system.edit') || openFolderMutation.isPending}
                 >
                   <FolderOpen className="h-3 w-3" />
                   打开目录
@@ -440,6 +444,7 @@ export function KnowledgePage() {
                   >
                     {STATUS_LABEL[f.status] ?? f.status}
                   </span>
+                  {currentKb?.capabilities.includes('download') && <Button size="sm" variant="ghost" asChild><a href={`/api/v1/knowledge/download/${f.id}?kb_id=${encodeURIComponent(currentKb.id)}`}>下载</a></Button>}
                   <Button
                     variant="ghost"
                     size="icon"
@@ -448,7 +453,7 @@ export function KnowledgePage() {
                       const name = f.relative_path.split('/').pop() || f.relative_path
                       setDeleteFileTarget({ relPath: f.relative_path, name })
                     }}
-                    disabled={deleteMutation.isPending}
+                    disabled={!canEdit || deleteMutation.isPending}
                     title="删除"
                   >
                     <Trash2 className="h-3.5 w-3.5" />

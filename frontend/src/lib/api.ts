@@ -1,3 +1,5 @@
+import { apiFetch } from '@/lib/account-api'
+
 const API_BASE = '/api/v1'
 
 // ===== SSE 流解析工具（askStream / importPackStream 共用）=====
@@ -79,6 +81,9 @@ export type KnowledgeFilesResponse = {
 }
 
 export type KB = {
+  capabilities: string[]
+  scope: string
+  role?: string
   id: string
   name: string
   description: string | null
@@ -263,6 +268,9 @@ export type QaAnswer = {
 }
 
 export type QaStreamDone = {
+  outcome?: 'success' | 'partial'
+  reason?: string
+  verification?: string
   answer: string
   trace: QaTraceStage[]
   sources: QaSource[]
@@ -298,7 +306,7 @@ export type QaStreamCallbacks = {
   onResults?: (data: QaStreamResults) => void
   onToken?: (token: string) => void
   onDone?: (data: QaStreamDone) => void
-  onError?: (data: { message: string; partial?: string; rebuildInProgress?: boolean }) => void
+  onError?: (data: { message: string; partial?: string; trace?: QaTraceStage[]; rebuildInProgress?: boolean }) => void
   onCancelled?: () => void
 }
 
@@ -554,7 +562,7 @@ async function request<T>(path: string, init?: RequestInit & { timeoutMs?: numbe
   const { timeoutMs = 30_000, ...rest } = init ?? {}
   let res: Response
   try {
-    res = await fetch(`${API_BASE}${path}`, {
+    res = await apiFetch(`${API_BASE}${path}`, {
       headers: { 'Content-Type': 'application/json' },
       signal: AbortSignal.timeout(timeoutMs),
       ...rest,
@@ -619,7 +627,7 @@ export const api = {
       const form = new FormData()
       form.append('file', file)
       const qs = kbId ? `?kb_id=${encodeURIComponent(kbId)}` : ''
-      const res = await fetch(`${API_BASE}/knowledge/upload${qs}`, {
+      const res = await apiFetch(`${API_BASE}/knowledge/upload${qs}`, {
         method: 'POST',
         body: form,
       })
@@ -653,7 +661,7 @@ export const api = {
       }
       params.files.forEach((f) => form.append('files', f))
 
-      const res = await fetch(`${API_BASE}/knowledge/upload_batch`, {
+      const res = await apiFetch(`${API_BASE}/knowledge/upload_batch`, {
         method: 'POST',
         body: form,
         signal: AbortSignal.timeout(10 * 60_000),  // 上传大文件可以慢
@@ -716,7 +724,7 @@ export const api = {
       signal?: AbortSignal,
     ): Promise<void> => {
       try {
-        const res = await fetch(
+        const res = await apiFetch(
           `${API_BASE}/knowledge/upload_tasks/${taskId}/stream`,
           { method: 'GET', signal },
         )
@@ -903,7 +911,7 @@ export const api = {
     precheckImport: async (file: File): Promise<KbImportPrecheck> => {
       const form = new FormData()
       form.append('file', file)
-      const res = await fetch(`${API_BASE}/kbs/import?check_only=true`, {
+      const res = await apiFetch(`${API_BASE}/kbs/import?check_only=true`, {
         method: 'POST',
         body: form,
       })
@@ -923,7 +931,7 @@ export const api = {
       if (opts.newName) params.set('new_name', opts.newName)
       if (opts.forceRebuild) params.set('force_rebuild', 'true')
       const qs = params.toString() ? `?${params.toString()}` : ''
-      const res = await fetch(`${API_BASE}/kbs/import${qs}`, {
+      const res = await apiFetch(`${API_BASE}/kbs/import${qs}`, {
         method: 'POST',
         body: form,
       })
@@ -951,7 +959,7 @@ export const api = {
       if (opts.newName) params.set('new_name', opts.newName)
       if (opts.forceRebuild) params.set('force_rebuild', 'true')
       const qs = params.toString() ? `?${params.toString()}` : ''
-      const res = await fetch(`${API_BASE}/kbs/import_stream${qs}`, {
+      const res = await apiFetch(`${API_BASE}/kbs/import_stream${qs}`, {
         method: 'POST',
         body: form,
         signal,
@@ -1016,15 +1024,22 @@ export const api = {
       turnId?: string,
       topK?: number,
       mode?: RetrievalMode,
+      providerId?: string,
+      strictKnowledge?: boolean,
+      apiRetryCount = 5,
     ): Promise<void> => {
+     let terminal = false
      try {
-      const res = await fetch(`${API_BASE}/qa/ask_stream`, {
+      const res = await apiFetch(`${API_BASE}/qa/ask_stream`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           question,
           history,
           kb_scope: kbScope,
+          provider_id: providerId,
+          strict_knowledge: strictKnowledge ?? false,
+          api_retry_count: apiRetryCount,
           session_id: sessionId,
           turn_id: turnId,
           top_k: topK,
@@ -1062,6 +1077,7 @@ export const api = {
       let buffer = ''
 
       const dispatchBlock = (block: string) => {
+        if (terminal) return
         const parsed = parseSseBlock(block)
         if (!parsed) return
         const { event: evtType, data: payload } = parsed
@@ -1082,9 +1098,11 @@ export const api = {
             cb.onToken?.((payload as { text?: string })?.text ?? '')
             break
           case 'done':
+            terminal = true
             cb.onDone?.(payload as QaStreamDone)
             break
           case 'error':
+            terminal = true
             cb.onError?.(
               payload as { message: string; partial?: string; rebuildInProgress?: boolean },
             )
@@ -1098,19 +1116,23 @@ export const api = {
           if (done) break
           buffer += decoder.decode(value, { stream: true })
           buffer = drainSseBuffer(buffer, dispatchBlock)
+          if (terminal) break
         }
         // 流结束时的残余 buffer：尝试当一帧解析（parseSseBlock 已兼容多行 data:）
         if (buffer.trim()) {
           dispatchBlock(buffer.trim())
         }
+        if (!terminal) throw new Error('连接已中断，回答未完整结束。已保留收到的内容，请重试。')
       } finally {
         try {
+          await reader.cancel()
           reader.releaseLock()
         } catch {
           // ignore
         }
       }
      } catch (e: any) {
+      if (terminal) return
       // U-1: 区分 AbortError（用户主动取消）vs 真实网络错误
       if (e?.name === 'AbortError') {
         cb.onCancelled?.()
@@ -1121,10 +1143,10 @@ export const api = {
       cb.onError?.({ message: e?.message || '网络错误' })
      }
     },
-    summarizeTitle: (question: string, answer: string) =>
+    summarizeTitle: (question: string, answer: string, providerId?: string, sessionId?: string) =>
       request<{ title: string }>('/qa/summarize-title', {
         method: 'POST',
-        body: JSON.stringify({ question, answer }),
+        body: JSON.stringify({ question, answer, provider_id: providerId, session_id: sessionId }),
         timeoutMs: 90_000,  // 调 LLM，可能慢
       }),
   },
@@ -1329,7 +1351,7 @@ export const api = {
       }),
     // 导出单会话 → 返回 Blob（含 Content-Disposition 文件名）
     exportOne: async (id: string): Promise<{ blob: Blob; filename: string }> => {
-      const res = await fetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/export`)
+      const res = await apiFetch(`${API_BASE}/sessions/${encodeURIComponent(id)}/export`)
       if (!res.ok) throw new Error(`导出失败: HTTP ${res.status}`)
       const blob = await res.blob()
       const cd = res.headers.get('content-disposition') || ''
@@ -1345,7 +1367,7 @@ export const api = {
     },
     // 批量导出 → zip Blob
     exportBatch: async (ids: string[]): Promise<{ blob: Blob; filename: string }> => {
-      const res = await fetch(`${API_BASE}/sessions/export-batch`, {
+      const res = await apiFetch(`${API_BASE}/sessions/export-batch`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ids }),
@@ -1370,7 +1392,7 @@ export const api = {
     }> => {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await fetch(`${API_BASE}/sessions/import`, {
+      const res = await apiFetch(`${API_BASE}/sessions/import`, {
         method: 'POST',
         body: fd,
       })
