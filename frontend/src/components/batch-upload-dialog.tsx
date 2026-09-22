@@ -1,3 +1,5 @@
+import { UploadElapsed } from '@/components/upload-elapsed'
+import { uploadProgressView } from '@/lib/upload-progress'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -65,6 +67,7 @@ export function BatchUploadDialog({
   initialTaskId,
   onCompleted,
 }: Props) {
+  const [streamVersion, setStreamVersion] = useState(0)
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'running'>('idle')
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([])
   const [rejectedFiles, setRejectedFiles] = useState<Array<{ name: string; reason: string }>>([])
@@ -76,12 +79,14 @@ export function BatchUploadDialog({
   // 任务运行状态
   const [taskId, setTaskId] = useState<string | null>(null)
   const [taskSnapshot, setTaskSnapshot] = useState<UploadTask | null>(null)
-  const [currentFile, setCurrentFile] = useState<string | null>(null)
-  const [currentProgress, setCurrentProgress] = useState<{
-    percent: number
-    stage: string
-    detail?: string
-  } | null>(null)
+  const currentFile = taskSnapshot?.current_file_path ?? null
+  const currentProgress = taskSnapshot?.current_stage ? {
+    percent: taskSnapshot.current_percent ?? null,
+    stage: taskSnapshot.current_stage,
+    detail: taskSnapshot.current_detail ?? undefined,
+  } : null
+  const completedCallback = useRef(onCompleted)
+  completedCallback.current = onCompleted
   const [fileEvents, setFileEvents] = useState<
     Record<number, { status: UploadFileStatus; relativePath: string; skipReason?: string | null; error?: string | null }>
   >({})
@@ -97,10 +102,6 @@ export function BatchUploadDialog({
     if (initialTaskId) {
       setTaskId(initialTaskId)
       setPhase('running')
-      api.knowledge
-        .uploadTask(initialTaskId)
-        .then((d) => setTaskSnapshot(d))
-        .catch(() => {})
       return
     }
     if (runner.phase === 'uploading' || runner.phase === 'error') {
@@ -124,8 +125,6 @@ export function BatchUploadDialog({
         setRejectedFiles([])
         setTaskId(null)
         setTaskSnapshot(null)
-        setCurrentFile(null)
-        setCurrentProgress(null)
         setFileEvents({})
       }, 200)
       return () => clearTimeout(t)
@@ -233,19 +232,14 @@ export function BatchUploadDialog({
         {
           onSnapshot: (s) => setTaskSnapshot(s),
           onFileStarted: (e) => {
-            setCurrentFile(e.relative_path)
-            setCurrentProgress({ percent: 0, stage: 'starting' })
+            setTaskSnapshot((prev) => prev ? {...prev, current_file_path: e.relative_path,
+              current_stage: 'processing', current_percent: null, current_detail: null} : prev)
           },
           onFileProgress: (e) => {
-            setCurrentProgress({
-              percent: e.percent,
-              stage: e.stage,
-              detail: e.detail,
-            })
+            setTaskSnapshot((prev) => prev ? {...prev, current_file_path: e.relative_path,
+              current_stage: e.stage, current_percent: e.percent, current_detail: e.detail} : prev)
           },
           onFileFinished: (e) => {
-            setCurrentFile(null)
-            setCurrentProgress(null)
             setFileEvents((prev) => ({
               ...prev,
               [e.file_id]: {
@@ -255,25 +249,15 @@ export function BatchUploadDialog({
                 error: e.error,
               },
             }))
-            setTaskSnapshot((prev) =>
-              prev
-                ? {
-                    ...prev,
-                    done: e.done,
-                    skipped: e.skipped,
-                    failed: e.failed,
-                  }
-                : prev,
-            )
           },
           onTaskCompleted: () => {
             useUploadRunner.getState().markSeen()
             // 刷新父组件文件列表
-            onCompleted?.()
+            completedCallback.current?.()
             toast.success('批量导入完成')
           },
           onTaskCancelled: () => toast.info('已取消'),
-          onTaskCrashed: () => toast.error('任务异常中断，重启后可恢复'),
+          onTaskCrashed: () => toast.error('任务已停止，请查看详情中的恢复或清理提示'),
           onError: (msg) => toast.error(msg),
         },
         ctrl.signal,
@@ -285,7 +269,7 @@ export function BatchUploadDialog({
       })
 
     return () => ctrl.abort()
-  }, [taskId, phase, open, onCompleted])
+  }, [taskId, phase, open, streamVersion])
 
   // 文件选择处理（本地按扩展名预过滤）
   const handleFiles = (fileList: FileList | null, _isFolder: boolean) => {
@@ -674,11 +658,21 @@ export function BatchUploadDialog({
             currentProgress={currentProgress}
             fileEvents={fileEvents}
             isCompleted={!!isCompleted}
+            onResume={async () => {
+              if (!taskId) return
+              try {
+                await api.knowledge.resumeUploadTask(taskId)
+                setStreamVersion((n) => n + 1)
+              } catch (e) {
+                toast.error(`恢复失败：${(e as Error).message}`)
+              }
+            }}
             onCancel={async () => {
               if (!taskId) return
               try {
                 await api.knowledge.cancelUploadTask(taskId)
-                toast.info('已取消未完成的文件')
+                setStreamVersion((n) => n + 1)
+                toast.info('已请求取消，后台停止并清理后会更新状态')
               } catch (e) {
                 toast.error(`取消失败：${(e as Error).message}`)
               }
@@ -687,6 +681,7 @@ export function BatchUploadDialog({
               if (!taskId) return
               try {
                 const r = await api.knowledge.retryUploadTask(taskId)
+                setStreamVersion((n) => n + 1)
                 toast.info(`已重试 ${r.retried_count} 个失败文件`)
                 setFileEvents((prev) => {
                   const next = { ...prev }
@@ -747,7 +742,7 @@ export function BatchUploadDialog({
 type BatchProgressViewProps = {
   task: UploadTask
   currentFile: string | null
-  currentProgress: { percent: number; stage: string; detail?: string } | null
+  currentProgress: { percent: number | null; stage: string; detail?: string } | null
   fileEvents: Record<number, {
     status: UploadFileStatus
     relativePath: string
@@ -755,6 +750,7 @@ type BatchProgressViewProps = {
     error?: string | null
   }>
   isCompleted: boolean
+  onResume: () => Promise<void>
   onCancel: () => Promise<void>
   onRetryFailed: () => Promise<void>
   onDeleteFailed: () => Promise<void>
@@ -764,6 +760,9 @@ type BatchProgressViewProps = {
 
 // 单文件阶段 → 中文标签（与后端 _STAGE_LABEL 对应）
 const STAGE_LABEL: Record<string, string> = {
+  publishing: '提交新索引', cancelling: '正在取消', cleaning: '正在清理', cleanup_failed: '清理未完成',
+  processing: '准备处理', resuming: '等待恢复', retrying: '等待重试',
+  interrupted: '处理已中断', crashed: '处理已中断',
   parsing: '解析中',
   chunking: '切片中',
   embedding: '向量化中',
@@ -779,17 +778,22 @@ function BatchProgressView({
   fileEvents,
   isCompleted,
   onCancel,
+  onResume,
   onRetryFailed,
   onDeleteFailed,
   onBackground,
   onClose,
 }: BatchProgressViewProps) {
   const finished = task.done + task.skipped + task.failed
-  const pct = task.total > 0 ? Math.min(100, Math.round((finished / task.total) * 100)) : 0
+  const view = uploadProgressView(task)
+  const pct = view.percent
 
   const failedList = Object.values(fileEvents).filter((f) => f.status === 'failed')
   const skippedList = Object.values(fileEvents).filter((f) => f.status === 'skipped')
 
+  const [confirmingCancel, setConfirmingCancel] = useState(false)
+  const [requestingCancel, setRequestingCancel] = useState(false)
+  const stopping = task.status === 'cancelling' || task.status === 'cleaning'
   const [confirmingDelete, setConfirmingDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
@@ -809,19 +813,20 @@ function BatchProgressView({
       <div>
         <div className="mb-2 flex items-center justify-between text-[12px]">
           <span>
-            {isCompleted ? '✓ 完成' : '处理中'} · {finished} / {task.total}
+            {view.label}{task.total > 1 ? ` · ${finished} / ${task.total}` : ''}
           </span>
-          <span className="text-muted-foreground">{pct}%</span>
+          <span className="text-muted-foreground">{pct == null ? '' : `${task.total === 1 && !isCompleted ? '阶段进度 ' : ''}${pct}%`}</span>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-muted">
           <div
             className={cn(
               'h-full rounded-full transition-all',
+              pct == null && task.status === 'running' && 'animate-pulse',
               task.failed > 0
                 ? 'bg-gradient-to-r from-primary to-destructive'
                 : 'bg-gradient-to-r from-primary to-primary/60',
             )}
-            style={{ width: `${pct}%` }}
+            style={{ width: pct == null ? '35%' : `${pct}%` }}
           />
         </div>
         <div className="mt-2 flex items-center gap-4 text-[11px] text-muted-foreground">
@@ -838,10 +843,33 @@ function BatchProgressView({
         </div>
       </div>
 
+      <UploadElapsed task={task} />
+      {['cancelling', 'cleaning', 'cleanup_failed', 'cancelled'].includes(task.status) && (
+        <div className="rounded-md border p-3 text-xs break-words">
+          {task.current_detail || '已停止导入。已完成文件和源文件保留，临时数据已清理。'}
+        </div>
+      )}
+      <Dialog open={confirmingCancel} onOpenChange={setConfirmingCancel}>
+        <DialogContent className="max-w-md">
+          <DialogTitle>取消导入并清理？</DialogTitle>
+          <DialogDescription>
+            等待当前计算或请求结束后停止后续处理，清理本次未完成的索引和临时数据。源文件及已完成文件保留。
+            {task.current_stage === 'ai_summary' ? '当前文档已入库，仅停止后续摘要处理。' : '覆盖导入在新索引提交前取消，会保留原索引。'}
+          </DialogDescription>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setConfirmingCancel(false)}>继续导入</Button>
+            <Button disabled={requestingCancel} onClick={async () => {
+              setRequestingCancel(true)
+              try { await onCancel(); setConfirmingCancel(false) }
+              finally { setRequestingCancel(false) }
+            }}>确认取消并清理</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {/* 当前处理文件 */}
       {currentFile ? (
         <div className="rounded-md bg-muted/30 px-3 py-2 text-[12px]">
-          <div className="flex items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <Loader2 className="h-3 w-3 shrink-0 animate-spin text-muted-foreground" />
             <span
               className="flex-1 truncate font-mono text-muted-foreground"
@@ -850,13 +878,10 @@ function BatchProgressView({
               正在处理：{currentFile}
             </span>
             {currentProgress ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground">
+              <span className="min-w-0 basis-full break-words text-[11px] text-muted-foreground">
                 {STAGE_LABEL[currentProgress.stage] || currentProgress.stage}
                 {currentProgress.detail ? ` · ${currentProgress.detail}` : ''}
-                {' · '}
-                <strong className="text-foreground">
-                  {currentProgress.percent}%
-                </strong>
+                {currentProgress.percent != null ? ` · 阶段进度 ${currentProgress.percent}%` : ''}
               </span>
             ) : null}
           </div>
@@ -865,7 +890,7 @@ function BatchProgressView({
             <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted">
               <div
                 className="h-full rounded-full bg-primary/60 transition-all duration-300"
-                style={{ width: `${currentProgress.percent}%` }}
+                style={{ width: currentProgress.percent == null ? '35%' : `${currentProgress.percent}%` }}
               />
             </div>
           ) : null}
@@ -900,7 +925,7 @@ function BatchProgressView({
                   size="sm"
                   className="h-6 px-2 text-[11px]"
                   onClick={onRetryFailed}
-                  disabled={isCompleted && task.status !== 'running'}
+                  disabled={task.status === 'running' || stopping || task.status === 'cleanup_failed'}
                 >
                   重试全部
                 </Button>
@@ -967,7 +992,7 @@ function BatchProgressView({
 
       {/* 底部按钮 */}
       <div className="flex justify-end gap-2">
-        {isCompleted ? (
+        {isCompleted || task.status === 'cancelled' ? (
           <Button size="sm" onClick={onClose}>
             完成
           </Button>
@@ -977,8 +1002,12 @@ function BatchProgressView({
               <Minimize2 className="mr-1.5 h-3 w-3" />
               转到后台
             </Button>
-            <Button variant="outline" size="sm" onClick={onCancel}>
-              取消未完成
+            {(task.status === 'paused' || task.status === 'failed') && (
+              <Button size="sm" onClick={onResume}>继续导入</Button>
+            )}
+            <Button variant="outline" size="sm" disabled={stopping || requestingCancel}
+              onClick={() => task.status === 'cleanup_failed' ? onCancel() : setConfirmingCancel(true)}>
+              {task.status === 'cleanup_failed' ? '重试清理' : stopping ? '正在取消并清理' : '取消导入'}
             </Button>
           </>
         )}

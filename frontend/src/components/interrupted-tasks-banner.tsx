@@ -1,3 +1,4 @@
+import { uploadProgressView } from '@/lib/upload-progress'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { AlertCircle, Eye, Loader2, Play, Trash2 } from 'lucide-react'
@@ -104,9 +105,9 @@ function TaskRow({ task, onResume, onDelete, onView, resuming, deleting }: TaskR
             <Loader2 className="mr-1 inline h-3 w-3 animate-spin" />
             分批上传中：已接收 {task.total} 个文件
           </span>
-        ) : null}
+        ) : <span>{uploadProgressView(task).label}</span>}
       </div>
-      {isRunning || isUploading ? (
+      {isRunning || isUploading || ['cancelling', 'cleaning', 'cleanup_failed'].includes(task.status) ? (
         <Button
           variant="outline"
           size="sm"

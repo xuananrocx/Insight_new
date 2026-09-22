@@ -108,7 +108,7 @@ class CallDiagnostics:
     async def response(self, response):
         self.data.update(phase="收到 HTTP 响应", http_status=response.status_code,
                          response_headers={k: response.headers[k] for k in
-                                           ("content-type", "content-length", "server", "via", "x-request-id", "request-id", "cf-ray") if k in response.headers})
+                                           ("content-type", "content-length", "server", "via", "x-request-id", "request-id", "cf-ray", "retry-after", "retry-after-ms") if k in response.headers})
         stream = response.extensions.get("network_stream")
         if stream:
             try:

@@ -11,6 +11,7 @@ import httpx
 from src.core import accounts, ai_call_logger
 from src.core.llm_providers import OpenAIProvider, AnthropicArchProvider
 from src.core.llm_diagnostics import CallDiagnostics
+from src.core.api_retry import network_timeout, retry_after, retry_plan, report_retry
 
 
 class ToolProtocolError(Exception):
@@ -47,8 +48,8 @@ class ToolChat:
         self.check_access = check_access
         self.meta = meta or {}
         self.style = getattr(provider, "_api_style", "chat") if isinstance(provider, OpenAIProvider) else "anthropic"
-        self.http = httpx.AsyncClient(timeout=60, transport=transport)
-        self.retry_count = 5
+        self.http = httpx.AsyncClient(timeout=network_timeout(), transport=transport)
+        self.retry_count = 10
         self.deadline = float("inf")
         self.attempt_deadline = float("inf")
         self.on_retry = lambda **kwargs: None
@@ -68,17 +69,12 @@ class ToolChat:
         return diagnostic.failure(exc)
 
     async def _retry(self, exc, attempt):
-        retryable = (isinstance(exc, (httpx.TransportError, TimeoutError)) or
-                     isinstance(exc, ToolHTTPError) and exc.status in (408, 429, 500, 502, 503, 504))
-        if not retryable or attempt >= self.retry_count:
-            return False
-        delay = max(min(2 ** attempt, 8), getattr(exc, "retry_after", 0))
-        if time.monotonic() + delay + 1 >= self.deadline:
+        plan = retry_plan(exc, attempt, self.retry_count, self.deadline)
+        if plan is None:
             return False
         await asyncio.to_thread(self.check_access)
-        self.on_retry(attempt=attempt + 1, maximum=self.retry_count, delay=delay,
-                      reason=f"HTTP {exc.status}" if isinstance(exc, ToolHTTPError) else type(exc).__name__)
-        await asyncio.sleep(delay)
+        report_retry(plan, "deep_ai", self.meta, callback=self.on_retry)
+        await asyncio.sleep(plan["delay"])
         return True
 
     def _request(self, tools: list[dict], *, final=False, force=False, max_tokens=4096):
@@ -113,11 +109,7 @@ class ToolChat:
     @staticmethod
     def _check_response(response, call_id=""):
         if response.is_error:
-            try:
-                retry_after = max(0, float(response.headers.get("retry-after", "0")))
-            except ValueError:
-                retry_after = 0
-            raise ToolHTTPError(f"模型请求收到 HTTP {response.status_code}，请查看 AI 调用日志中的错误详情（调用编号：{call_id}）。", response.status_code, retry_after)
+            raise ToolHTTPError(f"模型请求收到 HTTP {response.status_code}，请查看 AI 调用日志中的错误详情（调用编号：{call_id}）。", response.status_code, retry_after(response.headers))
 
     def _decode(self, data: dict) -> ToolTurn:
         if data.get("error"):
@@ -318,6 +310,8 @@ async def probe_tools():
     tool = definition("insight_connection_probe", "Return a random verification marker. Call with an empty object.")
     model = create_tool_chat("Call the provided tool once, then return its marker exactly. Do not invent the marker.",
                              [{"role": "user", "content": "Verify tool calling now."}])
+    model.retry_count = 1
+    model.deadline = time.monotonic() + 60
     try:
         turn = await model.turn([tool], force=True, max_tokens=1024)
         if len(turn.calls) != 1 or turn.calls[0].name != tool["name"]:

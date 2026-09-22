@@ -3,18 +3,14 @@ from __future__ import annotations
 
 import json
 import logging
+from contextlib import aclosing
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
+from src.core.api_retry import network_timeout
 
 logger = logging.getLogger(__name__)
 
@@ -129,8 +125,9 @@ class OpenAIProvider(BaseLLMProvider):
         if self._client is None:
             self._client = OpenAI(
                 api_key=self._api_key or "not-required",
+                max_retries=0,
                 base_url=self.base_url,
-                http_client=httpx.Client(timeout=self.request_timeout),
+                http_client=httpx.Client(timeout=network_timeout(self.request_timeout)),
             )
         return self._client
 
@@ -139,8 +136,9 @@ class OpenAIProvider(BaseLLMProvider):
         if self._async_client is None:
             self._async_client = AsyncOpenAI(
                 api_key=self._api_key or "not-required",
+                max_retries=0,
                 base_url=self.base_url,
-                http_client=httpx.AsyncClient(timeout=self.request_timeout),
+                http_client=httpx.AsyncClient(timeout=network_timeout(self.request_timeout)),
             )
         return self._async_client
 
@@ -150,8 +148,9 @@ class OpenAIProvider(BaseLLMProvider):
         if self._test_client is None:
             self._test_client = OpenAI(
                 api_key=self._api_key or "not-required",
+                max_retries=0,
                 base_url=self.base_url,
-                http_client=httpx.Client(timeout=self.test_timeout),
+                http_client=httpx.Client(timeout=network_timeout(self.test_timeout)),
             )
         return self._test_client
 
@@ -214,8 +213,9 @@ class OpenAIProvider(BaseLLMProvider):
         if not self.chat_model:
             raise LLMError(f"provider {self.name} 未配置 chat_model")
         if self._api_style == "responses":
-            async for token in self._chat_stream_responses(messages, **kwargs):
-                yield token
+            async with aclosing(self._chat_stream_responses(messages, **kwargs)) as stream:
+                async for token in stream:
+                    yield token
             return
         try:
             stream = await self.async_client.chat.completions.create(
@@ -225,9 +225,8 @@ class OpenAIProvider(BaseLLMProvider):
                 **kwargs,
             )
         except Exception as e:
-            logger.warning(f"provider {self.name} stream 启动失败，降级同步: {e}")
-            yield self.chat(messages, **kwargs)
-            return
+            logger.warning(f"provider {self.name} stream 启动失败，交由统一重试策略处理: {e}")
+            raise LLMError(f"provider {self.name} stream failed: {e}") from e
 
         try:
             async for chunk in stream:
@@ -254,15 +253,16 @@ class OpenAIProvider(BaseLLMProvider):
                 **self._responses_kwargs(kwargs),
             )
         except Exception as e:
-            logger.warning(f"provider {self.name} stream 启动失败，降级同步: {e}")
-            yield self.chat(messages, **kwargs)
-            return
+            logger.warning(f"provider {self.name} stream 启动失败，交由统一重试策略处理: {e}")
+            raise LLMError(f"provider {self.name} stream failed: {e}") from e
         try:
             async for event in stream:
                 if event.type == "response.output_text.delta" and event.delta:
                     yield event.delta
         except Exception as e:
             raise LLMError(f"provider {self.name} chat_stream 中途失败: {e}") from e
+        finally:
+            await stream.close()
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         if not self.embedding_model:
@@ -313,8 +313,9 @@ class AnthropicProvider(BaseLLMProvider):
 
         return anthropic.Anthropic(
             api_key=self._api_key or "not-required",
+            max_retries=0,
             base_url=self.api_base,
-            timeout=self.request_timeout,
+            timeout=network_timeout(self.request_timeout),
         )
 
     def _init_async_client(self) -> Any:
@@ -326,8 +327,9 @@ class AnthropicProvider(BaseLLMProvider):
 
         return anthropic.AsyncAnthropic(
             api_key=self._api_key or "not-required",
+            max_retries=0,
             base_url=self.api_base,
-            timeout=self.request_timeout,
+            timeout=network_timeout(self.request_timeout),
         )
 
     def _init_test_client(self) -> Any:
@@ -339,8 +341,9 @@ class AnthropicProvider(BaseLLMProvider):
 
         return anthropic.Anthropic(
             api_key=self._api_key or "not-required",
+            max_retries=0,
             base_url=self.api_base,
-            timeout=self.test_timeout,
+            timeout=network_timeout(self.test_timeout),
         )
 
     @property
@@ -463,7 +466,7 @@ class AnthropicProvider(BaseLLMProvider):
     async def chat_stream(self, messages: list[dict], **kwargs: Any) -> AsyncGenerator[str, None]:
         """Anthropic 流式生成。
 
-        关键约束：只在「启动失败」时降级同步；「中途失败」让异常冒泡。
+        关键约束：只在「启动失败」时交由统一重试策略处理；「中途失败」让异常冒泡。
         原因：流已经开始 yield 后再 fallback self.chat() 会输出重复 token
         （前半段流式 + 完整同步 = 双倍内容）。
         """
@@ -489,42 +492,12 @@ class AnthropicProvider(BaseLLMProvider):
             stream_kwargs["system"] = system_text
         stream_kwargs.update(kwargs)
 
-        # 阶段 1：尝试启动流（启动失败可以 fallback）
-        stream_ctx = None
         try:
-            stream_ctx = self.async_client.messages.stream(**stream_kwargs)
-            stream = stream_ctx.__enter__()
-        except Exception as e:
-            # __enter__ 失败时显式清理 stream_ctx（避免 TCP 连接泄漏）
-            if stream_ctx is not None:
-                try:
-                    stream_ctx.__exit__(type(e), e, e.__traceback__)
-                except Exception as cleanup_err:
-                    logger.debug(f"stream_ctx 启动失败 cleanup 异常: {cleanup_err}")
-            logger.warning(f"provider {self.name} stream 启动失败，降级同步: {e}")
-            # fallback 时显式 strip stream 参数，避免传给同步 chat
-            kwargs.pop("stream", None)
-            yield self.chat(messages, max_tokens=max_tokens, temperature=temperature, **kwargs)
-            return
-
-        # 阶段 2：迭代流（中途失败让异常冒泡，不 fallback）
-        try:
-            import sys
-            try:
-                for text in stream.text_stream:
+            async with self.async_client.messages.stream(**stream_kwargs) as stream:
+                async for text in stream.text_stream:
                     yield text
-            except BaseException:
-                # 让 GeneratorExit/CancelledError 等 BaseException 也走 finally 清理
-                raise
-        finally:
-            try:
-                exc_type, exc_val, exc_tb = sys.exc_info()
-                if exc_val is None:
-                    stream_ctx.__exit__(None, None, None)
-                else:
-                    stream_ctx.__exit__(exc_type, exc_val, exc_tb)
-            except Exception as cleanup_err:
-                logger.debug(f"stream cleanup 失败: {cleanup_err}")
+        except Exception as e:
+            raise LLMError(f"provider {self.name} chat_stream failed: {e}") from e
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """Anthropic 不提供 embedding API，抛出错误。"""
@@ -624,13 +597,13 @@ class AnthropicArchProvider(BaseLLMProvider):
     @property
     def sync_client(self) -> httpx.Client:
         if self._sync_client is None:
-            self._sync_client = httpx.Client(timeout=self.request_timeout)
+            self._sync_client = httpx.Client(timeout=network_timeout(self.request_timeout))
         return self._sync_client
 
     @property
     def async_client(self) -> httpx.AsyncClient:
         if self._async_client is None:
-            self._async_client = httpx.AsyncClient(timeout=self.request_timeout)
+            self._async_client = httpx.AsyncClient(timeout=network_timeout(self.request_timeout))
         return self._async_client
 
     def _build_headers(self) -> dict[str, str]:
@@ -674,7 +647,7 @@ class AnthropicArchProvider(BaseLLMProvider):
             temperature=None,
         )
         # 连接测试用独立短超时客户端
-        test_client = httpx.Client(timeout=self.test_timeout)
+        test_client = httpx.Client(timeout=network_timeout(self.test_timeout))
         try:
             resp = test_client.post(
                 f"{self.api_base}/v1/messages",
@@ -683,7 +656,7 @@ class AnthropicArchProvider(BaseLLMProvider):
             )
             if resp.status_code != 200:
                 err_body = resp.text[:500]
-                raise ValueError(f"HTTP {resp.status_code}: {err_body}")
+                resp.raise_for_status()
             data = resp.json()
             if not data.get("content"):
                 raise ValueError("API 返回空响应")
@@ -706,10 +679,11 @@ class AnthropicArchProvider(BaseLLMProvider):
                 f"{self.api_base}/v1/messages",
                 headers=self._build_headers(),
                 json=payload,
+                timeout=kwargs.get("timeout", network_timeout(self.request_timeout)),
             )
             if resp.status_code != 200:
                 err_body = resp.text[:500]
-                raise LLMError(f"HTTP {resp.status_code}: {err_body}")
+                resp.raise_for_status()
             data = resp.json()
             # 提取文本
             for block in data.get("content", []):
@@ -738,11 +712,12 @@ class AnthropicArchProvider(BaseLLMProvider):
                 f"{self.api_base}/v1/messages",
                 headers=self._build_headers(),
                 json=payload,
+                timeout=kwargs.get("timeout", network_timeout(self.request_timeout)),
             ) as resp:
                 if resp.status_code != 200:
                     err_body = await resp.aread()
                     err_text = err_body.decode("utf-8", errors="replace")[:500]
-                    raise LLMError(f"HTTP {resp.status_code}: {err_text}")
+                    resp.raise_for_status()
 
                 # 解析 SSE 流（data: {...}\n\n 格式）
                 async for line in resp.aiter_lines():
@@ -764,9 +739,8 @@ class AnthropicArchProvider(BaseLLMProvider):
                             if text:
                                 yield text
         except Exception as e:
-            logger.warning(f"provider {self.name} stream 失败，降级同步: {e}")
-            yield self.chat(messages, max_tokens=max_tokens, temperature=temperature)
-            return
+            logger.warning(f"provider {self.name} stream 失败，交由统一重试策略处理: {e}")
+            raise LLMError(f"provider {self.name} stream failed: {e}") from e
         finally:
             self._decr_inflight()
 

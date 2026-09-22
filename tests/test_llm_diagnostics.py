@@ -23,8 +23,11 @@ def logs(monkeypatch):
 
 def model(handler, check=lambda: None):
     p = OpenAIProvider('test-provider', {'base_url': 'https://example.test/v1', 'chat_model': 'test-model'}, 'test-secret-key')
-    return ToolChat(p, 'private system prompt', [{'role': 'user', 'content': 'private knowledge content'}],
+    chat = ToolChat(p, 'private system prompt', [{'role': 'user', 'content': 'private knowledge content'}],
                     check_access=check, meta={'session_id': 'session1', 'turn_id': 'turn1', 'kb_id': 'kb1'}, transport=httpx.MockTransport(handler))
+    # Diagnostics tests inspect one failure; retry behavior has separate coverage.
+    chat.retry_count = 0
+    return chat
 
 
 @pytest.mark.asyncio

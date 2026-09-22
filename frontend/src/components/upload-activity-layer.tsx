@@ -1,3 +1,5 @@
+import { UploadElapsed } from '@/components/upload-elapsed'
+import { uploadProgressView } from '@/lib/upload-progress'
 /**
  * 全局上传活动层：
  * - 右下角悬浮进度条：任何页面都能看到进行中的导入/上传，点击打开详情弹窗
@@ -73,7 +75,7 @@ export function UploadActivityLayer() {
   }, [data, qc])
 
   const active = (data?.tasks ?? []).filter(
-    (t) => t.status === 'running' || t.status === 'uploading',
+    (t) => t.status === 'running' || t.status === 'uploading' || t.status === 'paused' || t.status === 'cancelling' || t.status === 'cleaning' || t.status === 'cleanup_failed',
   )
 
   return (
@@ -103,7 +105,8 @@ export function UploadActivityLayer() {
 function Pill({ task, onClick }: { task: UploadTask; onClick: () => void }) {
   const finished = task.done + task.skipped + task.failed
   const isUploading = task.status === 'uploading'
-  const pct = task.total > 0 ? Math.min(100, Math.round((finished / task.total) * 100)) : 0
+  const view = uploadProgressView(task)
+  const pct = view.percent
   const current = task.current_file_path
 
   return (
@@ -119,18 +122,20 @@ function Pill({ task, onClick }: { task: UploadTask; onClick: () => void }) {
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
         )}
         <span className="flex-1 truncate font-medium">
-          {isUploading ? '上传中' : '导入中'} · {isUploading ? task.total : `${finished}/${task.total}`}
+          {view.label}{task.total > 1 ? ` · ${finished}/${task.total}` : ''}
         </span>
         <span className="shrink-0 text-[11px] text-muted-foreground">
-          {isUploading ? '' : `${pct}%`}
+          {pct == null ? '' : `${pct}%`}
         </span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
         <div
           className="h-full rounded-full bg-primary transition-all"
-          style={{ width: isUploading ? '100%' : `${pct}%`, opacity: isUploading ? 0.35 : 1 }}
+          style={{ width: pct == null ? '35%' : `${pct}%`, opacity: pct == null ? 0.35 : 1 }}
         />
       </div>
+      <UploadElapsed task={task} />
+      {task.current_detail && <div className="break-words text-[11px] text-muted-foreground">{task.current_detail}</div>}
       {current && !isUploading ? (
         <div className="truncate font-mono text-[10px] text-muted-foreground">{current}</div>
       ) : null}

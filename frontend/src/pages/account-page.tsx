@@ -7,6 +7,7 @@ import { Card } from '@/components/ui/card'
 import { ManagementDialog } from '@/components/management-dialog'
 import { accountInput, PasswordForm, useAuth } from '@/hooks/use-auth'
 import { useLocalStorage } from '@/hooks/use-local-storage'
+import { useApiRetryCount } from '@/hooks/use-api-retry-count'
 import { accountApi, accountRequest, type Provider } from '@/lib/account-api'
 
 export { Toggle } from '@/components/ui/toggle-switch'
@@ -81,12 +82,14 @@ export function AccountPage() {
   const [citations, setCitations] = useLocalStorage('amd-ui-show-citations', false)
   const [logs, setLogs] = useLocalStorage('amd-ui-show-logs', false)
   const [strictKnowledge, setStrictKnowledge] = useLocalStorage('amd-ai-strict-knowledge', false)
-  const [apiRetryCount, setApiRetryCount] = useLocalStorage('amd-ai-api-retry-count', 5)
+  const [apiRetryCount, setApiRetryCount] = useApiRetryCount()
   return <div className="mx-auto max-w-4xl space-y-5 p-6 md:p-8"><div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">设置</h1><p className="mt-1 text-sm text-muted-foreground">{user.username} · {user.roles.filter(r => r.enabled).map(r => r.name).join('、') || '无启用角色'}</p></div></div>
     <ProviderSettings />
     <Card className="space-y-3 p-5"><h2 className="font-semibold">深度 AI</h2><div className="flex items-center justify-between gap-4 text-sm"><span>仅依据知识库回答</span><Toggle label="仅依据知识库回答" checked={strictKnowledge} onChange={setStrictKnowledge} /></div><p className="text-sm text-muted-foreground">默认允许结合明确标注的通用知识和推断。开启后仅依据知识库原文回答。深度 AI 会主动检索、查看目录并阅读原文，需要所选 API 支持工具调用。</p>
-      <div className="flex items-center justify-between gap-4 text-sm"><span>API 失败重试次数</span><OptionSelect aria-label="API 失败重试次数" value={String(apiRetryCount)} onValueChange={value => setApiRetryCount(Number(value))} options={Array.from({ length: 11 }, (_, value) => ({ value: String(value), label: value === 0 ? '不重试' : `${value} 次${value === 5 ? '（默认）' : ''}` }))} /></div>
-      <p className="text-xs text-muted-foreground">自动保存，仅用于深度 AI。首次请求失败后，连接异常、限流和临时服务错误最多重试所选次数；重试受整轮时间预算限制。已输出内容后中断会保留部分答案，避免重复生成。</p>
+    </Card>
+    <Card className="space-y-3 p-5"><h2 className="font-semibold">API 请求重试</h2>
+      <div className="flex items-center justify-between gap-4 text-sm"><span>API 失败重试次数</span><OptionSelect aria-label="API 失败重试次数" value={String(apiRetryCount)} onValueChange={value => setApiRetryCount(Number(value))} options={Array.from({ length: 11 }, (_, value) => ({ value: String(value), label: value === 0 ? '不重试' : `${value} 次${value === 10 ? '（默认）' : ''}` }))} /></div>
+      <p className="text-xs text-muted-foreground">自动保存，适用于 AI 增强和深度 AI。默认最多重试 10 次，间隔约 1、2、4、8、16、30 秒，之后最多 30 秒。所有尝试和等待都计入时间预算，次数不保证用完。已输出内容后中断会保留部分答案；服务要求等待超过 30 秒的限流或暂不可用错误，会提示稍后重试。</p>
     </Card>
     <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div>{can('logs.view') && <div className="flex items-center justify-between gap-4 text-sm"><span>在侧边栏显示「系统日志」入口</span><Toggle label="显示系统日志入口" checked={logs} onChange={setLogs} /></div>}</Card>
     <Card className="p-5"><h2 className="mb-4 font-semibold">修改密码</h2><div className="max-w-md"><PasswordForm onDone={logout} /></div></Card>

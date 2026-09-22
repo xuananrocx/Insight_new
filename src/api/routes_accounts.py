@@ -358,12 +358,20 @@ def test_provider(pid: str):
     from src.core.account_llm import chat_client
 
     client = chat_client()
+    from src.core.api_retry import RetryBudget, RetryDeferredError, call_sync
     try:
-        answer, _ = client.chat(
-            [{"role": "user", "content": "Reply with OK."}], scene="test", max_tokens=16
-        )
+        provider = next(iter(client._providers.values()))
+        answer = call_sync(lambda timeout: provider.test_connection(), RetryBudget.for_scene("test"),
+                           "test", check=client.check_access)
+        client.check_access()
+    except HTTPException:
+        raise
+    except RetryDeferredError as exc:
+        raise HTTPException(503, str(exc)) from exc
     except Exception:
         raise HTTPException(502, "连接失败，请检查 API 地址、密钥和模型名称")
+    finally:
+        client.close()
     return {"ok": bool(answer), "name": p["name"]}
 
 
@@ -371,6 +379,7 @@ def test_provider(pid: str):
 async def test_provider_tools(pid: str):
     import asyncio
     from src.core.tool_chat import probe_tools, ToolProtocolError
+    from src.core.api_retry import RetryDeferredError
 
     a.resolve_provider(pid)
     a.bind_provider(pid)
@@ -379,7 +388,7 @@ async def test_provider_tools(pid: str):
         return await asyncio.wait_for(probe_tools(), 60)
     except HTTPException:
         raise
-    except ToolProtocolError as exc:
+    except (ToolProtocolError, RetryDeferredError) as exc:
         return {"supported": None, "message": str(exc)}
     except Exception:
         return {"supported": None, "message": "检测未完成，暂不能判断支持情况。请检查连接、模型和服务商工具协议。"}

@@ -8,6 +8,8 @@ export const STATUS_STYLE: Record<string, string> = {
   partial: 'bg-warning/80',
   skipped: 'bg-muted-foreground/40',
   failed: 'bg-destructive/80',
+  error: 'bg-destructive/80',
+  cancelled: 'bg-muted-foreground/40',
   empty: 'bg-muted-foreground/40',
 }
 
@@ -35,9 +37,9 @@ export function StageRow({ stage }: { stage: QaTraceStage }) {
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
         <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', STATUS_STYLE[status] ?? STATUS_STYLE.ok)} />
         <span className="min-w-0 font-medium text-foreground/90">{stage.label}</span>
-        <span className="shrink-0 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-          {stage.count ?? 0} 候选
-        </span>
+        {typeof stage.count === 'number' && <span className="shrink-0 rounded bg-muted/60 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+          {stage.count} {stage.stage === 'agent_round' ? '个工具' : stage.stage === 'knowledge_tool' || stage.stage === 'citation_validation' || stage.stage === 'agent_answer' ? '条资料' : '候选'}
+        </span>}
         {stage.duration_ms ? (
           <span className="shrink-0 text-[10px] tabular-nums text-muted-foreground/70">{formatMs(stage.duration_ms)}</span>
         ) : null}

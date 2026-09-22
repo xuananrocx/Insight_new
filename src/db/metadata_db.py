@@ -26,7 +26,7 @@ from src.core.retrieval_modes import VALID_MODES
 
 # SQLite 连接：每次操作开新连接（避免 threading.local 在 WAL 模式下跨线程读到 stale snapshot）
 # 当前 schema 版本（每次表结构变更 +1）
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 15
 
 
 # ===== 哨兵：区分「不更新」和「清空为 NULL」 =====
@@ -298,6 +298,8 @@ def init_db() -> None:
                 upload_complete INTEGER NOT NULL DEFAULT 1,
                 current_file_path TEXT,
                 current_stage TEXT,
+                current_percent REAL,
+                current_detail TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 finished_at INTEGER,
@@ -352,6 +354,7 @@ def init_db() -> None:
         # 版本化迁移
         current = _get_user_version(cur)
         if current == 0:
+            _migrate_v14_to_v15(cur)
             # 全新建库直接落在最新版本、不跑迁移链，
             # 默认知识库必须在这里显式播种
             _ensure_default_kb(cur)
@@ -895,6 +898,26 @@ def _migrate_v12_to_v13(cur: sqlite3.Cursor) -> None:
     t_cols = [r[1] for r in cur.execute("PRAGMA table_info(turns)").fetchall()]
     if "mode" not in t_cols:
         cur.execute("ALTER TABLE turns ADD COLUMN mode TEXT NOT NULL DEFAULT 'ai'")
+
+
+@_register_schema_migration(13)
+def _migrate_v13_to_v14(cur: sqlite3.Cursor) -> None:
+    cols = {r[1] for r in cur.execute("PRAGMA table_info(upload_tasks)").fetchall()}
+    for name, kind in (("current_percent", "REAL"), ("current_detail", "TEXT")):
+        if name not in cols:
+            cur.execute(f"ALTER TABLE upload_tasks ADD COLUMN {name} {kind}")
+
+
+@_register_schema_migration(14)
+def _migrate_v14_to_v15(cur: sqlite3.Cursor) -> None:
+    cur.execute("""CREATE TABLE IF NOT EXISTS ingest_runs (
+        id TEXT PRIMARY KEY, file_id INTEGER NOT NULL UNIQUE,
+        task_id TEXT, collection_name TEXT NOT NULL, was_new INTEGER NOT NULL,
+        status TEXT NOT NULL, new_ids_json TEXT NOT NULL DEFAULT '[]',
+        old_ids_json TEXT NOT NULL DEFAULT '[]', old_hash TEXT,
+        spool_path TEXT NOT NULL, error TEXT,
+        FOREIGN KEY(file_id) REFERENCES knowledge_files(id) ON DELETE RESTRICT
+    )""")
 
 
 # ===== document_meta CRUD =====
@@ -2247,7 +2270,7 @@ def list_active_upload_tasks() -> list[dict[str, Any]]:
     """返回所有未完成任务（running / paused / uploading）。"""
     with get_cursor() as cur:
         cur.execute(
-            "SELECT * FROM upload_tasks WHERE status IN ('running', 'paused', 'uploading') "
+            "SELECT * FROM upload_tasks WHERE status IN ('running', 'paused', 'uploading', 'cancelling', 'cleaning', 'cleanup_failed') "
             "ORDER BY created_at DESC"
         )
         return [dict(r) for r in cur.fetchall()]
@@ -2320,6 +2343,8 @@ def update_upload_task_progress(
     upload_complete: bool | None = _UNSET,
     current_file_path: str | None = _UNSET,
     current_stage: str | None = _UNSET,
+    current_percent: float | None = _UNSET,
+    current_detail: str | None = _UNSET,
     finished_at: int | None = _UNSET,
 ) -> None:
     """更新任务级进度。所有字段用 _UNSET 表示不更新，None 表示清空。"""
@@ -2333,11 +2358,15 @@ def update_upload_task_progress(
         ("upload_complete", upload_complete if isinstance(upload_complete, _Unset) else (1 if upload_complete else 0)),
         ("current_file_path", current_file_path),
         ("current_stage", current_stage),
+        ("current_percent", current_percent),
+        ("current_detail", current_detail),
         ("finished_at", finished_at),
     ]:
         if not isinstance(val, _Unset):
             fields.append(f"{key}=?")
             params.append(val)
+    if current_stage is None:
+        fields.extend(["current_percent=NULL", "current_detail=NULL"])
     if not fields:
         return
     fields.append("updated_at=?")
@@ -2369,7 +2398,7 @@ def reset_file_to_queued(file_id: int) -> None:
     with get_cursor() as cur:
         cur.execute(
             """UPDATE upload_task_files
-               SET status='queued', error_message=NULL,
+               SET status='queued', error_message=NULL, skip_reason=NULL,
                    started_at=NULL, finished_at=NULL
                WHERE id=?""",
             (file_id,),
@@ -2686,3 +2715,16 @@ def _owner_scope(kind: str, column: str = "id") -> tuple[str, list]:
     if not current:
         return "1=1", []
     return f"{column} IN (SELECT object_id FROM auth_objects WHERE kind=? AND owner_id=?)", [kind,current['id']]
+
+
+def unpublished_chunk_ids() -> set[str]:
+    """Hide uncommitted writes and retired indexes if cleanup needs a retry."""
+    with get_cursor() as cur:
+        rows = cur.execute("SELECT status,new_ids_json,old_ids_json,old_hash,file_id FROM ingest_runs").fetchall()
+    blocked = set()
+    for row in rows:
+        blocked.update(json.loads(row["old_ids_json"] if row["status"] == "committed" else row["new_ids_json"]))
+        if row["status"] == "committed" and row["old_hash"]:
+            from src.knowledge.ai_summarizer import _make_summary_chunk_id
+            blocked.add(_make_summary_chunk_id(row["file_id"], row["old_hash"]))
+    return blocked

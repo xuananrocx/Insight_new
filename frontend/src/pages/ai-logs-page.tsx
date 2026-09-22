@@ -1,3 +1,4 @@
+import { formatDuration } from '@/lib/format-duration'
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -330,7 +331,7 @@ function StatsView({ stats }: { stats: AiCallLogStats }) {
         />
         <StatCard
           label="平均耗时"
-          value={`${stats.avg_duration_ms}ms`}
+          value={formatDuration(stats.avg_duration_ms)}
         />
         <StatCard
           label="Provider 数"
@@ -388,7 +389,7 @@ function StatsView({ stats }: { stats: AiCallLogStats }) {
                     <div className="mb-0.5 flex items-center justify-between">
                       <span>{SCENE_LABEL[s.scene] || s.scene}</span>
                       <span className="text-muted-foreground">
-                        {s.total} 次 · 平均 {Math.round(s.avg_duration_ms || 0)}ms
+                        {s.total} 次 · 平均 {formatDuration(s.avg_duration_ms)}
                       </span>
                     </div>
                     <div className="h-1.5 overflow-hidden rounded-full bg-muted">
@@ -558,7 +559,7 @@ function LogRow({
         )}
       </div>
       <div className="w-20 shrink-0 text-right text-muted-foreground">
-        {item.duration_ms != null ? `${item.duration_ms}ms` : '-'}
+        {formatDuration(item.duration_ms)}
       </div>
       <div className="w-32 shrink-0 text-right text-[10px] text-muted-foreground">
         {formatTimestamp(item.created_at)}
@@ -640,7 +641,7 @@ function DetailContent({ log }: { log: AiCallLogDetail }) {
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-muted/20 p-3 text-[11px] sm:grid-cols-3">
           <MetaItem label="场景" value={SCENE_LABEL[log.scene] || log.scene} />
           <MetaItem label="状态" value={isSuccess ? '✓ 成功' : '✗ 失败'} />
-          <MetaItem label="耗时" value={log.duration_ms != null ? `${log.duration_ms}ms` : '-'} />
+          <MetaItem label="耗时" value={formatDuration(log.duration_ms)} />
           <MetaItem label="Session" value={log.session_id || '-'} mono />
           <MetaItem label="Turn" value={log.turn_id || '-'} mono />
           <MetaItem label="KB" value={log.kb_id || '-'} mono />

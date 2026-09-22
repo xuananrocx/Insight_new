@@ -392,11 +392,11 @@ def no_retry_delay(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('failure', ['connect', 429, 502, 503, 504])
-async def test_api_default_five_retries_and_no_duplicate_history(knowledge, no_retry_delay, failure):
+async def test_api_default_ten_retries_and_no_duplicate_history(knowledge, no_retry_delay, failure):
     requests = []
     def handler(request):
         requests.append(json.loads(request.content))
-        if len(requests) <= 5:
+        if len(requests) <= 10:
             if failure == 'connect':
                 raise httpx.ConnectError('TLS connection interrupted')
             return httpx.Response(failure, json={'error': {'message': 'temporarily unavailable'}})
@@ -407,7 +407,7 @@ async def test_api_default_five_retries_and_no_duplicate_history(knowledge, no_r
     model.on_retry = lambda **data: retries.append(data)
     try:
         turn = await model.turn(kt.TOOLS)
-        assert turn.calls and len(requests) == 6 and len(retries) == 5
+        assert turn.calls and len(requests) == 11 and len(retries) == 10
         assert all(request == requests[0] for request in requests)
         assert len(model.messages) == 2
     finally:
@@ -533,7 +533,7 @@ async def test_sse_permission_checks_do_not_block_event_loop(knowledge, monkeypa
 def test_retry_request_setting_validation():
     from pydantic import ValidationError
     from src.api.routes_qa import AskRequest
-    assert AskRequest(question='q').api_retry_count == 5
+    assert AskRequest(question='q').api_retry_count == 10
     assert AskRequest(question='q', api_retry_count=0).api_retry_count == 0
     for invalid in (-1, 11, 1.5, True):
         with pytest.raises(ValidationError):

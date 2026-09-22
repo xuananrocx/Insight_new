@@ -20,36 +20,20 @@ from src.core.config import settings
 from src.db import metadata_db
 from src.knowledge import ingestion
 from src.knowledge.ingestion import TaskCancelledError
+from src.core.ingest_state import CleanupError, current_upload_task, ingestion_lock
+from src.knowledge.ingest_transaction import cleanup_run, pending_runs
 
 logger = logging.getLogger(__name__)
 
 # 全局单线程 worker，避免并发 ingest
 _worker_lock = threading.Lock()
-_worker_started = False
+_registry_lock = threading.RLock()
+_active_workers: set[str] = set()
 
 # in-process 事件总线：task_id → list[Callable[[dict], None]]
 # worker 处理每个文件时，往所有订阅者推送事件
 _subscribers: dict[str, list[Callable[[dict], None]]] = {}
 _subscribers_lock = threading.Lock()
-
-# 单文件内部阶段 → 加权百分比（按历史耗时统计得出的近似分布）
-# parsing/chunking/writing 是离散步骤；embedding 是最耗时的连续段
-# ai_summary 仅在 ingest.ai_summary.enabled=true 时触发
-_STAGE_PERCENT: dict[str, int] = {
-    "parsing": 15,
-    "chunking": 20,
-    "embedding": 60,
-    "upserting": 70,    # 写入 vector_store + BM25
-    "ai_summary": 95,   # AI 摘要 + 概念提取（如启用）
-}
-
-_STAGE_LABEL: dict[str, str] = {
-    "parsing": "解析中",
-    "chunking": "切片中",
-    "embedding": "向量化中",
-    "upserting": "写入索引",
-    "ai_summary": "AI 摘要",
-}
 
 
 def _now_ms() -> int:
@@ -120,17 +104,22 @@ def _process_task(task_id: str) -> None:
     })
 
     while True:
+        task = metadata_db.get_upload_task(task_id)
+        if task and task["status"] in ("cancelling", "cleaning"):
+            _finish_cancel(task_id)
+            return
         from src.core import accounts
         if accounts.enabled:
             accounts.require_kb(kb_id, "editor")
         # 每次循环重新拉 queued（支持 retry 时把 failed 重置为 queued）
         queued_files = metadata_db.list_upload_task_files(task_id, status="queued")
         if not queued_files:
-            break
+            _settle_task(task_id)
+            return
 
         # 检查任务是否被 cancel（status 改成 cancelled）
         task = metadata_db.get_upload_task(task_id)
-        if not task or task["status"] == "cancelled":
+        if not task or task["status"] in ("cancelled", "paused"):
             logger.info(f"task {task_id} cancelled")
             _publish(task_id, {"type": "task_cancelled", "task_id": task_id})
             return
@@ -146,6 +135,7 @@ def _process_task(task_id: str) -> None:
             task_id,
             current_file_path=rel_path,
             current_stage="processing",
+            current_percent=None, current_detail="准备处理",
         )
         metadata_db.update_upload_task_file_status(
             file_id, "processing", started_at=_now_ms()
@@ -166,42 +156,44 @@ def _process_task(task_id: str) -> None:
             # 此时文件已写入（upload_batch 端点负责），直接标记 done
             pass
         else:
-            # 进度回调：把 ingestion 内部的 stage 事件转成 SSE file_progress
+            # Persist before publishing; throttle row updates to avoid SQLite churn.
+            last_progress = [None, 0.0]
             def _on_progress(stage: str, payload: dict) -> None:
-                # 阶段边界检查取消：大文件不必等整个文件跑完才停
+                now = time.monotonic()
                 t = metadata_db.get_upload_task(task_id)
-                if not t or t["status"] == "cancelled":
-                    raise TaskCancelledError()
-                percent = _STAGE_PERCENT.get(stage)
-                if percent is None:
+                if stage == "cleaning":
+                    metadata_db.update_upload_task_progress(task_id, status="cleaning", current_stage="cleaning",
+                        current_percent=None, current_detail="后台已停止处理，正在清理本次数据")
+                    _publish(task_id, {"type": "task_cleaning", "task_id": task_id})
                     return
-                # embedding 阶段额外带 chunks 总数（让前端能展示 N/M）
-                detail = None
-                if stage == "embedding" and payload.get("chunks"):
-                    detail = f"{payload['chunks']} chunks"
-                _publish(task_id, {
-                    "type": "file_progress",
-                    "task_id": task_id,
-                    "file_id": file_id,
-                    "relative_path": rel_path,
-                    "stage": stage,
-                    "percent": percent,
-                    "detail": detail,
-                })
-                # 同步更新 DB current_stage（让前端 snapshot 也能拿到）
+                if not t or t["status"] in ("cancelling", "cleaning", "cancelled"):
+                    raise TaskCancelledError()
+                final = payload.get("total") and payload.get("completed") == payload["total"]
+                signature = (stage, payload.get("operation"), payload.get("completed"), payload.get("total"))
+                if signature == last_progress[0] and now - last_progress[1] < 0.5 and not final:
+                    return
+                last_progress[:] = [signature, now]
+                total, completed = payload.get("total"), payload.get("completed")
+                percent = min(100, max(0, round(completed / total * 100, 1))) if total and completed is not None else None
+                detail = payload.get("detail")
+                if stage == "ai_summary":
+                    detail = "文档已入库，正在生成 AI 摘要"
                 metadata_db.update_upload_task_progress(
-                    task_id, current_stage=stage,
-                )
+                    task_id, current_stage=stage, current_percent=percent, current_detail=detail)
+                _publish(task_id, {
+                    "type": "file_progress", "task_id": task_id,
+                    "file_id": file_id, "relative_path": rel_path,
+                    "stage": stage, "percent": percent, "detail": detail})
 
             try:
                 if not abs_path.exists():
                     raise FileNotFoundError(f"文件不存在: {abs_path}")
-                result = ingestion.ingest_single_file(
-                    abs_path,
-                    kb_id=kb_id,
-                    skip_if_exists=skip_if_exists,
-                    progress=_on_progress,
-                )
+                token = current_upload_task.set(task_id)
+                try:
+                    result = ingestion.ingest_single_file(
+                        abs_path, kb_id=kb_id, skip_if_exists=skip_if_exists, progress=_on_progress)
+                finally:
+                    current_upload_task.reset(token)
                 if result.get("skipped"):
                     final_status = "skipped"
                     skip_reason = result.get("skip_reason", "exists")
@@ -215,18 +207,14 @@ def _process_task(task_id: str) -> None:
                         ) or "ingest 失败"
                     else:
                         error_msg = "; ".join(str(e) for e in raw_errors) or "ingest 失败"
-            except TaskCancelledError:
-                # 用户取消：当前文件标记 cancelled，worker 直接退出
+            except TaskCancelledError as exc:
                 metadata_db.update_upload_task_file_status(
-                    file_id, "cancelled", finished_at=_now_ms()
-                )
-                _publish(task_id, {
-                    "type": "task_cancelled",
-                    "task_id": task_id,
-                    "file_id": file_id,
-                    "relative_path": rel_path,
-                })
-                logger.info(f"batch_upload task {task_id} cancelled mid-file: {rel_path}")
+                    file_id, "done" if getattr(exc, "committed", False) else "cancelled", finished_at=_now_ms())
+                _finish_cancel(task_id)
+                return
+            except CleanupError as exc:
+                metadata_db.update_upload_task_file_status(file_id, "cleanup_failed", error_message=str(exc))
+                _cleanup_failed(task_id, exc)
                 return
             except Exception as e:
                 logger.exception(f"ingest failed for {rel_path}")
@@ -244,15 +232,19 @@ def _process_task(task_id: str) -> None:
 
         # 更新任务级进度
         task = metadata_db.get_upload_task(task_id)
-        new_done = task["done"] + (1 if final_status == "done" else 0)
-        new_skipped = task["skipped"] + (1 if final_status == "skipped" else 0)
-        new_failed = task["failed"] + (1 if final_status == "failed" else 0)
+        rows = metadata_db.list_upload_task_files(task_id)
+        new_done = sum(f["status"] == "done" for f in rows)
+        new_skipped = sum(f["status"] == "skipped" for f in rows)
+        new_failed = sum(f["status"] == "failed" for f in rows)
 
         # 检查是否所有文件都处理完了
         all_files = metadata_db.list_upload_task_files(task_id)
         queued_remaining = sum(1 for f in all_files if f["status"] == "queued")
         processing_remaining = sum(1 for f in all_files if f["status"] == "processing")
-        is_finished = queued_remaining == 0 and processing_remaining == 0
+        if task["status"] in ("cancelling", "cleaning"):
+            _finish_cancel(task_id)
+            return
+        is_finished = queued_remaining == 0 and processing_remaining == 0 and bool(task.get("upload_complete", 1)) and task["status"] != "cancelled"
 
         if is_finished:
             metadata_db.update_upload_task_progress(
@@ -306,37 +298,84 @@ def _process_task(task_id: str) -> None:
             return
 
 
-def _run_in_thread(task_id: str) -> None:
-    """在后台线程跑任务（避免阻塞 HTTP 请求）。"""
-    try:
-        _process_task(task_id)
-    except Exception:
-        logger.exception(f"batch_upload task {task_id} crashed")
-        metadata_db.update_upload_task_progress(
-            task_id, status="paused", current_stage="crashed"
-        )
+def _settle_task(task_id: str) -> None:
+    """No runnable files must not leave a task looking busy forever."""
+    task = metadata_db.get_upload_task(task_id)
+    if not task or task["status"] in ("cancelled", "paused"):
+        return
+    if task["status"] in ("cancelling", "cleaning"):
+        _finish_cancel(task_id)
+        return
+    rows = metadata_db.list_upload_task_files(task_id)
+    if any(f["status"] == "queued" for f in rows):
+        return
+    if any(f["status"] == "processing" for f in rows):
+        metadata_db.update_upload_task_progress(task_id, status="paused", current_stage="interrupted",
+                                               current_percent=None, current_detail="处理已中断，等待恢复")
         _publish(task_id, {"type": "task_crashed", "task_id": task_id})
+        return
+    counts = {key: sum(f["status"] == status for f in rows)
+              for key, status in (("done", "done"), ("skipped", "skipped"), ("failed", "failed"))}
+    complete = bool(task.get("upload_complete", 1))
+    metadata_db.update_upload_task_progress(task_id, **counts,
+        status="completed" if complete else "uploading", current_file_path=None, current_stage=None,
+        finished_at=_now_ms() if complete else None)
+    if complete:
+        _publish(task_id, {"type": "task_completed", "task_id": task_id, "total": task["total"], **counts})
+
+
+def _run_in_thread(task_id: str) -> None:
+    try:
+        with _worker_lock:
+            task = metadata_db.get_upload_task(task_id)
+            if task and task["status"] == "running":
+                _process_task(task_id)
+            elif task and task["status"] in ("cancelling", "cleaning", "cleanup_failed"):
+                with ingestion_lock:
+                    _finish_cancel(task_id)
+    except Exception:
+        logger.exception("batch_upload task %s crashed", task_id)
+        task = metadata_db.get_upload_task(task_id)
+        if task and task["status"] in ("cancelling", "cleaning", "cleanup_failed"):
+            _cleanup_failed(task_id, "后台停止，需重试清理")
+        elif task and task["status"] != "cancelled":
+            metadata_db.update_upload_task_progress(
+                task_id, status="paused", current_stage="crashed",
+                current_percent=None, current_detail="处理已中断，等待恢复")
+            _publish(task_id, {"type": "task_crashed", "task_id": task_id})
+    finally:
+        with _registry_lock:
+            # Close the race where cancel arrives after the last file returned.
+            task = metadata_db.get_upload_task(task_id)
+            if task and task["status"] in ("cancelling", "cleaning"):
+                _finish_cancel(task_id)
+            _active_workers.discard(task_id)
 
 
 def start_task(task_id: str) -> None:
-    """启动一个后台线程处理任务（异步立即返回）。"""
+    """Reserve before spawning, preventing duplicate resume/retry threads."""
     import contextvars
     from src.core import accounts
-    if accounts.enabled:
-        current = accounts.user()
-        accounts.execute('INSERT INTO auth_job_context VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET user_id=excluded.user_id,provider_id=excluded.provider_id,started_at=excluded.started_at',
-                         (task_id,current['id'],accounts.selected_provider.get(),_now_ms()))
-        accounts.audit('upload_started', task_id)
-    context = contextvars.copy_context()
-    if accounts.enabled:
-        # Already-authorized background jobs keep the actor, not a browser cookie.
-        # Account disablement and KB/API revocation are still checked during work.
-        context.run(accounts.identity.set, current)
-    thread = threading.Thread(
-        target=context.run, args=(_run_in_thread, task_id), daemon=True, name=f"batch-upload-{task_id}"
-    )
-    thread.start()
-    logger.info(f"batch_upload worker thread started for task {task_id}")
+    with _registry_lock:
+        if task_id in _active_workers:
+            return
+        if accounts.enabled:
+            current = accounts.user()
+            accounts.execute('INSERT INTO auth_job_context VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET user_id=excluded.user_id,provider_id=excluded.provider_id,started_at=excluded.started_at',
+                             (task_id,current['id'],accounts.selected_provider.get(),_now_ms()))
+            accounts.audit('upload_started', task_id)
+        context = contextvars.copy_context()
+        if accounts.enabled:
+            context.run(accounts.identity.set, current)
+        _active_workers.add(task_id)
+        try:
+            thread = threading.Thread(target=context.run, args=(_run_in_thread, task_id),
+                                      daemon=True, name=f"batch-upload-{task_id}")
+            thread.start()
+        except Exception:
+            _active_workers.discard(task_id)
+            raise
+        logger.info("batch_upload worker thread started for task %s", task_id)
 
 
 def generate_task_id() -> str:
@@ -474,15 +513,22 @@ def recover_interrupted_tasks() -> int:
       继续时视为"传完收尾"（只 ingest 已到达的文件）
     """
     recovered = 0
-    active = metadata_db.list_active_upload_tasks()
-    for task in active:
-        if task["status"] in ("running", "uploading"):
-            stage = "interrupted" if task["status"] == "running" else "upload_interrupted"
-            metadata_db.update_upload_task_progress(
-                task["id"], status="paused", current_stage=stage
-            )
+    for run in pending_runs():
+        try:
+            cleanup_run(run["id"])
+        except Exception as exc:
+            if run["task_id"]:
+                _cleanup_failed(run["task_id"], exc)
+            logger.exception("interrupted ingest cleanup failed: %s", run["id"])
+    for task in metadata_db.list_active_upload_tasks():
+        if task["status"] in ("cancelling", "cleaning"):
+            _finish_cancel(task["id"])
             recovered += 1
-            logger.info(f"recovered interrupted task: {task['id']} (was {task['status']})")
+        elif task["status"] in ("running", "uploading"):
+            stage = "interrupted" if task["status"] == "running" else "upload_interrupted"
+            metadata_db.update_upload_task_progress(task["id"], status="paused", current_stage=stage,
+                current_percent=None, current_detail="服务中断，等待恢复")
+            recovered += 1
     return recovered
 
 
@@ -491,35 +537,70 @@ def resume_task(task_id: str) -> bool:
 
     上传中断的任务继续时按"收尾已到达文件"处理（upload_complete=1）。
     """
-    task = metadata_db.get_upload_task(task_id)
-    if not task:
-        return False
-    if task["status"] not in ("paused", "failed"):
-        return False
-    metadata_db.update_upload_task_progress(
-        task_id, status="running", current_stage="resuming", upload_complete=True
-    )
-    start_task(task_id)
-    return True
+    with _registry_lock:
+        task = metadata_db.get_upload_task(task_id)
+        if not task or task_id in _active_workers:
+            return False
+        if task["status"] not in ("paused", "failed", "running"):
+            return False
+        interrupted = metadata_db.list_upload_task_files(task_id, status="processing")
+        for file in interrupted:
+            metadata_db.reset_file_to_queued(file["id"])
+        metadata_db.update_upload_task_progress(
+            task_id, status="running", current_stage="resuming", upload_complete=True,
+            current_file_path=None, current_percent=None, current_detail="等待处理，已完成文件保留",
+            finished_at=None)
+        start_task(task_id)
+        logger.info("batch_upload resumed task=%s requeued=%s", task_id, len(interrupted))
+        return True
+
+
+def _cleanup_failed(task_id: str, error) -> None:
+    metadata_db.update_upload_task_progress(task_id, status="cleanup_failed", current_stage="cleanup_failed",
+        current_percent=None, current_detail=str(error), finished_at=None)
+    _publish(task_id, {"type": "task_crashed", "task_id": task_id})
+
+
+def _finish_cancel(task_id: str) -> None:
+    """Only called after this task has stopped producing writes."""
+    try:
+        metadata_db.update_upload_task_progress(task_id, status="cleaning", current_stage="cleaning",
+            current_percent=None, current_detail="正在清理本次数据，源文件保留")
+        _publish(task_id, {"type": "task_cleaning", "task_id": task_id})
+        committed_paths = set()
+        for run in pending_runs(task_id):
+            if run["status"] == "committed":
+                with metadata_db.get_cursor() as cur:
+                    row = cur.execute("SELECT absolute_path FROM knowledge_files WHERE id=?",(run["file_id"],)).fetchone()
+                    if row: committed_paths.add(row["absolute_path"])
+            cleanup_run(run["id"])
+        for file in metadata_db.list_upload_task_files(task_id):
+            if file["status"] in ("queued", "processing", "cleanup_failed"):
+                metadata_db.update_upload_task_file_status(file["id"],
+                    "done" if file["absolute_path"] in committed_paths or file.get("skip_reason") == "main_import_completed" else "cancelled", finished_at=_now_ms())
+        rows = metadata_db.list_upload_task_files(task_id)
+        counts = {key: sum(f["status"] == key for f in rows) for key in ("done", "skipped", "failed")}
+        metadata_db.update_upload_task_progress(task_id, **counts, status="cancelled", current_stage=None,
+            current_file_path=None, current_detail="已停止导入并清理临时数据；已完成文件和源文件保留", finished_at=_now_ms())
+        _publish(task_id, {"type": "task_cancelled", "task_id": task_id})
+    except Exception as exc:
+        _cleanup_failed(task_id, exc)
 
 
 def cancel_task(task_id: str) -> bool:
-    """取消任务：所有 queued/processing 文件标记 cancelled，任务级 status 改 cancelled。"""
-    task = metadata_db.get_upload_task(task_id)
-    if not task:
-        return False
-    # 标记任务 cancelled（worker 检测到会停止）
-    metadata_db.update_upload_task_progress(
-        task_id, status="cancelled", finished_at=_now_ms()
-    )
-    # 把所有 queued 的文件改成 cancelled（processing 让 worker 自然完成）
-    queued = metadata_db.list_upload_task_files(task_id, status="queued")
-    for f in queued:
-        metadata_db.update_upload_task_file_status(
-            f["id"], "cancelled", finished_at=_now_ms()
-        )
-    # 给 worker 时间退出（worker 在每个文件前检查 status）
-    return True
+    """Request cooperative cancellation. A worker acknowledges only after cleanup."""
+    with _registry_lock:
+        task = metadata_db.get_upload_task(task_id)
+        if not task or task["status"] == "completed":
+            return False
+        if task["status"] == "cancelled":
+            return True
+        metadata_db.update_upload_task_progress(task_id, status="cancelling", current_stage="cancelling",
+            current_percent=None, current_detail="已请求取消，等待当前操作结束后清理；源文件保留", finished_at=None)
+        _publish(task_id, {"type": "task_cancelling", "task_id": task_id})
+        if task_id not in _active_workers:
+            start_task(task_id)
+        return True
 
 
 def retry_failed_files(task_id: str, file_ids: list[int] | None = None) -> int:
@@ -528,7 +609,7 @@ def retry_failed_files(task_id: str, file_ids: list[int] | None = None) -> int:
     返回重置的文件数。重置后自动启动 worker 继续处理。
     """
     task = metadata_db.get_upload_task(task_id)
-    if not task:
+    if not task or task["status"] in ("running", "cancelling", "cleaning", "cleanup_failed"):
         return 0
 
     if file_ids:
@@ -546,7 +627,8 @@ def retry_failed_files(task_id: str, file_ids: list[int] | None = None) -> int:
     # 如果任务已经完成/取消/暂停，重新启动
     if task["status"] in ("completed", "cancelled", "paused", "failed"):
         metadata_db.update_upload_task_progress(
-            task_id, status="running", current_stage="retrying"
+            task_id, status="running", current_stage="retrying", finished_at=None,
+            failed=max(0, task["failed"] - len(target_files)), current_percent=None, current_detail="等待重试"
         )
         start_task(task_id)
 
@@ -569,7 +651,7 @@ def delete_failed_files(
     - task 对应状态计数同步减少
     """
     task = metadata_db.get_upload_task(task_id)
-    if not task:
+    if not task or task["status"] in ("running", "cancelling", "cleaning", "cleanup_failed"):
         return {"deleted_count": 0}
 
     if file_ids:

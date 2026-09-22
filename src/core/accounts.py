@@ -303,6 +303,7 @@ def provider_config(p: dict) -> dict:
         "request_timeout_seconds": settings.config.get("llm", {}).get(
             "request_timeout_seconds", 120
         ),
+        "test_timeout_seconds": min(10, settings.config.get("llm", {}).get("test_timeout_seconds", 10)),
         "api_key": cipher().decrypt(p["secret"].encode()).decode(),
     }
 

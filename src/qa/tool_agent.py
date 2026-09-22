@@ -14,6 +14,7 @@ from fastapi import HTTPException
 
 from src.core.config import settings
 from src.core.tool_chat import create_tool_chat, ToolProtocolError
+from src.core.api_retry import RetryDeferredError
 from src.core import ai_call_logger
 from src.qa.knowledge_tools import KnowledgeTools, TOOLS, LABELS
 from src.qa.trace import PipelineCancelled
@@ -74,7 +75,7 @@ def result_count(result):
     return 0
 
 
-async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None, turn_id=None, strict_knowledge=False, api_retry_count=5):
+async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None, turn_id=None, strict_knowledge=False, api_retry_count=10):
     queue = asyncio.Queue()
     stopped = threading.Event()
     trace, parts = [], []
@@ -135,11 +136,13 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 started = time.monotonic()
                 try:
                     turn = await bounded(model.turn(TOOLS, force=round_no == 0, max_tokens=tokens), total, tools_phase=True)
-                except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError) as exc:
+                except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError, RetryDeferredError) as exc:
                     if called == 0:
-                        if isinstance(exc, ToolProtocolError):
+                        if isinstance(exc, (ToolProtocolError, RetryDeferredError)):
                             raise
                         raise ToolProtocolError("首轮模型请求未完成，请查看 AI 调用日志中的连接或超时详情。") from exc
+                    if isinstance(exc, RetryDeferredError):
+                        raise
                     reason = "后续模型查阅未完成，依据已读资料回答并说明缺口"
                     stage("agent_lookup_incomplete", "部分资料补查未完成", status="partial", notes=reason)
                     break
@@ -223,7 +226,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     queue.put_nowait({"type": "token", "data": {"text": tail}})
             try:
                 await bounded(generate(), max(1, deadline - time.monotonic()))
-            except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError) as exc:
+            except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError, RetryDeferredError) as exc:
                 logger.warning("Agent answer incomplete: %s", type(exc).__name__)
                 await asyncio.wait_for(flush(), 5)
                 tail = citations.feed("", final=True)
@@ -232,6 +235,8 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 state["verification"] = "partial"
                 state["outcome"] = "partial"
                 state["reason"] = "回答生成超时，已保留部分内容" if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else "回答生成中断，已保留可用内容"
+                if isinstance(exc, RetryDeferredError):
+                    state["reason"] = str(exc)
                 if not parts:
                     for i, source in enumerate(sources[:4], 1):
                         parts.append(f"**已找到的原文：{source['source_name']}** [{i}]\n\n{source['content'][:1000]}\n\n")
@@ -267,7 +272,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             secret = getattr(getattr(model, "provider", None), "_api_key", "")
             logger.error("Knowledge agent failed session=%s turn=%s\n%s", session_id, turn_id,
                          redact(traceback.format_exc(), secret, 12000))
-            message = str(exc) if isinstance(exc, (ValueError, ToolProtocolError)) else "深度 AI 请求失败，请检查 API 和知识库状态，或使用 AI 增强。"
+            message = str(exc) if isinstance(exc, (ValueError, ToolProtocolError, RetryDeferredError)) else "深度 AI 请求失败，请检查 API 和知识库状态，或使用 AI 增强。"
             terminal = {"type": "error", "data": {"message": message}}
             return
         finally:

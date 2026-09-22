@@ -22,7 +22,7 @@ router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
 
 class AskRequest(BaseModel):
-    api_retry_count: int = Field(5, ge=0, le=10, strict=True)
+    api_retry_count: int = Field(10, ge=0, le=10, strict=True)
     strict_knowledge: bool = False
     provider_id: str | None = None
     question: str = Field(..., min_length=1, max_length=4000)
@@ -124,6 +124,15 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
     logger.info(f"ask_stream start mode={mode}")
 
     async def producer() -> None:
+        from src.core.api_retry import retry_observer
+        retry_stages = []
+        loop = asyncio.get_running_loop()
+        def on_retry(**info):
+            data = {"stage": "api_retry", "label": "API 请求重试", "status": "partial",
+                    "notes": f"{info['reason']}，{info['delay']:.1f} 秒后进行第 {info['attempt']}/{info['maximum']} 次重试"}
+            retry_stages.append(data)
+            loop.call_soon_threadsafe(queue.put_nowait, {"type": "stage", "data": data})
+        observer_token = retry_observer.set(on_retry)
         try:
             async for evt in ask_stream(
                 question=req.question,
@@ -136,6 +145,8 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
                 strict_knowledge=req.strict_knowledge,
                 api_retry_count=req.api_retry_count,
             ):
+                if evt.get("type") in ("done", "error") and retry_stages:
+                    evt["data"]["trace"] = [*retry_stages, *evt["data"].get("trace", [])]
                 await queue.put(evt)
         except asyncio.CancelledError:
             raise
@@ -143,6 +154,7 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
             logger.exception(f"ask_stream producer error: {e}")
             await queue.put({"type": "error", "data": {"message": str(e)}})
         finally:
+            retry_observer.reset(observer_token)
             await queue.put(None)
 
     producer_task = asyncio.create_task(producer())

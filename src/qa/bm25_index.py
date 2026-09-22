@@ -10,6 +10,8 @@ ingest 时同步更新；持久化到 data/bm25_index.json。
 本地用户改写该文件即可在问答启动时执行任意代码。
 """
 from __future__ import annotations
+from src.core.ingest_state import publication_guard
+
 
 import json
 import logging
@@ -214,6 +216,7 @@ def clear() -> None:
     _save()
 
 
+@publication_guard
 def query(
     query_text: str,
     top_k: int = 20,
@@ -242,17 +245,21 @@ def query(
         return []
     scores = bm25_ref.get_scores(tokens)
 
+    from src.db import metadata_db
+    blocked = metadata_db.unpublished_chunk_ids()
     # 持锁外做排序 + 过滤（基于快照）
     ranked = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)
     out: list[dict[str, Any]] = []
     # 当指定 kb_id 时，需要扩大候选集以保证过滤后仍有 top_k 条
-    scan_limit = len(ranked) if kb_id else top_k
+    scan_limit = len(ranked) if kb_id or blocked else top_k
     for i, score in ranked[:scan_limit]:
         # score==0 表示词表完全无交集，结束；负分是"命中但词过于常见"
         # （rank_bm25 的 idf 在 df 接近 N 时为负），仍算命中，交给 RRF 排序
         if score == 0:
             break
         chunk = dict(chunks_snapshot[i])
+        if chunk.get("id") in blocked:
+            continue
         if kb_id is not None:
             chunk_kb = chunk.get("kb_id") or "default"
             if chunk_kb != kb_id:
@@ -280,6 +287,7 @@ def identifiers(text: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"[A-Za-z0-9_]+(?:[.:-][A-Za-z0-9_]+)*", text.lower())))[:20]
 
 
+@publication_guard
 def query_enhanced(query_text: str, top_k: int = 20, kb_id: str = "default") -> list[dict]:
     """Lexical recall with exact identifiers, genuine zero/negative-score matches.
 
@@ -295,8 +303,12 @@ def query_enhanced(query_text: str, top_k: int = 20, kb_id: str = "default") -> 
     exact = [t for t in identifiers(query_text) if len(t) >= 2]
     patterns = [re.compile(r"(?<![a-z0-9_])" + re.escape(t) + r"(?![a-z0-9_])", re.I) for t in exact]
     scores = model.get_scores(list(tokens))
+    from src.db import metadata_db
+    blocked = metadata_db.unpublished_chunk_ids()
     ranked = []
     for chunk, words, score in zip(chunks, corpus, scores):
+        if chunk.get("id") in blocked:
+            continue
         if (chunk.get("kb_id") or "default") != kb_id or chunk.get("chunk_type") == "summary":
             continue
         text = " ".join(str(chunk.get(k, "")) for k in ("text", "title", "source_name", "section_label"))

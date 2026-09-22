@@ -528,7 +528,7 @@ def cancel_upload_task(task_id: str) -> dict:
     metadata_db.init_db()
     ok = batch_upload.cancel_task(task_id)
     if not ok:
-        raise HTTPException(status_code=404, detail="任务不存在")
+        raise HTTPException(status_code=409, detail="任务不存在或已经完成，无法取消")
     return {"ok": True}
 
 
@@ -546,6 +546,9 @@ def resume_upload_task(task_id: str) -> dict:
 def delete_upload_task(task_id: str) -> dict:
     """删除任务记录（不影响已 ingest 的 knowledge_files）。"""
     metadata_db.init_db()
+    task = metadata_db.get_upload_task(task_id)
+    if task and task["status"] in ("running", "cancelling", "cleaning", "cleanup_failed"):
+        raise HTTPException(status_code=409, detail="请先取消导入并完成清理，再删除任务")
     ok = metadata_db.delete_upload_task(task_id)
     if not ok:
         raise HTTPException(status_code=404, detail="任务不存在")
@@ -563,15 +566,6 @@ async def stream_upload_task(task_id: str):
         raise HTTPException(status_code=404, detail="任务不存在")
 
     async def event_stream():
-        # 先推一个 snapshot 事件，让前端拿到当前状态
-        snapshot = _build_task_snapshot(task_id)
-        yield f"event: snapshot\ndata: {_sse_json(snapshot)}\n\n"
-
-        # 如果任务已完成，推 done 后关闭
-        if snapshot["status"] in ("completed", "cancelled"):
-            yield f"event: done\ndata: {_sse_json(snapshot)}\n\n"
-            return
-
         # 订阅事件
         queue: asyncio.Queue[dict] = asyncio.Queue()
 
@@ -587,11 +581,18 @@ async def stream_upload_task(task_id: str):
         unsubscribe = batch_upload.subscribe(task_id, callback)
 
         try:
+            # Subscribe before snapshot so transitions during connect cannot be lost.
+            snapshot = _build_task_snapshot(task_id)
+            yield f"event: snapshot\ndata: {_sse_json(snapshot)}\n\n"
             # 推送已完成/失败文件的事件（让前端能恢复 UI 状态）
             files = metadata_db.list_upload_task_files(task_id)
             for file_info in files:
                 if file_info["status"] in ("done", "skipped", "failed", "cancelled"):
                     yield f"event: file_finished\ndata: {_sse_json({'task_id': task_id, 'file_id': file_info['id'], 'relative_path': file_info['relative_path'], 'status': file_info['status'], 'skip_reason': file_info['skip_reason'], 'error': file_info['error_message'], 'done': snapshot['done'], 'skipped': snapshot['skipped'], 'failed': snapshot['failed'], 'total': snapshot['total'], 'task_finished': False})}\n\n"
+
+            if snapshot.get("status") in ("completed", "cancelled", "paused", "failed", "cleanup_failed"):
+                yield f"event: done\ndata: {_sse_json(snapshot)}\n\n"
+                return
 
             # 接收订阅事件直到任务结束
             while True:
@@ -601,13 +602,18 @@ async def stream_upload_task(task_id: str):
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=30.0)
                 except asyncio.TimeoutError:
-                    # 心跳：避免代理超时断开
-                    yield ": heartbeat\n\n"
+                    snapshot = _build_task_snapshot(task_id)
+                    yield f"event: snapshot\ndata: {_sse_json(snapshot)}\n\n"
+                    if snapshot.get("status") not in ("running", "uploading", "cancelling", "cleaning"):
+                        yield f"event: done\ndata: {_sse_json(snapshot)}\n\n"
+                        return
                     continue
 
                 evt_type = event.get("type", "message")
                 yield f"event: {evt_type}\ndata: {_sse_json(event)}\n\n"
 
+                snapshot = _build_task_snapshot(task_id)
+                yield f"event: snapshot\ndata: {_sse_json(snapshot)}\n\n"
                 if evt_type in ("task_completed", "task_cancelled", "task_crashed"):
                     # 推 done 事件让前端关闭 stream
                     yield f"event: done\ndata: {_sse_json(event)}\n\n"
@@ -631,19 +637,8 @@ def _build_task_snapshot(task_id: str) -> dict:
     task = metadata_db.get_upload_task(task_id)
     if not task:
         return {}
-    return {
-        "task_id": task_id,
-        "kb_id": task["kb_id"],
-        "status": task["status"],
-        "total": task["total"],
-        "done": task["done"],
-        "skipped": task["skipped"],
-        "failed": task["failed"],
-        "current_file_path": task["current_file_path"],
-        "current_stage": task["current_stage"],
-        "auto_ingest": bool(task["auto_ingest"]),
-        "skip_mode": task["skip_mode"],
-    }
+    return {**task, "task_id": task_id}
+
 
 
 def _sse_json(obj: dict) -> str:

@@ -40,11 +40,14 @@ class AccountChatClient(LLMClient):
             self.close()
 
     async def chat_stream(self, *args, **kwargs):
-        self.check_access()
+        import asyncio
+        from contextlib import aclosing
+        await asyncio.to_thread(self.check_access)
         try:
-            async for token in super().chat_stream(*args, **kwargs):
-                self.check_access()
-                yield token
+            async with aclosing(super().chat_stream(*args, **kwargs)) as stream:
+                async for token in stream:
+                    await asyncio.to_thread(self.check_access)
+                    yield token
         finally:
             for p in self._providers.values():
                 client = getattr(p, "_async_client", None)

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronRight, Loader2, Sparkles, Square } from 'lucide-react'
+import { ChevronRight, Files, Loader2, Sparkles, Square } from 'lucide-react'
 
 import type { ThinkingState } from '@/hooks/use-chat-sessions'
 import { StageRow } from './stage-row'
@@ -43,7 +43,7 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
           </button>
         ) : <span className="min-w-0 flex-1 text-foreground/80">{label}</span>}
         {showDetails && thinking.sources && thinking.sources.length > 0 ? (
-          <span className="text-[10px] text-muted-foreground">📚 匹配 {thinking.sources.length} 条</span>
+          <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"><Files aria-hidden="true" className="h-3 w-3 shrink-0" />匹配 {thinking.sources.length} 条</span>
         ) : null}
         {isStreaming && onStop ? (
           <button

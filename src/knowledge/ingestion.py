@@ -18,14 +18,18 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import time
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
 from src.core import llm_client, vector_store
 from src.core.config import settings
+from src.core.ingest_state import TaskCancelledError, CleanupError, ingestion_guard
+from src.knowledge.ingest_transaction import IngestTransaction
 from src.db import metadata_db
-from src.knowledge.ai_summarizer import remove_summary_data, summarize_and_extract
+from src.knowledge.ai_summarizer import summarize_and_extract
 from src.knowledge.chunker import Chunk, chunk_document
 from src.qa import bm25_index
 
@@ -41,10 +45,6 @@ from src.knowledge.parsers.registry import is_supported, parse_file
 
 # 单次扫描的进度回调
 ProgressFn = Callable[[str, dict], None]
-
-
-class TaskCancelledError(Exception):
-    """任务被取消。进度回调抛出该异常可中止当前文件的处理（阶段边界生效）。"""
 
 
 @dataclass
@@ -124,12 +124,27 @@ def _ai_summary_min_word_count() -> int:
     return int(cfg.get("min_word_count", 100))
 
 
-def _embed_chunks(chunks: list[Chunk]) -> tuple[list[list[float]], str]:
+def _embed_chunks(chunks: list[Chunk], progress: ProgressFn | None = None) -> tuple[list[list[float]], str]:
     """调用 LLM 客户端批量 embedding。"""
-    texts = [c.text for c in chunks]
-    return llm_client.get_client().embed(texts)
+    client = llm_client.get_client()
+    vectors = []
+    provider = ""
+    # Bound temporary model tensors and remote request size.
+    for offset in range(0, len(chunks), 32):
+        if progress:
+            progress("embedding", {"completed": offset, "total": len(chunks),
+                                   "detail": f"向量化 {offset}/{len(chunks)} 个片段"})
+        batch, provider = client.embed([c.text for c in chunks[offset:offset + 32]])
+        if len(batch) != len(chunks[offset:offset + 32]):
+            raise ValueError("向量化返回数量与片段数量不一致")
+        vectors.extend(batch)
+    if progress:
+        progress("embedding", {"completed": len(chunks), "total": len(chunks),
+                               "detail": f"向量化 {len(chunks)}/{len(chunks)} 个片段"})
+    return vectors, provider
 
 
+@ingestion_guard
 def _process_one_document(
     abs_path: Path,
     rel_path: str,
@@ -150,92 +165,100 @@ def _process_one_document(
     """
     if result is None:
         result = ScanResult()
-    import json
 
     # 先查是否已存在（用于统计 added/updated 和清理旧 chunks）
     existing = metadata_db.get_file_by_path(rel_path, kb_id=kb_id)
     is_existing = existing is not None
-    old_chunk_ids: list[str] = (
-        json.loads(existing.get("chunk_ids_json") or "[]") if is_existing else []
-    )
-
-    # upsert（会重置 status=pending，清空 chunk_ids_json）
-    file_id = metadata_db.upsert_file(
-        relative_path=rel_path,
-        absolute_path=str(abs_path),
-        content_hash=content_hash,
-        file_size=file_size,
-        file_type=file_type,
-        source_package=source_package,
-        kb_id=kb_id,
-    )
-
-    # 查询 KB 的 collection_name（用于向量库隔离）
     kb_row = metadata_db.get_kb(kb_id)
     collection_name = kb_row["collection_name"] if kb_row else vector_store.COLLECTION_NAME
+    transaction = IngestTransaction(existing=existing, collection_name=collection_name, file_values={
+        "relative_path": rel_path, "absolute_path": str(abs_path), "content_hash": content_hash,
+        "file_size": file_size, "file_type": file_type, "source_package": source_package, "kb_id": kb_id})
+    file_id = transaction.file_id
 
-    # 先删旧的 chunks（如果 hash 变了，旧 chunk_id 因为带 hash，不会被新 chunk 复用）
-    if old_chunk_ids:
-        try:
-            vector_store.delete_chunks(old_chunk_ids, collection_name=collection_name)
-        except Exception as e:
-            # 向量库删除失败：旧 chunks 残留会污染检索，但不应阻塞重投喂
-            logger.warning(f"vector_store.delete_chunks 失败 (collection={collection_name}, count={len(old_chunk_ids)}): {e}")
-        try:
-            bm25_index.remove_chunks(old_chunk_ids)
-        except Exception as e:
-            logger.warning(f"BM25 删除旧 chunks 失败: {e}")
+    stage_started = time.monotonic()
+    active_stage = None
+    original_progress = progress
 
+    def report(stage: str, payload: dict) -> None:
+        nonlocal stage_started, active_stage
+        now = time.monotonic()
+        if stage != active_stage:
+            if active_stage:
+                logger.info("ingest phase file_id=%s stage=%s duration=%.3fs",
+                            file_id, active_stage, now - stage_started)
+            active_stage, stage_started = stage, now
+            logger.info("ingest phase started file_id=%s stage=%s", file_id, stage)
+        if original_progress:
+            original_progress(stage, payload)
+
+    progress = report
     try:
         if progress:
             progress("parsing", {"file": abs_path.name, "stage": "parse"})
-        doc = parse_file(abs_path)
-        if progress:
-            progress("chunking", {"file": abs_path.name, "stage": "chunk", "sections": len(doc.sections)})
-        chunks = chunk_document(doc)
+        if abs_path.suffix.lower() in (".xlsx", ".xlsm"):
+            from src.knowledge.parsers.xlsx_parser import iter_xlsx_sections
+            chunks = []
+            section_count = 0
+            with closing(iter_xlsx_sections(abs_path, progress)) as sections:
+                for section in sections:
+                    # Only the current Markdown block survives into the splitter.
+                    block = ParsedDocument(abs_path, [section], "xlsx", abs_path.stem)
+                    chunks.extend(chunk_document(block))
+                    section_count += 1
+                    del block, section
+            progress("chunking", {"detail": f"已生成 {len(chunks)} 个片段"})
+        else:
+            doc = parse_file(abs_path)
+            section_count = len(doc.sections)
+            progress("chunking", {"file": abs_path.name, "sections": section_count})
+            chunks = chunk_document(doc)
+            del doc
         if not chunks:
             # 文件解析后无文本（如纯图片 PDF）
-            metadata_db.set_file_processed(file_id, [])
+            transaction.publish([], [], progress)
             result.skipped += 1
             return
 
-        if progress:
-            progress("embedding", {"file": abs_path.name, "stage": "embed", "chunks": len(chunks)})
-        embeddings, provider = _embed_chunks(chunks)
-
-        # 构造 chunk_id 与 payload
-        chunk_payloads = []
-        chunk_ids = []
-        for i, (chunk, vec) in enumerate(zip(chunks, embeddings)):
-            cid = vector_store.make_chunk_id(
-                source_path=str(abs_path),
-                content_hash=content_hash,
-                chunk_index=i,
-            )
-            chunk_ids.append(cid)
-            meta = {
-                "content_hash": content_hash,
-                "file_size": file_size,
-                "file_id": file_id,
-                "embedding_provider": provider,
-                "kb_id": kb_id,
-                **chunk.metadata,
-            }
-            chunk_payloads.append({
-                "id": cid,
-                "text": chunk.text,
-                "embedding": vec,
-                "metadata": meta,
-            })
-
-        if progress:
-            progress("upserting", {"file": abs_path.name, "stage": "upsert", "chunks": len(chunk_payloads)})
-        vector_store.upsert_chunks(chunk_payloads, collection_name=collection_name)
-        try:
-            bm25_index.add_chunks(chunk_payloads)
-        except Exception as e:
-            logger.warning(f"BM25 索引更新失败: {e}")
-        metadata_db.set_file_processed(file_id, chunk_ids)
+        chunk_ids = [vector_store.make_chunk_id(source_path=str(abs_path),
+                     content_hash=content_hash + ":" + transaction.id, chunk_index=i) for i in range(len(chunks))]
+        transaction.set_ids(chunk_ids)
+        chunk_payloads = []  # BM25 needs text/metadata only, never retain embeddings here.
+        embedding_seconds = writing_seconds = 0.0
+        expected_provider = None
+        for offset in range(0, len(chunks), 32):
+            progress("embedding", {"completed": offset, "total": len(chunks), "operation": "computing",
+                                   "detail": f"已完成 {offset}/{len(chunks)} 个片段 · 正在计算第 {offset // 32 + 1}/{(len(chunks) + 31) // 32} 批"})
+            batch = chunks[offset:offset + 32]
+            started = time.monotonic()
+            embeddings, provider = _embed_chunks(batch)
+            embedding_seconds += time.monotonic() - started
+            if expected_provider is not None and provider != expected_provider:
+                raise ValueError("向量化服务在处理中发生切换，请重试导入，避免混用向量")
+            expected_provider = provider
+            payloads = []
+            for index, (chunk, vec) in enumerate(zip(batch, embeddings), offset):
+                meta = {"content_hash": content_hash, "file_size": file_size, "file_id": file_id,
+                        "embedding_provider": provider, "kb_id": kb_id, **chunk.metadata}
+                payload = {"id": chunk_ids[index], "text": chunk.text, "metadata": meta}
+                chunk_payloads.append(payload)
+                payloads.append({**payload, "embedding": vec})
+            # Check cancellation again after potentially slow embedding, before writing.
+            progress("embedding", {"completed": offset, "total": len(chunks), "operation": "staging",
+                                   "detail": f"已完成 {offset}/{len(chunks)} 个片段 · 正在暂存第 {offset // 32 + 1}/{(len(chunks) + 31) // 32} 批"})
+            started = time.monotonic()
+            transaction.append(payloads)
+            writing_seconds += time.monotonic() - started
+            progress("embedding", {"completed": offset + len(batch), "total": len(chunks), "operation": "batch_done",
+                                   "detail": f"已完成 {offset + len(batch)}/{len(chunks)} 个片段"})
+            del payloads, embeddings, vec
+        logger.info("ingest batches file_id=%s chunks=%s embedding=%.3fs staging_write=%.3fs",
+                    file_id, len(chunks), embedding_seconds, writing_seconds)
+        progress("embedding", {"completed": len(chunks), "total": len(chunks),
+                               "detail": f"已准备 {len(chunks)}/{len(chunks)} 个片段，等待提交"})
+        if _hash_file(abs_path) != content_hash:
+            raise ValueError("源文件在导入期间发生变化，请重新导入")
+        transaction.publish(chunk_ids, chunk_payloads, progress)
         # 创建/更新文档级元信息（v4：为 RAG 升级预留）
         try:
             metadata_db.upsert_document_meta(
@@ -243,7 +266,7 @@ def _process_one_document(
                 kb_id=kb_id,
                 processed_level="raw",
                 doc_type=_infer_doc_type(abs_path),
-                section_count=len(doc.sections),
+                section_count=section_count,
                 total_chunks=len(chunk_ids),
                 word_count=sum(len(c.text) for c in chunks),
             )
@@ -258,12 +281,6 @@ def _process_one_document(
             else:
                 if progress:
                     progress("ai_summary", {"file": abs_path.name, "stage": "ai_summary"})
-                # 重新投喂时先清理旧的 AI 数据
-                if is_existing:
-                    try:
-                        remove_summary_data(file_id, kb_id, content_hash)
-                    except Exception as e:
-                        logger.warning(f"清理旧 AI 摘要失败（不影响）: {e}")
                 try:
                     ai_result = summarize_and_extract(
                         file_id=file_id,
@@ -273,6 +290,7 @@ def _process_one_document(
                         content_hash=content_hash,
                         collection_name=collection_name,
                         source_path=str(abs_path),
+                        check_cancel=lambda: progress("ai_summary", {"detail": "文档已入库，正在生成 AI 摘要"}),
                     )
                     if ai_result.ok:
                         logger.info(
@@ -284,23 +302,35 @@ def _process_one_document(
                         logger.warning(
                             f"AI 摘要失败（不影响主流程）: {abs_path.name} - {ai_result.error}"
                         )
+                except TaskCancelledError:
+                    raise
                 except Exception as e:
                     logger.warning(f"AI 摘要异常（不影响主流程）: {abs_path.name} - {e}")
         if is_existing:
             result.updated += 1
         else:
             result.added += 1
-    except TaskCancelledError:
-        # 进度回调检测到任务取消：原样上抛，由 worker 决定文件终态
+    except TaskCancelledError as exc:
+        exc.committed = transaction.committed
+        try:
+            if original_progress:
+                original_progress("cleaning", {"detail": "停止后续处理，正在清理本次临时数据"})
+        except TaskCancelledError:
+            pass
+        finally:
+            transaction.abort()
         raise
-    except ParseError as e:
+    except CleanupError:
+        raise
+    except Exception as exc:
+        # Existing file metadata/index remains untouched until commit.
+        transaction.abort()
         result.failed += 1
-        result.errors.append({"file": rel_path, "error": f"解析失败: {e}"})
-        metadata_db.set_file_failed(file_id, str(e))
-    except Exception as e:
-        result.failed += 1
-        result.errors.append({"file": rel_path, "error": f"处理失败: {e}"})
-        metadata_db.set_file_failed(file_id, str(e))
+        result.errors.append({"file": rel_path, "error": f"处理失败: {exc}"})
+    finally:
+        if active_stage:
+            logger.info("ingest phase file_id=%s stage=%s duration=%.3fs",
+                        file_id, active_stage, time.monotonic() - stage_started)
 
 
 def _collect_feed_files(kb_id: str = "default") -> list[Path]:
@@ -569,7 +599,7 @@ def ingest_single_file(
     if existing:
         if existing.get("status") == "failed":
             logger.info(f"覆盖失败记录重新 ingest: {rel_path} (旧错误: {existing.get('error_message')})")
-        elif skip_if_exists:
+        elif skip_if_exists and existing.get("status") == "done":
             return {"ok": True, "skipped": True, "file_id": existing["id"], "skip_reason": "exists"}
         elif existing.get("status") == "done" and existing.get("content_hash") == content_hash:
             return {"ok": True, "skipped": True, "file_id": existing["id"]}

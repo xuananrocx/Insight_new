@@ -26,6 +26,7 @@ import { RetrievalModeSelect } from '@/components/retrieval-mode-select'
 import { SearchResultsList } from '@/components/search-results-list'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { useLocalStorage } from '@/hooks/use-local-storage'
+import { useApiRetryCount } from '@/hooks/use-api-retry-count'
 import { type ChatTurn, type ThinkingState } from '@/hooks/use-chat-sessions'
 import { api, type ChatMessage, type RetrievalMode, type SearchHit, type QaSource, type QaTraceStage } from '@/lib/api'
 import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
@@ -79,7 +80,7 @@ export function ChatPage() {
   // 并发流式支持：sessionId -> turnId 映射（zustand 跨组件共享；切会话/离开聊天页不中断）
   const streamingMap = useAnswerStreams((s) => s.streaming)
   const [strictKnowledge] = useLocalStorage('amd-ai-strict-knowledge', false)
-  const [apiRetryCount] = useLocalStorage('amd-ai-api-retry-count', 5)
+  const [apiRetryCount] = useApiRetryCount()
   const isStreaming = (sid: string | null | undefined): boolean =>
     !!sid && !!streamingMap[sid]
 

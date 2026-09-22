@@ -10,15 +10,10 @@ Embedding：支持本地 sentence-transformers（无需 API key）或 API 模式
 from __future__ import annotations
 
 import logging
+from contextlib import aclosing
 import threading
 from typing import Any, AsyncGenerator
 
-from tenacity import (
-    retry,
-    retry_if_exception_type,
-    stop_after_attempt,
-    wait_exponential,
-)
 
 from src.core.config import ConfigError, settings
 from src.core.llm_providers import (
@@ -110,8 +105,9 @@ class _Provider:
 
     async def chat_stream(self, messages: list[dict], **kwargs: Any) -> AsyncGenerator[str, None]:
         """流式聊天。"""
-        async for token in self._impl.chat_stream(messages, **kwargs):
-            yield token
+        async with aclosing(self._impl.chat_stream(messages, **kwargs)) as stream:
+            async for token in stream:
+                yield token
 
     def embed(self, texts: list[str]) -> list[list[float]]:
         """文本向量化。"""
@@ -453,13 +449,36 @@ class LLMClient:
             ],
         }
 
-    @retry(
-        retry=retry_if_exception_type(LLMError),
-        stop=stop_after_attempt(2),
-        wait=wait_exponential(multiplier=1, min=1, max=4),
-        reraise=True,
-    )
-    def chat(
+    def chat(self, messages, *, scene="qa_chat", log_meta=None, api_retry_count=None, **kwargs):
+        from src.core import accounts
+        from src.core.api_retry import RetryBudget, call_sync
+        if accounts.enabled and not getattr(self, "_account_scoped", False):
+            from src.core.account_llm import chat_client
+            return chat_client().chat(messages, scene=scene, log_meta=log_meta, api_retry_count=api_retry_count, **kwargs)
+        budget = RetryBudget.for_scene(scene, api_retry_count)
+        return call_sync(lambda timeout: self._chat_once(messages, scene=scene, log_meta=log_meta,
+                         **{**kwargs, "timeout": timeout}), budget, scene, log_meta,
+                         check=getattr(self, "check_access", lambda: None))
+
+    async def chat_stream(self, messages, *, scene="qa_chat", log_meta=None, api_retry_count=None, **kwargs):
+        from contextlib import aclosing
+        from src.core import accounts
+        from src.core.api_retry import RetryBudget, call_stream
+        if accounts.enabled and not getattr(self, "_account_scoped", False):
+            from src.core.account_llm import chat_client
+            async with aclosing(chat_client().chat_stream(messages, scene=scene, log_meta=log_meta,
+                                api_retry_count=api_retry_count, **kwargs)) as stream:
+                async for item in stream:
+                    yield item
+            return
+        budget = RetryBudget.for_scene(scene, api_retry_count)
+        async with aclosing(call_stream(lambda timeout: self._chat_stream_once(messages, scene=scene,
+                            log_meta=log_meta, **{**kwargs, "timeout": timeout}), budget, scene, log_meta,
+                            check=getattr(self, "check_access", lambda: None))) as stream:
+            async for item in stream:
+                yield item
+
+    def _chat_once(
         self,
         messages: list[dict],
         *,
@@ -515,7 +534,7 @@ class LLMClient:
                     last_err = e
                     used_provider = name
                     continue
-            raise NoAvailableProviderError(f"所有 chat provider 都失败: {last_err}")
+            raise NoAvailableProviderError(f"所有 chat provider 都失败: {last_err}") from last_err
         except Exception as e:
             # 失败也要记日志（用于审计失败原因）
             _log_call(
@@ -532,7 +551,7 @@ class LLMClient:
             )
             raise
 
-    async def chat_stream(
+    async def _chat_stream_once(
         self,
         messages: list[dict],
         *,
@@ -575,13 +594,14 @@ class LLMClient:
                     if not p.usable:
                         continue
                     first = True
-                    async for token in p.chat_stream(messages, **kwargs):
-                        if first:
-                            used_provider = name
-                            used_model = getattr(p, "model_name", None)
-                        collected_tokens.append(token)
-                        yield token, (name if first else "")
-                        first = False
+                    async with aclosing(p.chat_stream(messages, **kwargs)) as stream:
+                        async for token in stream:
+                            if first:
+                                used_provider = name
+                                used_model = getattr(p, "model_name", None)
+                            collected_tokens.append(token)
+                            yield token, (name if first else "")
+                            first = False
                     # 流式正常结束 → 记日志
                     full_response = "".join(collected_tokens)
                     _log_call(
@@ -605,7 +625,7 @@ class LLMClient:
                         # the same answer without mixing incompatible partial answers.
                         raise
                     continue
-            raise NoAvailableProviderError(f"所有 chat provider 都失败: {last_err}")
+            raise NoAvailableProviderError(f"所有 chat provider 都失败: {last_err}") from last_err
         except Exception as e:
             # 流式失败也记日志（response 是已收集的部分）
             partial = "".join(collected_tokens) if collected_tokens else None
@@ -660,7 +680,8 @@ class LLMClient:
                     p = self._providers[name]
                     if not p.usable:
                         continue
-                    vecs = p.embed(batch)
+                    from src.core.api_retry import RetryBudget, call_sync
+                    vecs = call_sync(lambda timeout: p.embed(batch), RetryBudget.for_scene("embedding"), "embedding")
                     all_vecs.extend(vecs)
                     used_provider = name
                     break
@@ -668,7 +689,7 @@ class LLMClient:
                     last_err = e
                     continue
             else:
-                raise NoAvailableProviderError(f"所有 embed provider 都失败: {last_err}")
+                raise NoAvailableProviderError(f"所有 embed provider 都失败: {last_err}") from last_err
         return all_vecs, used_provider
 
 

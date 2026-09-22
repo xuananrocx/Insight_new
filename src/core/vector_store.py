@@ -12,6 +12,8 @@
 - query(question_vec, k): 相似度检索
 """
 from __future__ import annotations
+from src.core.ingest_state import publication_guard
+
 
 import hashlib
 import uuid
@@ -151,6 +153,7 @@ def delete_chunks(ids: list[str], collection_name: str = COLLECTION_NAME) -> Non
     collection.delete(ids=ids)
 
 
+@publication_guard
 def query_by_embedding(
     embedding: list[float],
     k: int = 5,
@@ -162,12 +165,16 @@ def query_by_embedding(
         collection = _resolve_collection(collection_name)
     except Exception:
         return []
-    res = collection.query(
-        query_embeddings=[embedding],
-        n_results=k,
-        where=where,
-    )
-    return _format_query_result(res)
+    from src.db import metadata_db
+    blocked = metadata_db.unpublished_chunk_ids()
+    size = k
+    while True:
+        res = collection.query(query_embeddings=[embedding], n_results=size, where=where)
+        hits = _format_query_result(res)
+        visible = [hit for hit in hits if hit["id"] not in blocked]
+        if len(visible) >= k or len(hits) < size or not any(hit["id"] in blocked for hit in hits):
+            return visible[:k]
+        size *= 2
 
 
 def query_collections(
@@ -235,6 +242,7 @@ def _sanitize_meta(m: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+@publication_guard
 def get_chunks_by_ids(
     ids: list[str],
     collection_name: str = COLLECTION_NAME,
@@ -259,6 +267,9 @@ def get_chunks_by_ids(
             "text": docs[i] if i < len(docs) else "",
             **meta,
         }
+    from src.db import metadata_db
+    blocked = metadata_db.unpublished_chunk_ids()
+    out = {cid: hit for cid, hit in out.items() if cid not in blocked}
     return out
 
 
@@ -271,6 +282,7 @@ def count(collection_name: str = COLLECTION_NAME) -> int:
         return 0
 
 
+@publication_guard
 def get_context_chunks(hit: dict, collection_name: str, radius: int = 2) -> list[dict]:
     """Read section-local neighbors by metadata, including preexisting indexes.
 
@@ -288,9 +300,12 @@ def get_context_chunks(hit: dict, collection_name: str, radius: int = 2) -> list
     ]}
     collection = _resolve_collection(collection_name)
     res = collection.get(where=where, limit=2 * radius + 1, include=["documents", "metadatas"])
+    from src.db import metadata_db
+    blocked = metadata_db.unpublished_chunk_ids()
     return sorted([
         {"id": cid, "text": text or "", **(meta or {})}
         for cid, text, meta in zip(res["ids"], res["documents"], res["metadatas"])
+        if cid not in blocked
     ], key=lambda chunk: chunk.get("chunk_index", 0))
 
 

@@ -824,7 +824,7 @@ def ask(
     scene: str = "qa_chat",
     mode: str = "ai",
     strict_knowledge: bool = False,
-    api_retry_count: int = 5,
+    api_retry_count: int = 10,
 ) -> Answer:
     """同步问答。返回完整 Answer。
 
@@ -877,6 +877,7 @@ def ask(
                 temperature=chat_cfg.get("temperature", 0.2),
                 max_tokens=chat_cfg.get("max_tokens", 1500),
                 scene=scene,
+                api_retry_count=api_retry_count,
                 log_meta={"kb_id": kb_scope} if kb_scope else None,
             )
             s.set(count=1, status="ok", notes=f"provider={chat_provider}")
@@ -916,7 +917,7 @@ async def ask_stream(
     turn_id: str | None = None,
     mode: str = "ai",
     strict_knowledge: bool = False,
-    api_retry_count: int = 5,
+    api_retry_count: int = 10,
 ) -> AsyncGenerator[dict, None]:
     """流式问答。逐事件 yield。
 
@@ -1103,6 +1104,7 @@ async def ask_stream(
                 temperature=chat_cfg.get("temperature", 0.2),
                 max_tokens=chat_cfg.get("max_tokens", 1500),
                 scene="qa_chat",
+                api_retry_count=api_retry_count,
                 log_meta={
                     "session_id": session_id,
                     "turn_id": turn_id,

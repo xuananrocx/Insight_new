@@ -52,7 +52,8 @@ def test_create_uploading_task_and_append(tmp_path):
     assert t["upload_complete"] == 1
 
 
-def test_recover_uploading_task_to_paused(tmp_path):
+def test_recover_uploading_task_to_paused(tmp_path, monkeypatch):
+    monkeypatch.setattr(batch_upload, "start_task", lambda task_id: None)
     metadata_db.init_db()
     files = _mk_files(tmp_path, ["x.md"])
     task_id = batch_upload.generate_task_id()

@@ -339,8 +339,8 @@ export type FeedbackItem = {
 
 // ===== 批量上传（v8+）=====
 
-export type UploadTaskStatus = 'uploading' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed'
-export type UploadFileStatus = 'queued' | 'processing' | 'done' | 'skipped' | 'failed' | 'cancelled'
+export type UploadTaskStatus = 'uploading' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed' | 'cancelling' | 'cleaning' | 'cleanup_failed'
+export type UploadFileStatus = 'queued' | 'processing' | 'done' | 'skipped' | 'failed' | 'cancelled' | 'cleanup_failed'
 export type SkipMode = 'skip' | 'overwrite'
 
 export type UploadTask = {
@@ -356,6 +356,8 @@ export type UploadTask = {
   upload_complete?: number  // 0/1：分批上传是否已收尾
   current_file_path: string | null
   current_stage: string | null
+  current_percent?: number | null
+  current_detail?: string | null
   created_at: number
   updated_at: number
   finished_at: number | null
@@ -392,9 +394,9 @@ export type FileProgressEvent = {
   task_id: string
   file_id: number
   relative_path: string
-  stage: 'parsing' | 'chunking' | 'embedding' | 'writing' | 'ai_summary' | 'done'
-  percent: number
-  detail?: string
+  stage: 'parsing' | 'chunking' | 'embedding' | 'upserting' | 'writing' | 'ai_summary' | 'done' | 'publishing'
+  percent: number | null
+  detail?: string | null
 }
 
 export type UploadTaskDetail = UploadTask & { files: UploadTaskFile[] }
@@ -1026,7 +1028,7 @@ export const api = {
       mode?: RetrievalMode,
       providerId?: string,
       strictKnowledge?: boolean,
-      apiRetryCount = 5,
+      apiRetryCount = 10,
     ): Promise<void> => {
      let terminal = false
      try {

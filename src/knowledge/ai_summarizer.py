@@ -15,6 +15,8 @@
 - LLM 失败 → document_meta 保持 processed_level='raw'，不影响主流程
 """
 from __future__ import annotations
+from src.core.ingest_state import TaskCancelledError
+
 
 import json
 import logging
@@ -263,6 +265,7 @@ def summarize_and_extract(
     content_hash: str,
     collection_name: str,
     source_path: str,
+    check_cancel=None,
 ) -> SummarizeResult:
     """对单个文档跑 LLM 摘要 + 概念提取，并写入数据库 + 向量库。
 
@@ -278,6 +281,8 @@ def summarize_and_extract(
     返回：SummarizeResult
     """
     result = SummarizeResult()
+    check_cancel = check_cancel or (lambda: None)
+    check_cancel()
 
     if not chunks:
         result.error = "无 chunks 可分析"
@@ -301,10 +306,12 @@ def summarize_and_extract(
             notes: list[tuple[str, str]] = []
             for i, seg in enumerate(segments, 1):
                 label = (seg[0].metadata or {}).get("section_label") or ""
+                check_cancel()
                 note = _map_segment(
                     client, file_name, kb_id, i, len(segments),
                     "\n\n".join(c.text for c in seg),
                 )
+                check_cancel()
                 if note:
                     notes.append((label, note))
             if not notes:
@@ -314,6 +321,7 @@ def summarize_and_extract(
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_prompt_from_segments(file_name, notes)},
             ]
+        check_cancel()
         raw_answer, used_provider = client.chat(
             messages,
             temperature=0.1,  # 摘要要稳定，低温度
@@ -321,14 +329,19 @@ def summarize_and_extract(
             scene="summarize",
             log_meta={"kb_id": kb_id},
         )
+    except TaskCancelledError:
+        raise
     except Exception as e:
         result.error = f"LLM 调用失败: {e}"
         logger.warning(f"[ai_summary] file_id={file_id} LLM 失败: {e}")
         return result
 
+    check_cancel()
     # 2. 解析 JSON
     try:
         parsed = _parse_llm_response(raw_answer)
+    except TaskCancelledError:
+        raise
     except Exception as e:
         result.error = f"LLM 输出解析失败: {e}"
         logger.warning(f"[ai_summary] file_id={file_id} JSON 解析失败: {e}; raw={raw_answer[:200]}")
@@ -367,6 +380,7 @@ def summarize_and_extract(
     summary_chunk_id = _make_summary_chunk_id(file_id, content_hash)
     try:
         embeddings, embed_provider = llm_client.get_client().embed([summary])
+        check_cancel()
         summary_embedding = embeddings[0]
         summary_meta = {
             "content_hash": content_hash,
@@ -389,6 +403,8 @@ def summarize_and_extract(
             collection_name=collection_name,
         )
         result.summary_chunk_id = summary_chunk_id
+    except TaskCancelledError:
+        raise
     except Exception as e:
         result.error = f"摘要向量化/入库失败: {e}"
         logger.warning(f"[ai_summary] file_id={file_id} 摘要入库失败: {e}")
@@ -404,6 +420,8 @@ def summarize_and_extract(
                 description=concept["description"],
                 source_file_id=file_id,
             )
+    except TaskCancelledError:
+        raise
     except Exception as e:
         # 概念入库失败不影响摘要（摘要已成功）
         logger.warning(f"[ai_summary] file_id={file_id} 概念入库部分失败: {e}")
@@ -420,6 +438,8 @@ def summarize_and_extract(
             concepts_extracted=len(raw_concepts),
             concepts_count=len(clean_concepts),
         )
+    except TaskCancelledError:
+        raise
     except Exception as e:
         logger.warning(f"[ai_summary] file_id={file_id} document_meta 更新失败: {e}")
 
