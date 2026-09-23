@@ -32,7 +32,8 @@ class Progress:
                     continue
                 reading = value.get('reading', {})
                 if key == 'evidence' and reading.get('offset_basis') == 'section':
-                    coordinate = (value.get('document_id'), value.get('version'), value.get('section'))
+                    coordinate = (value.get('document_id'), value.get('version'), value.get('section'),
+                                  reading.get('artifact'), reading.get('offset_basis'))
                     intervals = self.ranges.setdefault(coordinate, [])
                     start, end = reading['start'], reading['end']
                     counts['new_evidence' if uncovered(start, end, intervals) else 'duplicates'] += 1

@@ -14,16 +14,13 @@ def matches(text, fields):
 
 
 def scope_warning(query, chunk):
-    # Only explicit conflicting section labels trigger a warning. Unlabelled
-    # material stays eligible; this is not an inferred document permission.
-    label = str(chunk.get('section_label') or '')
-    groups = [(subject, '银行间', '外汇') for subject in ('沪深', '沪市', '深市', '股票', '个股')]
-    if any(subject in query and any(other in label for other in others) for subject, *others in groups):
-        return f'章节范围为「{label}」，与问题指定范围可能不同，不能直接据此确认字段含义或映射。'
+    """Compatibility shim: source labels are data, not business applicability rules."""
     return ''
 
 
 def rank(query, chunks, limit, tokenize):
+    if limit <= 0:
+        return []
     fields = identifiers(query)
     terms = tokenize(query)
     words = [tokenize(c['text']) for c in chunks]
@@ -35,19 +32,23 @@ def rank(query, chunks, limit, tokenize):
         if not exact and not overlap:
             continue
         score = sum(math.log(1 + len(chunks) / frequency[word]) for word in overlap)
-        ranked.append((not bool(scope_warning(query, chunk)), len(exact), score, chunk))
-    ranked.sort(key=lambda row: row[:3], reverse=True)
-    seen, sections, selected, covered = set(), Counter(), [], set()
-    for _, _, _, chunk in ranked:
-        fingerprint = re.sub(r'[\s|]+', '', chunk['text']).casefold()
-        index = chunk.get('section_index')
-        section = index if isinstance(index, int) and index >= 0 else chunk.get('section_label') or chunk['id']
-        found = set(matches(chunk['text'], fields))
-        if fingerprint in seen or (sections[section] >= 2 and not found - covered):
+        ranked.append((len(exact), score, chunk))
+    ranked.sort(key=lambda row: row[:2], reverse=True)
+    seen, selected = set(), []
+    for _, _, chunk in ranked:
+        origin = (chunk.get('file_id'), chunk.get('content_hash'),
+                  chunk.get('reading_artifact'), chunk.get('section_index'))
+        if isinstance(chunk.get('_section_start'), int):
+            fingerprint = (*origin, 'section', chunk['_section_start'], chunk['text'])
+        elif chunk.get('id') is not None:
+            fingerprint = (*origin, 'chunk', chunk['id'])
+        else:
+            # Missing provenance is not evidence that two excerpts are duplicates.
+            fingerprint = None
+        if fingerprint is not None and fingerprint in seen:
             continue
-        seen.add(fingerprint)
-        sections[section] += 1
-        covered.update(found)
+        if fingerprint is not None:
+            seen.add(fingerprint)
         selected.append(chunk)
         if len(selected) >= limit:
             break

@@ -1,6 +1,7 @@
 """Bounded, redacted HTTP diagnostics for native tool calls; never log request bodies."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -13,6 +14,61 @@ from src.core import accounts
 
 logger = logging.getLogger(__name__)
 BODY_LIMIT = 8192
+
+
+def tool_schema_diagnostics(tools):
+    """Describe the outgoing schema shape, never descriptions, defaults or enums.
+
+    The digest covers the actual wire definitions (including descriptions), while
+    the bounded summary exposes only parameter names and structural type flags.
+    This identifies protocol conversion changes without logging request content.
+    """
+    tools = tools if isinstance(tools, list) else []
+    encoded = json.dumps(tools, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    summaries = []
+    allowed_types = {"string", "number", "integer", "boolean", "object", "array", "null"}
+
+    def types(schema, depth=0):
+        if not isinstance(schema, dict) or depth > 4:
+            return set()
+        value = schema.get("type", [])
+        result = {t for t in (value if isinstance(value, list) else [value])
+                  if isinstance(t, str) and t in allowed_types}
+        for key in ("anyOf", "oneOf"):
+            branches = schema.get(key, [])
+            if isinstance(branches, list):
+                for branch in branches[:16]:
+                    result.update(types(branch, depth + 1))
+        return result
+
+    for tool in tools[:32]:
+        if not isinstance(tool, dict):
+            continue
+        definition = tool.get("function", tool)
+        if not isinstance(definition, dict):
+            continue
+        schema = definition.get("parameters", definition.get("input_schema", {}))
+        schema = schema if isinstance(schema, dict) else {}
+        properties = schema.get("properties", {})
+        properties = properties if isinstance(properties, dict) else {}
+        required = schema.get("required", [])
+        required = {v for v in required if isinstance(v, str)} if isinstance(required, list) else set()
+        names = sorted(properties)[:64]
+        name = definition.get("name")
+        summaries.append({
+            "name": name[:96] if isinstance(name, str) else None,
+            "required": [v[:96] for v in sorted(required)[:64]],
+            "optional": [v[:96] for v in names if v not in required],
+            "strict_present": "strict" in definition,
+            "strict": definition.get("strict") if isinstance(definition.get("strict"), bool) else None,
+            "properties": {v[:96]: {"types": sorted(types(properties[v])),
+                                      "nullable": "null" in types(properties[v])}
+                           for v in names},
+            "property_count": len(properties),
+            "truncated": len(properties) > 64 or len(required) > 64,
+        })
+    return {"version": 1, "sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest(),
+            "tools": summaries, "truncated": len(tools) > 32}
 
 
 def safe_url(value):
@@ -85,6 +141,7 @@ class CallDiagnostics:
         proxies = getproxies()
         self.data.update(endpoint=safe_url(url), method="POST", stream=bool(payload.get("stream")),
                          request_fields=sorted(payload), tool_count=len(payload.get("tools", [])),
+                         tool_schema=tool_schema_diagnostics(payload.get("tools", [])),
                          tool_choice=payload.get("tool_choice"),
                          max_output_tokens=payload.get("max_output_tokens", payload.get("max_tokens")),
                          message_count=len(payload.get("messages", payload.get("input", []))),

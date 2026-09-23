@@ -242,6 +242,8 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                         # add unread evidence or change citation numbering later.
                         worker = KnowledgeTools(kb_scope, check_call, max_chars=kb.max_chars, top_k=kb.top_k, question=question)
                         worker.read_refs = dict(kb.read_refs)
+                        for attribute in ('scope_refs','search_pages','search_queries','search_cursors','document_cache'):
+                            setattr(worker,attribute,dict(getattr(kb,attribute)))
                         worker.hits, worker.cache, worker.used_chars = [dict(hit) for hit in kb.hits], dict(kb.cache), kb.used_chars
                         try:
                             if call.name == evidence_state.REVIEW_TOOL['name']:
@@ -255,9 +257,11 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                                 if call.name in conversation_context.HISTORY_LABELS and not result.get('error') and not result.get('cached'):
                                     history_reads.append(result)
                             kb.read_refs = dict(worker.read_refs)
+                            for attribute in ('scope_refs','search_pages','search_queries','search_cursors','document_cache'):
+                                setattr(kb,attribute,dict(getattr(worker,attribute)))
                             kb.hits, kb.cache, kb.used_chars = worker.hits, worker.cache, worker.used_chars
                         except asyncio.TimeoutError:
-                            result = {"error": "timeout", "message": "本次工具查阅超时，不能据此判断没有资料。请利用已有证据回答并说明缺口"}
+                            result = {"error": "timeout", "message": "本次工具查阅超时，没有返回本次查询结果；此前已返回的资料仍有效"}
                             reason = "部分资料查阅超时，依据已读资料回答并说明缺口"
                         finally:
                             call_stopped.set()

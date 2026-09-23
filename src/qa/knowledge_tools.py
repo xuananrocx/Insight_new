@@ -5,6 +5,8 @@ import json
 import hashlib
 import logging
 import re
+import time
+from src.qa import tool_navigation
 from pathlib import PurePosixPath
 
 from fastapi import HTTPException
@@ -53,7 +55,35 @@ TOOLS = [
     definition("read_document", "使用目录或搜索返回的 read_ref 阅读原文及表格上下文。对象目录的引用可读取完整对象；coverage 区分对象边界、已读范围与未读内容。用 next_read_ref 继续当前章节，next_section_ref 阅读相邻章节。仅已入库文本可见；表格无法还原的合并单元格不作推断。",
                {"read_ref": {"type": "string", "minLength": 1, "maxLength": 80, "description": "本轮工具返回的阅读标识，不要自行拼接编号、版本或偏移量"}}, ["read_ref"]),
 ]
-LABELS['search_document'] = '搜索文档内容'
+# Legacy shapes remain accepted internally, but are no longer advertised to models.
+import copy
+COMPAT_TOOLS = copy.deepcopy(TOOLS)
+_doc_compat=next(t for t in COMPAT_TOOLS if t['name']=='search_document')
+_doc_compat['parameters']['properties'].update({
+    'section':{'type':'integer','minimum':0},'object_id':{'type':'integer','minimum':1},
+    'sheet':{'type':'string','minLength':1,'maxLength':200}})
+_outline=next(t for t in TOOLS if t['name']=='get_document_outline')
+_outline['parameters']['properties'].pop('object_id')
+_outline['description']='按名称查找文档中的章节和对象，query 可省略；返回真实 read_ref、scope_ref、对象及工作表。成员目录使用 get_object_members。分页使用 next_offset。例：document_id=目录编号，query=结构名；无需猜对象编号。'
+MODE={'type':'string','enum':['related','exact','identifier','keyword','semantic','hybrid'],
+      'description':'exact 子串，identifier 标识符，keyword/related 关键词，semantic 语义候选，hybrid 混合。'}
+REF={'type':'string','minLength':1,'maxLength':80,'description':'本轮目录或搜索返回的 scope_ref；不是 read_ref，也不是名称或编号'}
+TOOLS.extend([
+ definition('search_scope','搜索 scope_ref 指向的完整章节、对象或工作表。范围由目录提供，不组合章节、工作表和对象编号。exact/identifier 直接搜索已解析原文；语义模式有有限候选，覆盖见 coverage。续页使用 continue_search。',
+            {'scope_ref':REF,'query':QUERY,'match_mode':MODE,'limit':LIMIT},['scope_ref','query']),
+ definition('get_object_members','列出对象成员。scope_ref 使用目录 objects 返回的对象范围；offset 使用 next_offset。返回成员和原文入口，无需同时提供对象名或编号。',
+            {'scope_ref':REF,'offset':{'type':'integer','minimum':0}},['scope_ref']),
+ definition('continue_search','继续搜索结果的固定快照，不重新检索或改变排序。cursor 使用 next_cursor；文档/索引变化或快照被回收时返回明确错误。',
+            {'cursor':{'type':'string','minLength':1,'maxLength':80}},['cursor']),
+ definition('read_table_rows','读取 Excel 原始行区间，scope_ref 使用 sheets 返回的工作表范围。行号来自搜索/阅读坐标，row_start 与 row_end 均包含。返回原始列号和值、合并锚点、实际读取范围与续页范围；展示首行不等于业务表头，不填充空白。',
+            {'scope_ref':REF,'row_start':{'type':'integer','minimum':1},'row_end':{'type':'integer','minimum':1}},['scope_ref','row_start','row_end'])
+])
+for _tool in TOOLS:
+    if _tool['name'] in ('search_document','search_knowledge'):
+        _tool['description'] += ' scope_ref 表示可选的完整范围；范围内搜索使用 search_scope。续页优先将 next_cursor 传给 continue_search，固定本次结果顺序。location 给出原文候选位置，reading_fallback 表示旧入口原因；分页完成与检索穷尽分别说明。'
+    if _tool['name']=='read_document':
+        _tool['description'] += ' read_status 区分分页、范围末尾和解析完整性；coverage.object_complete 仅表示对象原文累计读全。previous_read_ref 回读前方原文。表格原始行区间读取使用 read_table_rows。'
+LABELS.update(search_document='搜索文档内容',search_scope='搜索指定范围',get_object_members='查看对象成员',continue_search='继续搜索结果',read_table_rows='读取表格行')
 
 
 class KnowledgeToolError(ValueError):
@@ -73,6 +103,12 @@ class KnowledgeTools:
         self.used_chars = 0
         self.question = question
         self.read_refs = {}
+        self.scope_refs = {}
+        self.search_pages = {}
+        self.search_queries = {}
+        self.search_cursors = {}
+        self.document_cache = {}
+        self.timings = {}
 
     def check(self):
         self.check_cancel()
@@ -109,7 +145,8 @@ class KnowledgeTools:
     def live_chunks(self, ids):
         if not ids:
             return {}
-        result = self.collection().get(ids=ids, include=["documents", "metadatas"])
+        with tool_navigation.timed(self,'chunk_fetch'):
+            result = self.collection().get(ids=ids, include=["documents", "metadatas"])
         self.check()
         return {cid: {**(meta or {}), "id": cid, "text": text or ""}
                 for cid, text, meta in zip(result["ids"], result["documents"], result["metadatas"])}
@@ -121,6 +158,10 @@ class KnowledgeTools:
         if not ids:
             raise ValueError("文档未解析出可读文字，可能需要 OCR 或重新导入")
         # Stored IDs already have file-wide order, also valid for legacy chunks without section metadata.
+        cache_key=(f['id'],f['content_hash'],f.get('chunk_ids_json'))
+        if cache_key in self.document_cache:
+            return self.document_cache[cache_key]
+        started=time.monotonic()
         chunks = []
         for start in range(0, min(len(ids), 10000), 500):
             live = self.live_chunks(ids[start:start + 500])
@@ -129,7 +170,14 @@ class KnowledgeTools:
             raise ValueError("文档版本已更新，请重新获取目录")
         if not chunks:
             raise ValueError("文档索引缺失，请重新导入")
-        return chunks, len(chunks) != len(ids)
+        result=(chunks,len(chunks)!=len(ids))
+        self.timings['chunk_load']=self.timings.get('chunk_load',0)+round((time.monotonic()-started)*1000,3)
+        cost=sum(len(c['text']) for c in chunks)
+        if cost<=2000000:
+            while self.document_cache and (len(self.document_cache)>=4 or sum(sum(len(c['text']) for c in v[0]) for v in self.document_cache.values())+cost>4000000):
+                del self.document_cache[next(iter(self.document_cache))]
+            self.document_cache[cache_key]=result
+        return result
 
     def make_ref(self, document_id, version, section=0, offset=0):
         spec = dict(document_id=document_id, version=version, section=section, offset=offset)
@@ -175,7 +223,7 @@ class KnowledgeTools:
                 "documents": len(files), "ready": len(current), "not_ready": len(files) - len(current),
                 "summary": summary["summary"][:3000] if fresh else None,
                 "summary_status": "current_background_only" if fresh else "missing_or_stale",
-                "note": "概览仅提供背景。回答知识库事实应检索或阅读原文。"}
+                "note": "概览提供背景与文档导航，不包含可引用的原文片段。"}
 
     def evidence(self, hit, f, text=None, *, section=None, offset=0, total_chars=None):
         self.check()
@@ -193,12 +241,12 @@ class KnowledgeTools:
             if prior["_key"] == key or (prior['file_id'] == f['id'] and prior['content_hash'] == f['content_hash']
                     and prior.get('reading_artifact') == hit.get('reading_artifact')
                     and prior['section_index'] == section and prior['text'] == text
-                    and (not is_read or prior['offset'] == offset)
+                    and (not located or prior['offset'] == offset)
                     and prior.get('reading', {}).get('kind') == ('section' if is_read else 'search_excerpt')):
                 return {**self.public_evidence(prior, i + 1), 'reused': True}
         remaining = self.max_chars - self.used_chars
         if remaining <= 0:
-            return {"error": "evidence_budget", "message": "原文读取预算已用完，请利用已读证据回答"}
+            return {"error": "evidence_budget", "message": "本轮原文读取容量已用完；此前返回的资料仍有效"}
         intervals = [(p['reading']['start'], p['reading']['end']) for p in self.hits
                      if located and p['file_id'] == f['id'] and p['content_hash'] == f['content_hash']
                      and p.get('reading_artifact') == hit.get('reading_artifact')
@@ -248,87 +296,143 @@ class KnowledgeTools:
                 "page": hit.get("page"), "offset": hit["offset"], "text": hit["text"],
                 'reading': hit.get('reading', {}), 'read_hint': hit.get('read_hint'),
                 'structure': hit.get('structure'), 'scope_warning': hit.get('scope_warning'),
-                'read_ref': ref}
+                'read_ref': hit.get('canonical_read_ref', ref), 'location': hit.get('location')}
 
-    def search(self, query, document_id=None, limit=None, match_mode="related", offset=0):
+    def search(self, query, document_id=None, limit=None, match_mode="related", offset=0, section=None, object_id=None, sheet=None, _snapshot=None, _snapshot_key=None):
         files = self.files()
+        selected_scope = None
+        scoped = any(v is not None for v in (section, object_id, sheet))
+        if scoped and document_id is None:
+            raise ValueError('指定范围搜索需要 document_id')
         limit = min(limit or self.top_k, 8)
+        query_key=json.dumps([query,document_id,match_mode,section,object_id,sheet],ensure_ascii=False)
+        old_key=self.search_queries.get(query_key)
+        if _snapshot is None and old_key in self.search_pages:
+            token=tool_navigation.cursor(self,old_key,offset,limit)
+            _,snap=tool_navigation.get_page(self,token)
+            if snap['kind']=='canonical':
+                from src.qa import canonical_search
+                return canonical_search.page(self,old_key,snap,offset,limit)
+            _snapshot=snap;_snapshot_key=old_key
         note = None
         total_matches = None
         more = False
         exact = (lambda text: bool(re.search(r'(?<![A-Za-z0-9_])'+re.escape(query)+r'(?![A-Za-z0-9_])',text,re.I))) if match_mode == 'identifier' else (lambda text: query.casefold() in text.casefold())
-        if document_id is not None:
-            f = self.file(document_id)
-            chunks, incomplete = self.document_chunks(f)
-            located_chunks = []
-            for group in self.sections(chunks).values():
-                section_text, spans = self.join_section(group)
-                located_chunks.extend({**c, '_section_start': start, '_section_total': len(section_text),
-                                       '_index_incomplete': incomplete} for start, _, c in spans)
-            chunks = located_chunks
-            if match_mode in ('exact','identifier'):
-                pool = [c for c in chunks if exact(c['text'])]
+        from src.knowledge import reading_index
+        from src.qa import canonical_search
+        indexed_files=[self.file(document_id)] if document_id is not None else [f for f in files if f['status']=='done']
+        if _snapshot is None and (scoped or (match_mode in ('exact','identifier') and indexed_files and all(reading_index.info(f) for f in indexed_files))):
+            bounds={k:v for k,v in {'section':section,'object_id':object_id,'sheet':sheet}.items() if v is not None}
+            result=canonical_search.search(self,indexed_files,query,match_mode,limit,offset,bounds)
+            self.search_queries[query_key]=result.pop('_snapshot_key')
+            return result
+        incomplete=False
+        if _snapshot is not None:
+            pool=_snapshot['pool']; total_matches=_snapshot['total_matches']; note=_snapshot['note']
+            incomplete=_snapshot['incomplete']
+            more=offset+limit<len(pool);hits=pool[offset:offset+limit]
+        else:
+            if document_id is not None:
+                f = self.file(document_id)
+                chunks, incomplete = self.document_chunks(f)
+                located_chunks = []
+                for group in self.sections(chunks).values():
+                    section_text, spans = self.join_section(group)
+                    located_chunks.extend({**c, '_section_start': start, '_section_total': len(section_text),
+                                           '_index_incomplete': incomplete} for start, _, c in spans)
+                chunks = located_chunks
+                if scoped:
+                    from src.qa.indexed_reading import scope_chunks
+                    chunks, selected_scope = scope_chunks(self,f,chunks,section,object_id,sheet)
+                if match_mode in ('exact','identifier'):
+                    pool = [c for c in chunks if exact(c['text'])]
+                else:
+                    with tool_navigation.timed(self,'keyword_rank'):
+                        pool = field_search.rank(query,chunks,len(chunks),retrieval._terms)
+                    if match_mode in ('semantic','hybrid'):
+                        from src.core import llm_client
+                        try:
+                            with tool_navigation.timed(self,'embedding'):
+                                vectors,_ = llm_client.get_client().embed([query])
+                            with tool_navigation.timed(self,'vector_query'):
+                                semantic = vector_store.query_by_embedding(vectors[0], k=min(100,max(20,offset+limit+1)),
+                                    where={'file_id':document_id},collection_name=db.get_kb(self.kb_id)['collection_name'])
+                            owners = {c['id']:c for c in chunks}
+                            semantic = [owners[h['id']] for h in semantic if h['id'] in owners]
+                            if match_mode == 'semantic':
+                                pool = semantic
+                            else:
+                                scores = {}
+                                by_id = {}
+                                for group in (pool,semantic):
+                                    for rank,h in enumerate(group):
+                                        scores[h['id']] = scores.get(h['id'],0)+1/(60+rank+1)
+                                        by_id[h['id']] = h
+                                pool = [by_id[cid] for cid in sorted(scores,key=scores.get,reverse=True)]
+                        except (HTTPException,PipelineCancelled):
+                            raise
+                        except Exception:
+                            note = '语义检索失败，已降级为文档内关键词搜索'
+                pool = self.unique_chunks(pool)
+                total_matches = len(pool)
+                more = offset+limit < len(pool)
+                hits = pool[offset:offset+limit]
+                note = note or ('文档内搜索；索引不完整' if incomplete else '文档内搜索')
             else:
-                pool = field_search.rank(query,chunks,len(chunks),retrieval._terms)
-                if match_mode in ('semantic','hybrid'):
+                trace = TraceCollector()
+                trace.cancel_check = self.check
+                trace.on_stage_complete(lambda stage:self.timings.__setitem__('retrieval_'+stage['stage'],self.timings.get('retrieval_'+stage['stage'],0)+stage.get('duration_ms',0)))
+                if match_mode in ('exact','identifier'):
+                    pool = []
+                    incomplete = False
+                    for file in files:
+                        if file['status'] != 'done' or not self.ids(file):
+                            continue
+                        self.check()
+                        doc_chunks, partial = self.document_chunks(file)
+                        incomplete = incomplete or partial
+                        pool.extend(c for c in doc_chunks if exact(c['text']))
+                    total_matches = len(pool)
+                    note = '全库字面搜索；索引不完整' if incomplete else '全库字面搜索'
+                elif match_mode == 'semantic':
                     from src.core import llm_client
-                    try:
+                    with tool_navigation.timed(self,'embedding'):
                         vectors,_ = llm_client.get_client().embed([query])
-                        semantic = vector_store.query_by_embedding(vectors[0], k=min(100,max(20,offset+limit+1)),
-                            where={'file_id':document_id},collection_name=db.get_kb(self.kb_id)['collection_name'])
-                        owners = {c['id']:c for c in chunks}
-                        semantic = [owners[h['id']] for h in semantic if h['id'] in owners]
-                        if match_mode == 'semantic':
-                            pool = semantic
-                        else:
-                            scores = {}
-                            by_id = {}
-                            for group in (pool,semantic):
-                                for rank,h in enumerate(group):
-                                    scores[h['id']] = scores.get(h['id'],0)+1/(60+rank+1)
-                                    by_id[h['id']] = h
-                            pool = [by_id[cid] for cid in sorted(scores,key=scores.get,reverse=True)]
-                    except (HTTPException,PipelineCancelled):
+                    with tool_navigation.timed(self,'vector_query'):
+                        pool = vector_store.query_by_embedding(vectors[0],k=min(100,offset+limit+1),collection_name=db.get_kb(self.kb_id)['collection_name'])
+                elif match_mode == 'keyword':
+                    with tool_navigation.timed(self,'keyword_query'):
+                        pool = bm25_index.query_enhanced(query,offset+limit+1,self.kb_id)
+                else:
+                    try:
+                        with tool_navigation.timed(self,'hybrid_retrieval'):
+                            pool, _ = retrieval.search(query, 20, self.kb_id, trace, deep=False)
+                    except (HTTPException, PipelineCancelled):
                         raise
                     except Exception:
-                        note = '语义检索失败，已降级为文档内关键词搜索'
-            total_matches = len(pool)
-            more = offset+limit < len(pool)
-            hits = pool[offset:offset+limit]
-            note = note or ('文档内搜索；索引不完整' if incomplete else '文档内搜索')
-        else:
-            trace = TraceCollector()
-            trace.cancel_check = self.check
-            if match_mode in ('exact','identifier'):
-                pool = []
-                incomplete = False
-                for file in files:
-                    if file['status'] != 'done' or not self.ids(file):
-                        continue
-                    self.check()
-                    doc_chunks, partial = self.document_chunks(file)
-                    incomplete = incomplete or partial
-                    pool.extend(c for c in doc_chunks if exact(c['text']))
-                total_matches = len(pool)
-                note = '全库字面搜索；索引不完整' if incomplete else '全库字面搜索'
-            elif match_mode == 'semantic':
-                from src.core import llm_client
-                vectors,_ = llm_client.get_client().embed([query])
-                pool = vector_store.query_by_embedding(vectors[0],k=min(100,offset+limit+1),collection_name=db.get_kb(self.kb_id)['collection_name'])
-            elif match_mode == 'keyword':
-                pool = bm25_index.query_enhanced(query,offset+limit+1,self.kb_id)
-            else:
-                try:
-                    pool, _ = retrieval.search(query, 20, self.kb_id, trace, deep=False)
-                except (HTTPException, PipelineCancelled):
-                    raise
-                except Exception:
-                    self.check()
-                    logger.warning('Agent semantic search unavailable; trying lexical index', exc_info=True)
-                    pool = bm25_index.query_enhanced(query,offset+limit+1,self.kb_id)
-                    note = '语义检索暂不可用，本次仅使用关键词检索'
-            more = offset+limit < len(pool)
-            hits = pool[offset:offset+limit]
+                        self.check()
+                        logger.warning('Agent semantic search unavailable; trying lexical index', exc_info=True)
+                        with tool_navigation.timed(self,'keyword_query'):
+                            pool = bm25_index.query_enhanced(query,offset+limit+1,self.kb_id)
+                        note = '语义检索暂不可用，本次仅使用关键词检索'
+                pool = self.unique_chunks(pool)
+                more = offset+limit < len(pool)
+                hits = pool[offset:offset+limit]
+        snapshot_truncated=False
+        if _snapshot is None:
+            kept=[];snapshot_chars=0
+            for candidate in pool:
+                size=len(json.dumps(candidate,ensure_ascii=False))
+                if len(kept)>=1500 or snapshot_chars+size>2500000:
+                    snapshot_truncated=True;break
+                kept.append(candidate);snapshot_chars+=size
+            pool=kept;more=offset+limit<len(pool);hits=pool[offset:offset+limit]
+            relevant=[f for f in files if any(h.get('id') in self.ids(f) for h in pool)]
+            snapshot={'kind':'legacy','pool':pool,'versions':[{'id':f['id'],'version':f['content_hash']} for f in relevant],
+                      'query':query,'document_id':document_id,'mode':match_mode,'note':note,'incomplete':incomplete,'total_matches':total_matches,'capacity_limit_reached':snapshot_truncated}
+            _snapshot_key=tool_navigation.save(self,snapshot)
+            self.search_queries[query_key]=_snapshot_key
+        tool_navigation.validate_snapshot(self,self.search_pages[_snapshot_key])
         # Authoritative membership uses current file records, not possibly stale chunk metadata.
         owners = {cid: f for f in files if f["status"] == "done" for cid in self.ids(f)}
         ids = [h["id"] for h in hits if h.get("id") in owners]
@@ -343,6 +447,8 @@ class KnowledgeTools:
             if self.file(f["id"])["content_hash"] != f["content_hash"]:
                 continue
             candidate = {**h, **live[cid]}
+            if scoped:
+                candidate.update(h)  # Canonical clipped range must survive authoritative metadata refresh.
             if '_section_start' not in candidate:
                 if f['id'] not in section_cache:
                     document, incomplete_index = self.document_chunks(f)
@@ -375,6 +481,22 @@ class KnowledgeTools:
                 ev['scope_warning'] = warning
             if 'citation' in ev:
                 self.hits[ev['citation']-1].update({k: ev[k] for k in ('match_type', 'scope_warning') if k in ev})
+            if 'citation' in ev:
+                from src.qa import indexed_reading
+                with tool_navigation.timed(self,'source_location'):
+                    location = indexed_reading.locate(self,f,ev['text'])
+                ev['location'] = location
+                saved = self.hits[ev['citation']-1]
+                saved['location'] = location
+                if location['status']=='exact':
+                    ev['read_ref']=location['candidates'][0]['read_ref']
+                    info=reading_index.info(f)
+                    ev['scope_ref']=tool_navigation.scope_ref(self,f,info['artifact'],section=location['candidates'][0]['section'])
+                    saved['canonical_read_ref']=ev['read_ref']
+                else:
+                    # Keep a truthful legacy fallback; ambiguous canonical candidates stay explicit.
+                    ev['reading_fallback'] = location['status']
+                logger.info('知识库搜索定位 document=%s status=%s candidates=%s',f['id'],location['status'],len(location['candidates']))
             result.append(ev)
         fields = field_search.identifiers(query)
         matched = set(word for ev in result for word in ev.get('matched_fields', []))
@@ -389,13 +511,30 @@ class KnowledgeTools:
                 directory = indexed_reading.outline(self,file,query=term)
                 if directory:
                     navigation.extend({'document_id':fid,**obj} for obj in directory.get('objects',[])[:4])
-        return {"objects": navigation[:12], "next_offset": offset+limit if more else None, "matching_chunks": total_matches,
+        tool_navigation.validate_snapshot(self,self.search_pages[_snapshot_key])
+        return {"objects": navigation[:12],
+                "next_cursor":tool_navigation.cursor(self,_snapshot_key,offset+limit,limit) if more else None,
+                "coverage":{"candidate_pool_size":len(pool),"exhaustive":False,"source":"legacy_retrieval","capacity_limit_reached":self.search_pages[_snapshot_key].get("capacity_limit_reached",False)},
+                "next_offset": offset+limit if more else None, "matching_chunks": total_matches,
                 "evidence": result, "note": note, "status": "found" if any('citation' in ev for ev in result) else "no_match",
                 'question_context': evidence_state.reading_guidance(self.question or query),
-                'reading_note': '搜索结果为节选，不能证明章节完整或对象不存在。read_hint 可读取该章节；只有 offset_basis=section 的坐标可用于章节阅读。',
+                'reading_note': 'read_ref 提供原文入口；location 描述新索引精确位置或多个候选。reading_fallback 表示保留旧分段入口的原因。offset 坐标仍以 reading.offset_basis 和 artifact 为准。',
                 'matched_fields': sorted(matched), 'missing_fields': missing,
-                'search_scope': {'kind': 'document' if document_id is not None else 'knowledge_base', 'document_id': document_id, 'match_mode': match_mode, 'exact_matching_chunks': total_matches if match_mode in ('exact','identifier') else None, 'index_incomplete': incomplete if document_id is not None or match_mode in ('exact','identifier') else None},
+                'search_scope': {'kind': 'document' if document_id is not None else 'knowledge_base', 'selected_range': selected_scope, 'document_id': document_id, 'match_mode': match_mode, 'exact_matching_chunks': total_matches if match_mode in ('exact','identifier') else None, 'index_incomplete': incomplete if document_id is not None or match_mode in ('exact','identifier') else None},
                 'coverage_note': 'missing_fields 仅描述返回节选，不代表全部原文' }
+
+    @staticmethod
+    def unique_chunks(chunks):
+        seen=set()
+        result=[]
+        for chunk in chunks:
+            # Only identical source coordinates/IDs are duplicates, never similar meanings.
+            key=(chunk.get('file_id'),chunk.get('section_index'),chunk.get('reading_artifact'),
+                 chunk.get('_section_start'),chunk.get('text') if '_section_start' in chunk else chunk.get('id'))
+            if key not in seen:
+                seen.add(key)
+                result.append(chunk)
+        return result
 
     @staticmethod
     def sections(chunks):
@@ -412,7 +551,7 @@ class KnowledgeTools:
         from src.qa import indexed_reading
         indexed = indexed_reading.outline(self,f,offset,query,object_id)
         if indexed is not None:
-            return indexed
+            return tool_navigation.attach(self,indexed)
         chunks, incomplete = self.document_chunks(f)
         sections = [{"section": index, "label": group[0].get("section_label", ""), "chunks": len(group), "read_ref": self.make_ref(f["id"], f["content_hash"], index)}
                     for index, group in self.sections(chunks).items()]
@@ -462,6 +601,7 @@ class KnowledgeTools:
         next_index = indices[indices.index(section)+1] if indices.index(section)+1 < len(indices) else None
         return {"evidence": [ev], "next_offset": end if end < len(text) else None,
                 "total_chars": len(text), "incomplete": incomplete,
+                "read_status": {"page_truncated": end<len(text), "range_complete": end==len(text), "index_incomplete": incomplete, "parse_completeness": "unknown", "path": "legacy_chunks"},
                 'next_read_ref': self.make_ref(document_id, version, section, end) if end < len(text) else None,
                 'next_section_ref': self.make_ref(document_id, version, next_index) if next_index is not None else None,
                 'context_header': header,
@@ -495,6 +635,8 @@ class KnowledgeTools:
                 raise ValueError('参数过长')
             arguments = json.loads(arguments)
         specs = LEGACY_TOOLS if isinstance(arguments, dict) and ((name == 'read_document' and 'read_ref' not in arguments) or (name == 'search_knowledge' and 'document_id' in arguments)) else TOOLS
+        if isinstance(arguments,dict) and ((name=='get_document_outline' and 'object_id' in arguments) or (name=='search_document' and any(k in arguments for k in ('section','object_id','sheet')))):
+            specs=COMPAT_TOOLS
         spec = next((t for t in specs if t['name'] == name), None)
         if spec is None:
             raise ValueError("未知工具；仅允许列出的知识库只读工具")
@@ -514,10 +656,12 @@ class KnowledgeTools:
 
     def execute(self, name, arguments):
         self.check()
+        self.timings={}
+        started=time.monotonic()
         try:
             args = self.validate(name, arguments)
             key = json.dumps([name, args], sort_keys=True, ensure_ascii=False)
-            if key in self.cache:
+            if key in self.cache and name not in ('search_scope','get_object_members','continue_search','read_table_rows','get_document_outline') and not (name=='read_document' and 'read_ref' in args):
                 self.validate_versions()
                 return {**self.cache[key], "cached": True}
             if name == "get_kb_overview":
@@ -531,9 +675,35 @@ class KnowledgeTools:
                 result = self.outline(**args)
             elif name == "read_document":
                 result = self.read_reference(**args) if "read_ref" in args else self.read(**args)
+            elif name=='search_scope':
+                file,bounds=tool_navigation.resolve(self,args['scope_ref'])
+                from src.qa import canonical_search
+                result=canonical_search.search(self,[file],args['query'],args.get('match_mode','related'),args.get('limit',self.top_k),
+                    bounds={k:v for k,v in bounds.items() if k in ('section','object_id','sheet')})
+                result.pop('_snapshot_key',None)
+            elif name=='get_object_members':
+                file,bounds=tool_navigation.resolve(self,args['scope_ref'])
+                if bounds.get('object_id') is None:raise ValueError('该 scope_ref 不是对象范围')
+                result=self.outline(file['id'],args.get('offset',0),object_id=bounds['object_id'])
+            elif name=='read_table_rows':
+                file,bounds=tool_navigation.resolve(self,args['scope_ref'])
+                if not bounds.get('sheet'):raise ValueError('该 scope_ref 不是工作表范围；sheets 列表提供工作表入口')
+                from src.qa.table_reading import read_rows
+                result=read_rows(self,file,bounds['sheet'],args['row_start'],args['row_end'],expected_artifact=bounds['artifact'])
+            elif name=='continue_search':
+                spec,snap=tool_navigation.get_page(self,args['cursor'])
+                if snap['kind']=='canonical':
+                    from src.qa import canonical_search
+                    result=canonical_search.page(self,spec['key'],snap,spec['offset'],spec['limit'])
+                else:
+                    result=self.search(snap['query'],snap['document_id'],spec['limit'],snap['mode'],spec['offset'],_snapshot=snap,_snapshot_key=spec['key'])
             else:
                 result = self.search(**args)
             self.check()
+            with tool_navigation.timed(self,'result_serialization'):
+                result_size=len(json.dumps(result,ensure_ascii=False))
+            result['tool_metrics']={'phases_ms':dict(self.timings),'total_ms':round((time.monotonic()-started)*1000,3),'result_chars':result_size}
+            logger.info('知识库工具阶段 tool=%s kb=%s phases_ms=%s result_chars=%s',name,self.kb_id,self.timings,result_size)
             self.cache[key] = result
             return result
         except (HTTPException, PipelineCancelled):
@@ -544,7 +714,7 @@ class KnowledgeTools:
             return {"error": "invalid_request_or_document", "message": str(exc)}
         except Exception:
             logger.exception("Knowledge tool failed: %s", name)
-            return {"error": "unavailable", "message": "知识库工具暂不可用，这不代表没有资料；可尝试其他工具或说明限制"}
+            return {"error": "unavailable", "message": "知识库工具暂不可用；本次没有得到有效查询结果"}
 
     def validate_versions(self):
         files = {f["id"]: f for f in self.files()}
@@ -552,6 +722,16 @@ class KnowledgeTools:
             f = files.get(h["file_id"])
             if not f or f["status"] != "done" or f["content_hash"] != h["content_hash"] or not set(h["_chunk_ids"]).issubset(self.ids(f)):
                 raise KnowledgeToolError("document_changed", "本次阅读的文档已更新或删除，请重新提问以获取当前版本")
+
+        from src.knowledge import reading_index
+        checked=set()
+        for ref in self.read_refs.values():
+            if not ref.get('artifact') or (ref['document_id'],ref['artifact']) in checked:continue
+            checked.add((ref['document_id'],ref['artifact']))
+            f=files.get(ref['document_id'])
+            info=reading_index.info(f) if f else None
+            if not info or info['artifact']!=ref['artifact'] or f['content_hash']!=ref['version']:
+                raise KnowledgeToolError('document_changed','阅读入口对应的文档或索引已更新')
 
     def sources(self):
         self.validate_versions()

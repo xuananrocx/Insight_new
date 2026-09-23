@@ -354,7 +354,7 @@ async def test_empty_session_has_no_history_tools_or_instructions(knowledge, mon
     finally:
         cc.active.reset(token)
     assert events[-1]['type'] == 'done'
-    assert all(len(names) == 7 and 'search_conversation_history' not in names for names in seen)
+    assert all(len(names) == len(kt.TOOLS)+1 and 'search_conversation_history' not in names for names in seen)
 
 
 def test_deep_options_defaults_and_validation():
@@ -413,7 +413,7 @@ def test_field_search_exact_names_scope_and_coverage(knowledge):
     assert result['evidence'][0]['text'].startswith('NoBidLevel ')
     assert result['matched_fields'] == ['MDPriceLevel', 'NoBidLevel']
     assert result['missing_fields'] == ['NoOfferLevel']
-    assert any(ev.get('scope_warning') for ev in result['evidence'])
+    assert not any(ev.get('scope_warning') for ev in result['evidence'])
 
 
 def test_legacy_chunks_without_sections_are_not_collapsed():
