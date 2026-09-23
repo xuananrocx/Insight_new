@@ -1,3 +1,4 @@
+import { useDeepAiOptions } from '@/hooks/use-deep-ai-options'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
@@ -15,6 +16,7 @@ import {
   ChevronRight,
 } from 'lucide-react'
 
+import { AutosizeTextarea } from '@/components/autosize-textarea'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { StatsCards } from '@/components/stats-cards'
@@ -79,8 +81,8 @@ export function ChatPage() {
   const [selectedKbForNewSession, setSelectedKbForNewSession] = useState<string | null>(null)
   // 并发流式支持：sessionId -> turnId 映射（zustand 跨组件共享；切会话/离开聊天页不中断）
   const streamingMap = useAnswerStreams((s) => s.streaming)
-  const [strictKnowledge] = useLocalStorage('amd-ai-strict-knowledge', false)
   const [apiRetryCount] = useApiRetryCount()
+  const [deepAiOptions] = useDeepAiOptions()
   const isStreaming = (sid: string | null | undefined): boolean =>
     !!sid && !!streamingMap[sid]
 
@@ -267,8 +269,9 @@ export function ChatPage() {
         topK,
         mode,
         providerId,
-        strictKnowledge,
+        undefined, // Legacy strict flag is superseded by constraint_strategy.
         apiRetryCount,
+        deepAiOptions,
       )
     } finally {
       useAnswerStreams.getState().end(sessionId)
@@ -312,13 +315,8 @@ export function ChatPage() {
         return
       }
     } else if (session) {
-      const recentTurns = session.turns.slice(-6)
-      for (const t of recentTurns) {
-        if (t.question && t.answer) {
-          history.push({ role: 'user', content: t.question })
-          history.push({ role: 'assistant', content: t.answer })
-        }
-      }
+      // The server loads the authorized session, including early history.
+      history = []
     }
 
     setInput('')
@@ -390,7 +388,7 @@ export function ChatPage() {
 
           <form onSubmit={handleSubmit}>
             <Card className="p-4">
-              <textarea
+              <AutosizeTextarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -539,7 +537,7 @@ export function ChatPage() {
           </Button>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-8 py-6">
+        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
           <div className="mx-auto max-w-4xl space-y-4 pb-4">
             {turns.map((turn) => {
               const turnSessionId = ctx.activeId
@@ -556,11 +554,11 @@ export function ChatPage() {
           </div>
         </div>
 
-        <div className="border-t border-white/10 px-8 py-3">
+        <div className="shrink-0 border-t border-white/10 px-8 py-3">
           {!canAskKb && <p className="mx-auto mb-3 max-w-4xl text-sm text-muted-foreground">当前知识库已不可用，历史会话保留。请新建对话并选择有权限的知识库。</p>}
           <form onSubmit={handleSubmit} className="mx-auto max-w-4xl">
             <Card className="p-3">
-              <textarea
+              <AutosizeTextarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -711,6 +709,7 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
   const [copied, setCopied] = useState(false)
   const [showThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
   const [showCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
+  const [showContext] = useLocalStorage<boolean>('amd-ui-show-context', false)
   const citationPrefix = `citation-${useId()}`
   const [citationSelection, setCitationSelection] = useState<{ number: number; request: number } | null>(null)
   const thinkingStatus = turn.thinking?.status
@@ -744,6 +743,7 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
           {isStreaming || (showThinking && stages.length > 0) ? (
             <ThinkingPanel thinking={thinking} onStop={onStop} showDetails={showThinking} showCitations={showCitations} />
           ) : null}
+          {showContext && stages.some(stage => stage.stage === 'conversation_context') && <details className="mb-3 rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground"><summary className="cursor-pointer font-medium">上下文使用情况</summary><p className="mt-2 leading-relaxed">{stages.findLast(stage => stage.stage === 'conversation_context')?.notes}</p><p className="mt-1">本轮历史查阅 {stages.filter(stage => ['搜索会话历史', '阅读历史问答'].includes(stage.label)).length} 次</p></details>}
           {!isStreaming && turn.error ? (
             <div className="flex items-center gap-2 text-destructive text-[12px]">
               <AlertCircle className="h-4 w-4" />
@@ -771,7 +771,7 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
                   type="button"
                   onClick={() => {
                     if (turn.answer) {
-                      navigator.clipboard.writeText(turn.answer)
+                      navigator.clipboard.writeText(turn.answer.replace(/【cite:([1-9]\d*)】/g, showCitations ? "[$1]" : ""))
                       setCopied(true)
                       setTimeout(() => setCopied(false), 1500)
                     }

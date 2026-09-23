@@ -54,6 +54,7 @@ class ToolChat:
         self.attempt_deadline = float("inf")
         self.on_retry = lambda **kwargs: None
         self.attempt = 1
+        self._request_timeout = None
 
     def _diagnostic(self, scene):
         diagnostic = CallDiagnostics(self.provider, self.style, scene, self.meta)
@@ -62,7 +63,7 @@ class ToolChat:
 
     def _failure(self, diagnostic, exc):
         if isinstance(exc, asyncio.CancelledError):
-            timed_out = time.monotonic() >= min(self.deadline, self.attempt_deadline)
+            timed_out = (self._request_timeout is not None and self._request_timeout.expired()) or time.monotonic() >= min(self.deadline, self.attempt_deadline)
             diagnostic.data["failure_kind"] = "timeout" if timed_out else "cancelled"
             if timed_out:
                 exc = TimeoutError("模型请求超过时间预算")
@@ -78,6 +79,8 @@ class ToolChat:
         return True
 
     def _request(self, tools: list[dict], *, final=False, force=False, max_tokens=4096):
+        from src.qa.conversation_context import log_model_input
+        log_model_input(self.system, self.messages, tools, max_tokens)
         p = self.provider
         if self.style in ("chat", "responses"):
             url = (p.base_url or "https://api.openai.com/v1").rstrip("/")
@@ -170,11 +173,14 @@ class ToolChat:
             self.attempt = attempt + 1
             self.attempt_deadline = min(self.deadline, time.monotonic() + 45)
             try:
-                async with asyncio.timeout(max(0, self.attempt_deadline - time.monotonic())):
+                async with asyncio.timeout(max(0, self.attempt_deadline - time.monotonic())) as request_timeout:
+                    self._request_timeout = request_timeout
                     return await self._turn_once(tools, force=force, max_tokens=max_tokens)
             except (ToolProtocolError, httpx.HTTPError, TimeoutError) as exc:
                 if not await self._retry(exc, attempt):
                     raise
+            finally:
+                self._request_timeout = None
 
     async def _turn_once(self, tools, *, force=False, max_tokens=4096):
         started = time.monotonic()
@@ -200,6 +206,56 @@ class ToolChat:
         except BaseException as exc:
             self._log("deep_ai_tools", started, error=self._failure(diagnostic, exc))
             raise
+
+    async def stream_turn(self, tools, *, max_tokens=4096):
+        from src.core.tool_stream import Assembly
+        for attempt in range(self.retry_count + 1):
+            self.attempt = attempt + 1
+            self.attempt_deadline = min(self.deadline, time.monotonic() + 180)
+            emitted = False
+            started = time.monotonic()
+            diagnostic = self._diagnostic('deep_ai_tools')
+            assembly = Assembly(self.style)
+            try:
+                async with asyncio.timeout(max(0,self.attempt_deadline-time.monotonic())) as timeout:
+                    self._request_timeout = timeout
+                    await asyncio.to_thread(self.check_access)
+                    url,headers,payload = self._request(tools,max_tokens=max_tokens)
+                    payload['stream'] = True
+                    diagnostic.request(url,payload)
+                    async with self.http.stream('POST',url,headers=headers,json=payload,extensions={'trace':diagnostic.trace}) as response:
+                        await diagnostic.response(response)
+                        self._check_response(response,diagnostic.data['call_id'])
+                        diagnostic.data['phase'] = '流式读取回答或工具调用'
+                        async for line in response.aiter_lines():
+                            if not line.startswith('data:'):
+                                continue
+                            raw = line[5:].strip()
+                            if raw == '[DONE]':
+                                break
+                            try:
+                                token = assembly.feed(json.loads(raw))
+                            except (ValueError,KeyError,TypeError) as exc:
+                                raise ToolProtocolError('模型流式工具协议不完整') from exc
+                            if token:
+                                emitted = True
+                                yield ('text',token)
+                    await asyncio.to_thread(self.check_access)
+                    try:
+                        turn = self._decode(assembly.wire())
+                    except (ValueError,KeyError,TypeError) as exc:
+                        raise ToolProtocolError('模型流式工具参数不完整，未执行工具') from exc
+                    self._log('deep_ai_tools' if turn.calls else 'deep_ai_answer',started,
+                              json.dumps({'text':turn.text,'tools':[c.name for c in turn.calls]},ensure_ascii=False) if turn.calls else turn.text)
+                    diagnostic.success()
+                    yield ('turn',turn)
+                    return
+            except BaseException as exc:
+                self._log('deep_ai_answer' if emitted else 'deep_ai_tools',started,response=assembly.text or None,error=self._failure(diagnostic,exc))
+                if emitted or not isinstance(exc,(ToolProtocolError,httpx.HTTPError,TimeoutError)) or not await self._retry(exc,attempt):
+                    raise
+            finally:
+                self._request_timeout = None
 
     def results(self, results: list[tuple[ToolCall, dict]]):
         self.check_access()
@@ -232,7 +288,8 @@ class ToolChat:
 
     async def _final_once(self, tools, *, max_tokens=4096):
         started, parts, complete = time.monotonic(), [], False
-        diagnostic = self._diagnostic("deep_ai_answer")
+        scene = getattr(self, 'answer_scene', 'deep_ai_answer')
+        diagnostic = self._diagnostic(scene)
         try:
             await asyncio.to_thread(self.check_access)
             diagnostic.data["phase"] = "构造请求"
@@ -276,10 +333,10 @@ class ToolChat:
             if not complete:
                 raise httpx.RemoteProtocolError("模型输出未完整结束。")
             await asyncio.to_thread(self.check_access)
-            self._log("deep_ai_answer", started, "".join(parts))
+            self._log(scene, started, "".join(parts))
             diagnostic.success()
         except BaseException as exc:
-            self._log("deep_ai_answer", started, "".join(parts), self._failure(diagnostic, exc))
+            self._log(scene, started, "".join(parts), self._failure(diagnostic, exc))
             raise
 
     async def close(self):

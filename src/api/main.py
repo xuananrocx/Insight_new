@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 from src import __version__
 from src.api.routes_feedback import router as feedback_router
 from src.api.routes_kbs import router as kbs_router
+from src.api.routes_indexes import router as indexes_router
 from src.api.routes_knowledge import router as knowledge_router
 from src.api.routes_logs import router as logs_router
 from src.api.routes_ai_logs import router as ai_logs_router
@@ -146,6 +147,8 @@ def _on_startup() -> None:
     # 初始化数据库 + schema 迁移
     metadata_db.init_db()
     accounts.init_auth()
+    from src.knowledge import index_tasks
+    index_tasks.recover()
 
     # BM25 依赖预检：缺失时 ingest 的 add_chunks 会静默失败（只记 warning），
     # 历史上因此建过空索引，这里显式报错提醒安装
@@ -243,6 +246,7 @@ def _on_startup() -> None:
 # ===== 路由挂载 =====
 app.include_router(knowledge_router)
 app.include_router(kbs_router)
+app.include_router(indexes_router)
 app.include_router(qa_router)
 app.include_router(feedback_router)
 app.include_router(settings_router)
@@ -480,3 +484,11 @@ def _debug_llm_chat_source():
     from src.core import llm_client
     src = inspect.getsource(llm_client.LLMClient.chat)
     return {"src": src, "has_v2": "V2 called" in src, "has_log_call": "_log_call" in src}
+
+
+@app.on_event('shutdown')
+async def stop_conversation_summary_tasks():
+    from src.qa.conversation_context import shutdown
+    await shutdown()
+    from src.knowledge import index_tasks
+    index_tasks.shutdown()

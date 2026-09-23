@@ -5,6 +5,10 @@ import json
 from src.core import accounts as a, permissions as p
 
 ACTION_NAMES = {
+    "kb_index_rebuild": "重建知识库索引", "kb_index_cancel": "取消索引重建",
+    "personal_preferences_saved": "修改个人偏好",
+    "personal_preferences_enabled": "启用个人偏好",
+    "personal_preferences_disabled": "停用个人偏好",
     "user_created": "创建账号", "user_updated": "修改账号",
     "user_forced_logout": "强制退出登录", "password_changed": "修改密码",
     "local_password_reset": "本地重置密码",

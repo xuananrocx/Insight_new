@@ -8,6 +8,9 @@ import { Card } from '@/components/ui/card'
 import { api, type AiCallLogConfig } from '@/lib/api'
 
 const SCENE_LABEL: Record<string, string> = {
+  conversation_summary: '会话记忆 · 自动摘要',
+  conversation_history: '会话记忆 · 历史查阅',
+  deep_ai_verify: '深度 AI · 语义核验',
   qa_chat: '问答',
   summarize: '摘要',
   concept_extract: '概念提取',

@@ -30,6 +30,21 @@ test('keeps code, escaped stars, entities and incomplete streaming text literal'
 
 test('preserves standard formatting and citation links inside repaired bold', () => {
   assert.equal(render('**普通加粗**，*斜体*'), '<p><strong>普通加粗</strong>，<em>斜体</em></p>')
-  assert.match(render('**内容[1]。**后续', [[remarkCitations, { count: 1, prefix: 'ref' }]]), /<strong>内容<a href="#ref-1">\[1\]<\/a>。<\/strong>后续/)
-  assert.equal(render('**内容[1]。**后续', [[remarkCitations, { hidden: true }]]), '<p><strong>内容。</strong>后续</p>')
+  assert.match(render('**内容【cite:1】。**后续', [[remarkCitations, { count: 1, prefix: 'ref' }]]), /<strong>内容<a href="#ref-1">\[1\]<\/a>。<\/strong>后续/)
+  assert.equal(render('**内容【cite:1】。**后续', [[remarkCitations, { hidden: true }]]), '<p><strong>内容。</strong>后续</p>')
+})
+
+
+test('only explicit citations are linked or hidden; array indices survive', () => {
+  const source = '数组下标与档位对应：\n\n- `[0]`：买一／卖一\n- `[1]`：买二／卖二\n- `[9]`：买十／卖十\n\narray[1] [0] [9]。事实【cite:1】无效【cite:99】\n\n```python\na[0] = a[9]\n```\n\n[文档](https://example.com)';
+  for (const hidden of [true, false]) {
+    const html = render(source, [[remarkCitations, { count: 1, prefix: 'ref', hidden }]])
+    for (const i of [0, 1, 9]) assert.ok(html.includes(`<code>[${i}]</code>`))
+    assert.ok(html.includes('array[1] [0] [9]'))
+    assert.ok(html.includes('<ul>'))
+    assert.ok(html.includes('a[0] = a[9]'))
+    assert.ok(html.includes('href="https://example.com"'))
+    assert.equal(html.includes('href="#ref-1"'), !hidden)
+    assert.ok(!html.includes('cite:'))
+  }
 })

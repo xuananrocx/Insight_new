@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertCircle, Boxes, FileText, Search } from 'lucide-react'
+import { AlertCircle, ChevronRight, Boxes, FileText, Search } from 'lucide-react'
 
 import { api, type KbConcept } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -38,6 +38,8 @@ interface Props {
 }
 
 export function KbConceptsTable({ kbId }: Props) {
+  const [expandedKb, setExpandedKb] = useState<string | null>(null)
+  const expanded = expandedKb === kbId
   const [filter, setFilter] = useState('')
   const [minMention, setMinMention] = useState(1)
 
@@ -56,25 +58,18 @@ export function KbConceptsTable({ kbId }: Props) {
       )
     : concepts
 
-  if (query.isLoading) {
-    return (
-      <Card className="mb-6 p-5">
-        <div className="py-8 text-center text-[12px] text-muted-foreground">加载概念中...</div>
-      </Card>
-    )
-  }
-
   return (
     <Card className="mb-6 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-3">
-        <div className="flex items-center gap-2">
+        <button type="button" aria-expanded={expanded} onClick={() => setExpandedKb(expanded ? null : kbId)} className="flex items-center gap-2">
+          <ChevronRight className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")} />
           <Boxes className="h-4 w-4 text-muted-foreground" />
           <span className="text-[14px] font-medium">核心概念</span>
           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
             {concepts.length}
           </span>
-        </div>
-        <div className="flex items-center gap-2">
+        </button>
+        {expanded && <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
             最小提及：
             <Select value={String(minMention)} onValueChange={(v) => setMinMention(Number(v))}>
@@ -98,10 +93,10 @@ export function KbConceptsTable({ kbId }: Props) {
               className="w-32 rounded border bg-background py-1 pl-7 pr-2 text-[11px] outline-none focus:border-primary"
             />
           </div>
-        </div>
+        </div>}
       </div>
 
-      {concepts.length === 0 ? (
+      {expanded && (query.isLoading ? <div className="p-5 text-sm text-muted-foreground">加载概念中…</div> : query.isError ? <div className="p-5 text-sm text-destructive">概念加载失败，请稍后重试</div> : concepts.length === 0 ? (
         <div className="px-5 py-8 text-center text-[12px] text-muted-foreground">
           <AlertCircle className="mx-auto mb-2 h-5 w-5 opacity-40" />
           还没有 AI 概念数据。
@@ -119,7 +114,7 @@ export function KbConceptsTable({ kbId }: Props) {
             <ConceptRow key={c.id} concept={c} />
           ))}
         </div>
-      )}
+      ))}
     </Card>
   )
 }

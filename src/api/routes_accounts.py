@@ -415,3 +415,23 @@ def clear_audit_log():
                     (a.user()["id"], "audit_cleared", "", int(time.time() * 1000)))
         cur.connection.commit()
     return Response(status_code=204)
+
+
+class PersonalPreferencesRequest(BaseModel):
+    content: str = Field('', max_length=4000)
+    enabled: bool = True
+    version: str = Field('', max_length=64)
+
+
+@router.get('/account/preferences')
+def get_personal_preferences():
+    from src.core import personal_preferences
+    a.user()
+    return personal_preferences.read()
+
+
+@router.put('/account/preferences')
+def save_personal_preferences(req: PersonalPreferencesRequest):
+    from src.core import personal_preferences
+    a.user()
+    return personal_preferences.save(req.content, req.enabled, req.version)

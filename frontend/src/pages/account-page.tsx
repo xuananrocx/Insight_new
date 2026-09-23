@@ -1,3 +1,5 @@
+import { PersonalPreferencesCard } from '@/components/personal-preferences-card'
+import { DeepAiOptionsFields } from '@/components/deep-ai-options'
 import { OptionSelect } from '@/components/ui/select'
 import { useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -79,19 +81,20 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
 export function AccountPage() {
   const { user, logout, can } = useAuth()
   const [thinking, setThinking] = useLocalStorage('amd-ui-show-thinking', true)
+  const [showContext, setShowContext] = useLocalStorage('amd-ui-show-context', false)
   const [citations, setCitations] = useLocalStorage('amd-ui-show-citations', false)
   const [logs, setLogs] = useLocalStorage('amd-ui-show-logs', false)
-  const [strictKnowledge, setStrictKnowledge] = useLocalStorage('amd-ai-strict-knowledge', false)
   const [apiRetryCount, setApiRetryCount] = useApiRetryCount()
   return <div className="mx-auto max-w-4xl space-y-5 p-6 md:p-8"><div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">设置</h1><p className="mt-1 text-sm text-muted-foreground">{user.username} · {user.roles.filter(r => r.enabled).map(r => r.name).join('、') || '无启用角色'}</p></div></div>
     <ProviderSettings />
-    <Card className="space-y-3 p-5"><h2 className="font-semibold">深度 AI</h2><div className="flex items-center justify-between gap-4 text-sm"><span>仅依据知识库回答</span><Toggle label="仅依据知识库回答" checked={strictKnowledge} onChange={setStrictKnowledge} /></div><p className="text-sm text-muted-foreground">默认允许结合明确标注的通用知识和推断。开启后仅依据知识库原文回答。深度 AI 会主动检索、查看目录并阅读原文，需要所选 API 支持工具调用。</p>
+    <PersonalPreferencesCard />
+    <Card className="space-y-3 p-5"><h2 className="font-semibold">深度 AI</h2><p className="text-sm text-muted-foreground">深度 AI 主动查阅知识库，按所选策略分析回答，需要 API 支持工具调用。策略自动保存，仅用于深度 AI。</p><DeepAiOptionsFields />
     </Card>
     <Card className="space-y-3 p-5"><h2 className="font-semibold">API 请求重试</h2>
       <div className="flex items-center justify-between gap-4 text-sm"><span>API 失败重试次数</span><OptionSelect aria-label="API 失败重试次数" value={String(apiRetryCount)} onValueChange={value => setApiRetryCount(Number(value))} options={Array.from({ length: 11 }, (_, value) => ({ value: String(value), label: value === 0 ? '不重试' : `${value} 次${value === 10 ? '（默认）' : ''}` }))} /></div>
       <p className="text-xs text-muted-foreground">自动保存，适用于 AI 增强和深度 AI。默认最多重试 10 次，间隔约 1、2、4、8、16、30 秒，之后最多 30 秒。所有尝试和等待都计入时间预算，次数不保证用完。已输出内容后中断会保留部分答案；服务要求等待超过 30 秒的限流或暂不可用错误，会提示稍后重试。</p>
     </Card>
-    <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div>{can('logs.view') && <div className="flex items-center justify-between gap-4 text-sm"><span>在侧边栏显示「系统日志」入口</span><Toggle label="显示系统日志入口" checked={logs} onChange={setLogs} /></div>}</Card>
+    <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>显示上下文使用情况（可展开）</span><Toggle label="显示上下文使用情况" checked={showContext} onChange={setShowContext} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div>{can('logs.view') && <div className="flex items-center justify-between gap-4 text-sm"><span>在侧边栏显示「系统日志」入口</span><Toggle label="显示系统日志入口" checked={logs} onChange={setLogs} /></div>}</Card>
     <Card className="p-5"><h2 className="mb-4 font-semibold">修改密码</h2><div className="max-w-md"><PasswordForm onDone={logout} /></div></Card>
   </div>
 }

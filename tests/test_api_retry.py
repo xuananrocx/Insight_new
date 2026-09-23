@@ -31,7 +31,7 @@ def test_backoff_ten_retries_and_cap():
     assert retry.retry_plan(httpx.ConnectError('offline'), 10, 10, float('inf')) is None
 
 
-@pytest.mark.parametrize('status', [500, 502, 504])
+@pytest.mark.parametrize('status', [500, 502, 504, 520, 522, 524, 599])
 def test_gateway_retry_after_does_not_force_sixty_second_wait(status):
     assert retry.retry_plan(ToolHTTPError('bad gateway', status, 60), 0, 10, float('inf'))['delay'] == 1
 
@@ -235,3 +235,9 @@ def test_connection_endpoint_uses_short_probe_and_reports_long_backpressure(monk
     else:
         assert routes_accounts.test_provider('test')['ok'] is True
     assert called == [True] and closed == [True]
+
+
+@pytest.mark.parametrize('status', range(400, 600))
+def test_http_error_categories(status):
+    expected = status >= 500 or status in (408, 429)
+    assert retry.failure_info(ToolHTTPError('failure', status, 0))[0] is expected

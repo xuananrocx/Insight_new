@@ -1,0 +1,14 @@
+[
+  {"id":"direct_fact","question":"Atlas 2.0 默认监听哪个端口？","documents":[{"name":"Atlas 2.0 配置.md","text":"Atlas 2.0 默认监听 8088。仅监听本机地址；对外提供服务须另设监听地址。"}],"must_include":["8088","仅监听本机"],"must_not_claim":["默认可从公网访问"]},
+  {"id":"installation","question":"Linux 离线安装 Atlas 失败，应该排查什么？","documents":[{"name":"安装.md","text":"Linux 离线安装必须预先准备依赖包和许可证。缺少依赖时提示 DEP_MISSING；许可证无效时提示 LICENSE_INVALID。请结合安装日志区分，不能仅凭安装失败判定原因。"}],"must_include":["依赖","许可证","日志"],"must_not_claim":["已确定是许可证问题"]},
+  {"id":"version_conflict","question":"Atlas 2.0 支持热更新吗？","documents":[{"name":"Atlas 1.0.md","text":"Atlas 1.0 修改规则后必须重启。"},{"name":"Atlas 2.0.md","text":"Atlas 2.0 仅规则文件支持热更新；网络监听地址变更仍须重启。"}],"must_include":["规则文件","监听地址","重启"],"must_not_claim":["所有配置都可热更新"]},
+  {"id":"platform_scope","question":"Linux 能启用快速驱动吗？","documents":[{"name":"Windows.md","text":"Windows 支持快速驱动。"},{"name":"Linux.md","text":"Linux 当前只支持标准驱动。"}],"must_include":["标准驱动"],"must_not_claim":["Windows 的支持说明证明 Linux 支持"]},
+  {"id":"table_columns","question":"Atlas 2.0 的 Linux 和 Windows 最大连接数分别是多少？","documents":[{"name":"容量.md","text":"| 版本 | Linux | Windows |\n| --- | --- | --- |\n| 1.0 | 100 | 50 |\n| 2.0 | 200 | 80 |"}],"must_include":["200","80"],"must_not_claim":["Linux 80，Windows 200"]},
+  {"id":"code_indices","question":"数组值如何与档位对应？","documents":[{"name":"数组.md","text":"levels[0] 对应第一档，levels[1] 对应第二档。值为 -1 表示缺失；0 是有效值，不可过滤。"}],"must_include":["[0]","[1]","-1","0 是有效值"],"must_not_claim":["0 表示缺失"]},
+  {"id":"multiple_sources","question":"如何启用远程访问并限制访问者？","documents":[{"name":"网络.md","text":"启用远程访问须设置监听地址和端口。"},{"name":"认证.md","text":"远程访问必须启用认证并配置允许访问的账号。不要把服务直接暴露为匿名接口。"}],"must_include":["监听地址","认证","账号"],"must_not_claim":["只修改监听地址即可安全启用"]},
+  {"id":"unknown_cause","question":"为什么 Atlas 不支持自动归档？","documents":[{"name":"功能.md","text":"当前版本提供手动归档。不包含自动归档功能；本文未说明产品设计原因。"}],"must_include":["手动归档","原因未说明"],"must_not_claim":["已确认为了节约服务器成本"]},
+  {"id":"partial_answer","question":"Atlas 默认端口是多少，每个连接占用多少内存？","documents":[{"name":"配置.md","text":"默认端口为 8088。本文没有每连接内存占用的测量数据。"}],"must_include":["8088","内存数据不足"],"must_not_claim":["每个连接固定占用 1 MB"]},
+  {"id":"conditional_exception","question":"Atlas 可以在线备份吗？","documents":[{"name":"备份.md","text":"标准模式支持在线备份，但恢复必须停机。快速模式不支持在线备份，须先停止写入。"}],"must_include":["标准模式","恢复必须停机","快速模式","停止写入"],"must_not_claim":["所有模式均可在线备份"]},
+  {"id":"history_correction","question":"按现在的环境应选哪种驱动？","history":[{"role":"user","content":"我在 Windows 使用 Atlas。"},{"role":"assistant","content":"可以使用快速驱动。"},{"role":"user","content":"纠正一下，实际部署在 Linux。"}],"documents":[{"name":"驱动.md","text":"Windows 支持快速驱动；Linux 仅支持标准驱动。"}],"must_include":["Linux","标准驱动"],"must_not_claim":["沿用 Windows 快速驱动"]},
+  {"id":"unresolved_conflict","question":"Atlas 2.0 标准版最多支持多少连接？","documents":[{"name":"规格表.md","text":"Atlas 2.0 标准版最大连接数为 200。"},{"name":"部署说明.md","text":"Atlas 2.0 标准版最大连接数为 160。本文没有补充适用条件或修订日期。"}],"must_include":["200","160","冲突"],"must_not_claim":["已确认最大值为 200"]}
+]

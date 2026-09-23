@@ -9,22 +9,28 @@ from src.qa import bm25_index, rag, retrieval
 from src.qa.trace import PipelineCancelled, TraceCollector
 
 
+@pytest.fixture(autouse=True)
+def initialized_index_db():
+    from src.db import metadata_db
+    metadata_db.init_db()
+
+
 def chunk(cid, text, **meta):
     return {"id": cid, "text": text, "source_path": "guide.pdf", "content_hash": "hash",
             "section_index": 2, "chunk_index": 1, "score": 0.8, **meta}
 
 
-def test_bm25_zero_score_match_and_legacy_reload():
+def test_keyword_match_and_persistent_reload():
     bm25_index.clear()
     bm25_index.add_chunks([chunk("a", "QueryMDTick"), chunk("b", "OtherAPI")])
     hits = bm25_index.query_enhanced("QueryMDTick")
     assert [h["id"] for h in hits] == ["a"]
-    assert hits[0]["bm25_score"] == 0
+    assert hits[0]["bm25_score"] > 0
     bm25_index._state = None
     assert [h["id"] for h in bm25_index.query_enhanced("QueryMDTick")] == ["a"]
 
 
-def test_bm25_negative_scores_and_kb_isolation():
+def test_common_keyword_and_kb_isolation():
     bm25_index.clear()
     bm25_index.add_chunks([
         {"id": "a", "text": "QueryMDTick", "metadata": {"kb_id": "default"}},
@@ -33,7 +39,7 @@ def test_bm25_negative_scores_and_kb_isolation():
     ])
     hits = bm25_index.query_enhanced("QueryMDTick")
     assert [h["id"] for h in hits] == ["a"]
-    assert hits[0]["bm25_score"] < 0
+    assert hits[0]["bm25_score"] > 0
 
 
 def test_exact_identifier_prefers_full_error_code():

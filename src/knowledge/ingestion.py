@@ -194,6 +194,9 @@ def _process_one_document(
 
     progress = report
     try:
+        from src.knowledge.reading_index import Builder
+        reading = Builder()
+        transaction.attach_reading(reading)
         if progress:
             progress("parsing", {"file": abs_path.name, "stage": "parse"})
         if abs_path.suffix.lower() in (".xlsx", ".xlsm"):
@@ -204,6 +207,7 @@ def _process_one_document(
                 for section in sections:
                     # Only the current Markdown block survives into the splitter.
                     block = ParsedDocument(abs_path, [section], "xlsx", abs_path.stem)
+                    reading.add(section)
                     chunks.extend(chunk_document(block))
                     section_count += 1
                     del block, section
@@ -213,7 +217,15 @@ def _process_one_document(
             section_count = len(doc.sections)
             progress("chunking", {"file": abs_path.name, "sections": section_count})
             chunks = chunk_document(doc)
+            if abs_path.suffix.lower() in ('.h','.hpp','.c','.cpp','.cc','.py','.js','.ts','.java','.cs'):
+                from src.knowledge.parsers.base import ParsedSection
+                reading.add(ParsedSection(abs_path.read_text('utf-8',errors='replace'),abs_path,0,'完整代码文档'))
+            else:
+                for section in doc.sections:
+                    progress('chunking', {'detail': '建立章节与对象索引'})
+                    reading.add(section)
             del doc
+        reading.finish()
         if not chunks:
             # 文件解析后无文本（如纯图片 PDF）
             transaction.publish([], [], progress)

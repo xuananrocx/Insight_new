@@ -18,12 +18,16 @@ export function remarkCitations({ count, prefix, hidden = false }: { count: numb
         }
         const parts: MarkdownNode[] = []
         let cursor = 0
-        for (const match of child.value.matchAll(/\[([1-9]\d*)\]/g)) {
+        for (const match of child.value.matchAll(/【cite:([1-9]\d*)】/g)) {
           const number = Number(match[1])
-          if (!hidden && number > count) continue
+          if (number > count) {
+            if (match.index! > cursor) parts.push({ type: 'text', value: child.value.slice(cursor, match.index!) })
+            cursor = match.index! + match[0].length
+            continue
+          }
           const start = match.index!
           if (start > cursor) parts.push({ type: 'text', value: child.value.slice(cursor, start) })
-          if (!hidden) parts.push({ type: 'link', url: `#${prefix}-${number}`, children: [{ type: 'text', value: match[0] }] })
+          if (!hidden) parts.push({ type: 'link', url: `#${prefix}-${number}`, children: [{ type: 'text', value: `[${number}]` }] })
           cursor = start + match[0].length
         }
         if (cursor === 0) return [child]

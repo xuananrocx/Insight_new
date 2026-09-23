@@ -25,6 +25,7 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { KbConceptsTable } from '@/components/kb-concepts-table'
 import { KbDocumentGraph } from '@/components/kb-document-graph'
+import { KbIndexCard } from '@/components/kb-index-card'
 import { KbGlobalSummaryCard } from '@/components/kb-global-summary-card'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -328,10 +329,11 @@ export default function KbDetailPage() {
       </Card>
 
       {/* KB 全局概览（迭代 6）*/}
+      <KbIndexCard key={kb.id} kbId={kb.id} canManage={kb.capabilities.includes('manage')} />
       <KbGlobalSummaryCard kbId={kb.id} canManage={kb.capabilities.includes('manage')} />
 
       {/* 核心概念（迭代 4）*/}
-      <KbConceptsTable kbId={kb.id} />
+      <KbConceptsTable key={kb.id} kbId={kb.id} />
 
       {/* 文档关联图（迭代 4）*/}
       <KbDocumentGraph kbId={kb.id} />

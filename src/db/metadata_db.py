@@ -26,7 +26,7 @@ from src.core.retrieval_modes import VALID_MODES
 
 # SQLite 连接：每次操作开新连接（避免 threading.local 在 WAL 模式下跨线程读到 stale snapshot）
 # 当前 schema 版本（每次表结构变更 +1）
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 17
 
 
 # ===== 哨兵：区分「不更新」和「清空为 NULL」 =====
@@ -355,6 +355,8 @@ def init_db() -> None:
         current = _get_user_version(cur)
         if current == 0:
             _migrate_v14_to_v15(cur)
+            _migrate_v15_to_v16(cur)
+            _migrate_v16_to_v17(cur)
             # 全新建库直接落在最新版本、不跑迁移链，
             # 默认知识库必须在这里显式播种
             _ensure_default_kb(cur)
@@ -2728,3 +2730,18 @@ def unpublished_chunk_ids() -> set[str]:
             from src.knowledge.ai_summarizer import _make_summary_chunk_id
             blocked.add(_make_summary_chunk_id(row["file_id"], row["old_hash"]))
     return blocked
+
+
+@_register_schema_migration(15)
+def _migrate_v15_to_v16(cur: sqlite3.Cursor) -> None:
+    cur.execute("""CREATE TABLE IF NOT EXISTS conversation_summaries (
+        session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+        version INTEGER NOT NULL, kb_scope TEXT, covered_count INTEGER NOT NULL,
+        fingerprint TEXT NOT NULL, summary TEXT NOT NULL, created_at INTEGER NOT NULL,
+        PRIMARY KEY(session_id, version))""")
+
+
+@_register_schema_migration(16)
+def _migrate_v16_to_v17(cur):
+    from src.knowledge.reading_index import schema
+    schema(cur)

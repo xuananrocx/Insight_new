@@ -36,8 +36,11 @@ import {
 import { cn, formatTimestamp, formatBytes } from '@/lib/utils'
 
 const SCENE_LABEL: Record<string, string> = {
+  conversation_summary: '会话记忆 · 自动摘要',
+  conversation_history: '会话记忆 · 历史查阅',
   deep_ai_tools: '深度 AI · 工具规划',
   deep_ai_answer: '深度 AI · 生成回答',
+  deep_ai_verify: '深度 AI · 语义核验',
   knowledge_tool: '深度 AI · 查阅知识库',
   qa_chat: '问答',
   summarize: '摘要',
@@ -625,7 +628,7 @@ function DetailContent({ log }: { log: AiCallLogDetail }) {
 
       <div className="flex-1 space-y-3 overflow-y-auto -mx-5 px-5 pb-5">
         {/* 跳转到对应会话（仅 qa_chat 且有 session_id） */}
-        {['qa_chat', 'deep_ai_tools', 'deep_ai_answer', 'knowledge_tool'].includes(log.scene) && log.session_id ? (
+        {['qa_chat', 'deep_ai_tools', 'deep_ai_answer', 'deep_ai_verify', 'knowledge_tool', 'conversation_summary', 'conversation_history'].includes(log.scene) && log.session_id ? (
           <div className="flex justify-end">
             <Button
               variant="outline"

@@ -1,3 +1,4 @@
+import type { DeepAiOptions } from '@/hooks/use-deep-ai-options'
 import { apiFetch } from '@/lib/account-api'
 
 const API_BASE = '/api/v1'
@@ -124,6 +125,7 @@ export type KbConcept = {
 export type KbGraphNode = {
   file_id: number
   name: string
+  path?: string
   concept_count: number
   concepts: string[]
 }
@@ -834,6 +836,11 @@ export const api = {
   },
 
   kb: {
+    indexes: {
+      get: (id: string) => request<{ files: { id: number; name: string; status: string; sections: number; objects: number }[]; tasks: { id: string; state: string; total: number; completed: number; failed: number; detail: string; results: { file_id: number; name: string; status: string; error?: string }[] }[] }>(`/kbs/${id}/indexes`),
+      rebuild: (id: string, body: { file_ids?: number[]; force: boolean }) => request(`/kbs/${id}/indexes/rebuild`, { method: 'POST', body: JSON.stringify(body) }),
+      cancel: (id: string, task: string) => request(`/kbs/${id}/indexes/tasks/${task}/cancel`, { method: 'POST' }),
+    },
     list: () => request<KB[]>('/kbs'),
     get: (id: string) => request<KB>(`/kbs/${id}`),
     create: (req: CreateKBRequest) =>
@@ -1029,6 +1036,7 @@ export const api = {
       providerId?: string,
       strictKnowledge?: boolean,
       apiRetryCount = 10,
+      deepAiOptions?: DeepAiOptions,
     ): Promise<void> => {
      let terminal = false
      try {
@@ -1042,6 +1050,7 @@ export const api = {
           provider_id: providerId,
           strict_knowledge: strictKnowledge ?? false,
           api_retry_count: apiRetryCount,
+          deep_ai_options: deepAiOptions,
           session_id: sessionId,
           turn_id: turnId,
           top_k: topK,

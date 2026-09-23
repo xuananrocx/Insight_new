@@ -528,3 +528,32 @@ def test_importing_same_pack_preserves_private_index_ids(env, monkeypatch, tmp_p
         assert item["id"] == vector_store.make_chunk_id(
             item["metadata"]["source_path"], "hash", 0
         )
+
+
+def test_personal_preferences_api_and_context_owner_boundary(env, monkeypatch):
+    from src.api import routes_qa
+    from src.qa import conversation_context as cc
+    saved = env.alice.put('/api/v1/account/preferences', json={'content': '默认中文', 'enabled': True, 'version': ''})
+    assert saved.status_code == 200, saved.text
+    assert env.bob.get('/api/v1/account/preferences').json()['content'] == ''
+    assert env.admin.get('/api/v1/account/preferences').json()['content'] == ''
+    assert env.alice.get('/api/v1/account/preferences').json()['content'] == '默认中文'
+    assert TestClient(env.app).get('/api/v1/account/preferences').status_code == 401
+    kid = kb(env.alice)
+    sid = session(env.alice, kid)
+    pid = provider(env.alice)
+    response = env.alice.post(f'/api/v1/sessions/{sid}/turns', json={'id': 'old', 'order_idx': 0, 'question': '部署方案', 'answer': '第二种是容器', 'created_at': 1})
+    assert response.status_code == 201, response.text
+    seen = []
+    async def fake(**kwargs):
+        context = cc.active.get()
+        seen.append(context)
+        yield {'type': 'done', 'data': {'answer': '继续容器方案', 'trace': [], 'sources': [], 'used_chunks': 0}}
+    monkeypatch.setattr(routes_qa, 'ask_stream', fake)
+    request = {'question': '第二种怎么做', 'session_id': sid, 'kb_scope': kid, 'provider_id': pid, 'mode': 'deep_ai'}
+    response = env.alice.post('/api/v1/qa/ask_stream', json=request)
+    assert response.status_code == 200 and 'conversation_context' in response.text
+    assert '第二种是容器' in str(seen[-1].messages) and '默认中文' in seen[-1].background
+    count = len(seen)
+    assert env.bob.post('/api/v1/qa/ask_stream', json=request).status_code == 404
+    assert len(seen) == count

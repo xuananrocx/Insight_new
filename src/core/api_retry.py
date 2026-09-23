@@ -53,7 +53,7 @@ def failure_info(exc):
             wait = getattr(exc, "retry_after", None)
             if wait is None:
                 wait = retry_after(getattr(response, "headers", None))
-            return status in (408, 429, 500, 502, 503, 504), f"HTTP {status}", status, wait
+            return (500 <= status < 600 or status in (408, 429)), f"HTTP {status}", status, wait
         if isinstance(exc, (httpx.UnsupportedProtocol, httpx.LocalProtocolError)):
             return False, type(exc).__name__, None, 0
         if isinstance(exc, (httpx.NetworkError, httpx.TimeoutException, httpx.RemoteProtocolError, httpx.ProxyError, TimeoutError)):
@@ -98,7 +98,7 @@ class RetryBudget:
 
     @classmethod
     def for_scene(cls, scene, count=None):
-        seconds, default = (20, 1) if scene == "test" else (30, 2) if scene == "title" else (180, 10) if scene == "qa_chat" else (300, 3)
+        seconds, default = (20, 1) if scene == "test" else (30, 2) if scene == "title" else (90, 10) if scene == "conversation_summary" else (180, 10) if scene == "qa_chat" else (300, 3)
         return cls(min(10, max(0, default if count is None else int(count))), time.monotonic() + seconds)
 
 

@@ -122,7 +122,7 @@ DEFAULT_SYSTEM_PROMPT = (
     "要求：\n"
     "1. 只能使用知识库中的信息，禁止编造。\n"
     "2. 如果知识库不足以回答，明确说『知识库中未找到相关内容』，并建议查阅哪些资料。\n"
-    "3. 回答中每条事实陈述后用 [1] [2] 这样的编号标注引用来源。\n"
+    "3. 回答中每条事实陈述后用 【cite:1】 【cite:2】 这样的专用标记标注引用来源，普通数字方括号仅用于正文或数组下标。列表前空一行，每项独占一行。\n"
     "4. 涉及操作步骤时，给出清晰的 1/2/3 步骤。\n"
     "5. 回答使用中文，结构清晰。\n"
     "6. 直接回答问题，不要用『根据上下文』『根据资料』之类的开场白，引用编号作为脚注显示即可。\n"
@@ -204,6 +204,7 @@ def _build_prompt(
         ctx_block += f'<chunk id="{i}" source="{_xml_escape_attr(loc)}">\n{_xml_escape_text(c["text"])}\n</chunk>\n\n'
 
     system = _get_system_prompt(system_override)
+    system += "\n输出格式约定：引用来源必须写成 【cite:1】 这样的标记，编号对应 chunk id；不要把正文中的数组下标当作引用。Markdown 列表前空一行，每项独占一行。"
     user = f"<knowledge_base>\n{ctx_block}</knowledge_base>\n\n<user_question>{question}</user_question>"
     return [
         {"role": "system", "content": system},
@@ -786,8 +787,15 @@ def _run_pipeline(
             doc_summaries=doc_summaries,
             kb_global_summary=kb_global_summary,
         )
-        if history:
+        from src.qa import conversation_context
+        context = conversation_context.active.get()
+        if context:
+            messages[0]['content'] += '\n' + context.background
+            messages = [messages[0], *context.messages, messages[-1]]
+        elif history:
+            # Direct library callers retain their complete dialogue roles.
             messages = [messages[0]] + history + [messages[-1]]
+        conversation_context.log_model_input(messages[0]["content"], messages[1:], max_tokens=settings.config.get("qa", {}).get("chat_options", {}).get("max_tokens", 1500))
         notes = f"chunks={len(hits)}"
         if doc_summaries:
             notes += f" + 文档摘要={len(doc_summaries)}"
@@ -825,6 +833,7 @@ def ask(
     mode: str = "ai",
     strict_knowledge: bool = False,
     api_retry_count: int = 10,
+    deep_ai_options=None,
 ) -> Answer:
     """同步问答。返回完整 Answer。
 
@@ -834,7 +843,7 @@ def ask(
     """
     if mode in VALID_MODES and mode != "ai":
         async def collect():
-            async for event in ask_stream(question, history, kb_scope, top_k=top_k, mode=mode, strict_knowledge=strict_knowledge, api_retry_count=api_retry_count):
+            async for event in ask_stream(question, history, kb_scope, top_k=top_k, mode=mode, strict_knowledge=strict_knowledge, api_retry_count=api_retry_count, deep_ai_options=deep_ai_options):
                 if event["type"] == "error":
                     raise RuntimeError(event["data"]["message"])
                 if event["type"] == "done":
@@ -918,6 +927,7 @@ async def ask_stream(
     mode: str = "ai",
     strict_knowledge: bool = False,
     api_retry_count: int = 10,
+    deep_ai_options=None,
 ) -> AsyncGenerator[dict, None]:
     """流式问答。逐事件 yield。
 
@@ -944,7 +954,7 @@ async def ask_stream(
         from src.qa.tool_agent import ask_stream as deep_ask_stream
         async with aclosing(deep_ask_stream(question, history, kb_scope, top_k=top_k,
                                            session_id=session_id, turn_id=turn_id, strict_knowledge=strict_knowledge,
-                                           api_retry_count=api_retry_count)) as stream:
+                                           api_retry_count=api_retry_count, deep_ai_options=deep_ai_options)) as stream:
             async for event in stream:
                 yield event
         return

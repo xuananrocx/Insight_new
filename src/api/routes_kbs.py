@@ -519,6 +519,7 @@ def get_kb_document_graph(kb_id: str, min_shared: int = 1) -> dict:
     # 2. 建立 file_id → 概念集合的反向索引
     file_to_concepts: dict[int, list[dict]] = {}
     file_names: dict[int, str] = {}
+    file_paths: dict[int, str] = {}
 
     # 拉 KB 下所有文档元信息（取文档名）
     files = metadata_db.list_files(kb_id=kb_id, limit=1000)
@@ -526,8 +527,9 @@ def get_kb_document_graph(kb_id: str, min_shared: int = 1) -> dict:
         fid = f["id"]
         rel_path = f.get("relative_path", "")
         # 取文件名（最后一段）
-        name = rel_path.split("/")[-1] or rel_path or f"file #{fid}"
+        name = rel_path.replace("\\", "/").split("/")[-1] or rel_path or f"file #{fid}"
         file_names[fid] = name
+        file_paths[fid] = rel_path
 
     for c in concepts:
         try:
@@ -546,6 +548,7 @@ def get_kb_document_graph(kb_id: str, min_shared: int = 1) -> dict:
         {
             "file_id": fid,
             "name": file_names.get(fid, f"file #{fid}"),
+            "path": file_paths.get(fid, ""),
             "concept_count": len(cs),
             "concepts": [c["name"] for c in cs],
         }

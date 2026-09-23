@@ -14,7 +14,7 @@ export function MarkdownContent({ content, citationCount = 0, citationPrefix = '
 }) {
   return (
     <div className="md-body text-[13px] leading-relaxed">
-      <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkStrong, [remarkCitations, { count: onCitationClick ? citationCount : 0, prefix: citationPrefix, hidden: hideCitations }]]} components={{
+      <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkStrong, [remarkCitations, { count: citationCount, prefix: citationPrefix, hidden: hideCitations }]]} components={{
         a: ({ node, ...props }) => {
           const prefix = `#${citationPrefix}-`
           const number = props.href?.startsWith(prefix) ? Number(props.href.slice(prefix.length)) : 0

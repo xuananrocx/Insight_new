@@ -61,6 +61,10 @@ def _trim_sources(sources: list[dict] | None, long_content: bool = False) -> lis
             item["content_hash"] = s["content_hash"][:128]
         if isinstance(s.get("chunk_ids"), list):
             item["chunk_ids"] = [c[:200] for c in s["chunk_ids"][:10000] if isinstance(c, str)]
+        if isinstance(s.get('reading'), dict):
+            item['reading'] = {k: v for k, v in s['reading'].items() if k in {
+                'kind', 'offset_basis', 'start', 'end', 'truncated', 'budget_truncated', 'section_complete', 'total_chars', 'index_incomplete', 'prefix_omitted', 'artifact', 'object_name', 'boundary_known', 'object_complete', 'returned_to_end', 'remaining_chars'
+            } and isinstance(v, (str, int, bool, type(None)))}
         content = s.get("content") or s.get("text_snippet") or ""
         if isinstance(content, str):
             item["content"] = content[:content_max]
@@ -84,6 +88,17 @@ def _trim_trace(trace: list[dict] | None) -> list[dict]:
             "duration_ms": st.get("duration_ms"),
             "notes": st.get("notes"),
         }
+        if st.get('stage') == 'conversation_context' and isinstance(st.get('context'), dict):
+            item['context'] = {k: v for k, v in st['context'].items() if k in {
+                'candidate_turns', 'recent_turns', 'summary_turns', 'summary_version', 'preferences_loaded',
+                'preferences_version', 'budget_tokens', 'estimated_tokens', 'token_count_kind', 'clipped',
+                'omitted_turns', 'summary_state', 'degraded', 'request_id', 'history_reads', 'duration_ms',
+                'history_tokens', 'summary_tokens', 'preferences_tokens', 'question_tokens', 'context_window_tokens', 'model_input_tokens'
+            } and isinstance(v, (str, int, float, bool, type(None)))}
+        if st.get('stage') == 'evidence_summary':
+            for key in ('stop_reason', 'tool_calls', 'evidence_chars', 'reviewed_points', 'unresolved_points'):
+                if isinstance(st.get(key), (str, int)):
+                    item[key] = st[key]
         cands = st.get("candidates") or []
         if isinstance(cands, list):
             trimmed_cands = []

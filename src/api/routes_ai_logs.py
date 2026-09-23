@@ -81,13 +81,13 @@ def get_config() -> dict:
         "log_system_prompt": cfg.get("log_system_prompt", True),
         "log_messages": cfg.get("log_messages", True),
         "retention_days": cfg.get("retention_days", 30),
-        "scenes": cfg.get("scenes", {
+        "scenes": {"conversation_summary": True, "conversation_history": True, "deep_ai_verify": True, **cfg.get("scenes", {
             "qa_chat": True,
             "summarize": True,
             "concept_extract": True,
             "title": True,
             "test": False,
-        }),
+        })},
     }
 
 

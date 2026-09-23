@@ -14,6 +14,8 @@ from pydantic import BaseModel, Field
 from src.core import llm_client
 from src.core.config import settings
 from src.qa.rag import ask, ask_stream
+from src.qa import conversation_context
+from src.core.deep_ai_options import DeepAiOptions
 from src.core.retrieval_modes import RetrievalMode, VALID_MODES
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,7 @@ router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
 
 class AskRequest(BaseModel):
+    deep_ai_options: DeepAiOptions | None = None
     api_retry_count: int = Field(10, ge=0, le=10, strict=True)
     strict_knowledge: bool = False
     provider_id: str | None = None
@@ -67,6 +70,10 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
             status_code=503,
             detail="向量库重建中，请等待重建完成后再提问",
         )
+    bundle = None
+    if _resolve_mode(req) in ('ai', 'deep_ai'):
+        bundle = asyncio.run(conversation_context.prepare(req.question, req.history, req.session_id, req.turn_id, req.kb_scope, req.api_retry_count, background=False))
+    context_token = conversation_context.active.set(bundle)
     try:
         result = ask(
             question=req.question,
@@ -76,6 +83,7 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
             mode=_resolve_mode(req),
             strict_knowledge=req.strict_knowledge,
             api_retry_count=req.api_retry_count,
+            deep_ai_options=req.deep_ai_options,
         )
     except llm_client.NoAvailableProviderError as e:
         raise HTTPException(
@@ -84,6 +92,11 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"问答失败: {e}")
+
+    finally:
+        conversation_context.active.reset(context_token)
+    if bundle:
+        result.trace.insert(0, bundle.stage())
 
     from src.core import accounts
     if accounts.enabled:
@@ -133,7 +146,14 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
             retry_stages.append(data)
             loop.call_soon_threadsafe(queue.put_nowait, {"type": "stage", "data": data})
         observer_token = retry_observer.set(on_retry)
+        context_token = None
+        bundle = None
         try:
+            if mode in ('ai', 'deep_ai'):
+                await queue.put({'type': 'stage', 'data': {'stage': 'context_loading', 'label': '读取会话上下文', 'status': 'ok', 'notes': '准备历史问答、摘要及个人偏好'}})
+                bundle = await conversation_context.prepare(req.question, req.history, req.session_id, req.turn_id, req.kb_scope, req.api_retry_count)
+                context_token = conversation_context.active.set(bundle)
+                await queue.put({'type': 'stage', 'data': bundle.stage()})
             async for evt in ask_stream(
                 question=req.question,
                 top_k=req.top_k,
@@ -144,7 +164,10 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
                 mode=mode,
                 strict_knowledge=req.strict_knowledge,
                 api_retry_count=req.api_retry_count,
+                deep_ai_options=req.deep_ai_options,
             ):
+                if evt.get('type') in ('done', 'error') and bundle:
+                    evt['data']['trace'] = [bundle.stage(), *evt['data'].get('trace', [])]
                 if evt.get("type") in ("done", "error") and retry_stages:
                     evt["data"]["trace"] = [*retry_stages, *evt["data"].get("trace", [])]
                 await queue.put(evt)
@@ -154,6 +177,8 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
             logger.exception(f"ask_stream producer error: {e}")
             await queue.put({"type": "error", "data": {"message": str(e)}})
         finally:
+            if context_token is not None:
+                conversation_context.active.reset(context_token)
             retry_observer.reset(observer_token)
             await queue.put(None)
 

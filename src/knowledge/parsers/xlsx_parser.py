@@ -19,7 +19,7 @@ from openpyxl.cell.text import Text
 from openpyxl.reader.excel import ExcelReader
 from openpyxl.worksheet._reader import WorkSheetParser
 from openpyxl.xml.constants import SHARED_STRINGS, SHEET_MAIN_NS
-from openpyxl.utils import get_column_letter
+from openpyxl.utils import get_column_letter, range_boundaries
 
 from src.knowledge.parsers.base import ParsedDocument, ParsedSection
 
@@ -115,6 +115,7 @@ def iter_xlsx_sections(path: Path, progress: Progress | None = None) -> Iterator
                                 row_count += 1
                             if progress and row_index % 512 == 0:
                                 progress("parsing", {"detail": f"{prefix} · 已读取 {row_index} 行"})
+                    merged = [str(m.ref) for m in parser.merged_cells.mergeCell] if parser.merged_cells else []
                     spool.seek(0)
                     columns = sorted(columns)
                     labels = ",".join(get_column_letter(c) for c in columns)
@@ -122,12 +123,17 @@ def iter_xlsx_sections(path: Path, progress: Progress | None = None) -> Iterator
                     lines = []
                     size = 0
                     start = end = 0
+                    cell_rows = []
+                    header_cells = None
                     def section():
                         return ParsedSection(
                             text="\n".join(lines), source_path=path, section_index=section_index,
                             section_label=f"Sheet: {ws.title} · 行 {start}-{end}",
                             extra={"sheet": ws.title, "row_start": start, "row_end": end,
-                                   "row_count": row_count, "columns": labels})
+                                   "row_count": row_count, "columns": labels,
+                                   "cell_rows": list(cell_rows),
+                                   "merged_ranges": [ref for ref in merged if range_boundaries(ref)[1] <= end and range_boundaries(ref)[3] >= start],
+                                   "header_status": "首个非空行仅用于文本展示，未推定业务表头"})
                     for encoded in spool:
                         row_index, values = json.loads(encoded)
                         line = _row_to_md(values.get(str(c)) for c in columns)
@@ -136,6 +142,8 @@ def iter_xlsx_sections(path: Path, progress: Progress | None = None) -> Iterator
                             lines = header.copy()
                             size = sum(map(len, lines))
                             start = end = row_index
+                            header_cells = {"row":row_index,"values":values,"start":0,"end":len(line)}
+                            cell_rows = [header_cells]
                             continue
                         if size + len(line) > BLOCK_CHARS and end > start:
                             yield section()
@@ -143,6 +151,9 @@ def iter_xlsx_sections(path: Path, progress: Progress | None = None) -> Iterator
                             lines = header.copy()
                             size = sum(map(len, lines))
                             start = row_index
+                            cell_rows = [header_cells]
+                        line_start = sum(len(v)+1 for v in lines)
+                        cell_rows.append({"row":row_index,"values":values,"start":line_start,"end":line_start+len(line)})
                         lines.append(line)
                         size += len(line) + 1
                         end = row_index

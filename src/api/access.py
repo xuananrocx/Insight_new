@@ -114,6 +114,7 @@ async def authorize(request: Request):
         return  # Each endpoint requires its specific capability or resource management right.
     if path.startswith("/api/v1/providers") or path in (
         "/api/v1/account/provider",
+        "/api/v1/account/preferences",
         "/api/v1/members",
     ):
         return  # endpoints enforce personal ownership / team administration

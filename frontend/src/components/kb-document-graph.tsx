@@ -19,6 +19,7 @@ interface Props {
 interface SimNode {
   file_id: number
   name: string
+  path?: string
   concept_count: number
   concepts: string[]
   x: number
@@ -129,6 +130,7 @@ export function KbDocumentGraph({ kbId }: Props) {
                   onMouseEnter={() => setHoveredNode(n.file_id)}
                   onMouseLeave={() => setHoveredNode(null)}
                 >
+                  <title>{n.path || n.name}</title>
                   <circle
                     r={n.radius}
                     fill={isSelected ? 'currentColor' : 'var(--background, #fff)'}
@@ -143,7 +145,7 @@ export function KbDocumentGraph({ kbId }: Props) {
                     fill="currentColor"
                     className="text-foreground"
                   >
-                    {truncate(n.name, 20)}
+                    {truncate(fileName(n.name), 20)}
                   </text>
                   <text
                     y={n.radius + 24}
@@ -240,7 +242,7 @@ function SelectedNodeDetail({
   return (
     <div className="space-y-3 text-[11px]">
       <div>
-        <div className="font-medium text-foreground">{truncate(node.name, 28)}</div>
+        <div className="break-all font-medium text-foreground" title={node.path || node.name}>{fileName(node.name)}</div>
         <div className="mt-0.5 text-muted-foreground">{node.concept_count} 个概念 · file_id #{node.file_id}</div>
       </div>
 
@@ -267,8 +269,8 @@ function SelectedNodeDetail({
               return (
                 <div key={i} className="rounded bg-muted/30 p-2">
                   <div className="flex items-center justify-between">
-                    <span className="truncate text-[11px] font-medium">
-                      {other ? truncate(other.name, 20) : `file #${otherId}`}
+                    <span className="min-w-0 break-all text-[11px] font-medium" title={other?.path || other?.name}>
+                      {other ? fileName(other.name) : `file #${otherId}`}
                     </span>
                     <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[9px] text-primary">
                       {e.shared_count} 共享
@@ -410,3 +412,5 @@ function useForceLayout(
 
   return cacheRef.current[cacheKey]
 }
+
+function fileName(path: string) { return path.replace(/\\/g, "/").split("/").pop() || path }

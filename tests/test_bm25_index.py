@@ -3,8 +3,10 @@ import json
 
 import pytest
 
-# rank_bm25 是可选依赖，缺失时跳过 BM25 相关测试
-pytest.importorskip("rank_bm25")
+@pytest.fixture(autouse=True)
+def initialized():
+    from src.db import metadata_db
+    metadata_db.init_db()
 
 
 def _make_chunk(cid: str, text: str) -> dict:
@@ -32,19 +34,13 @@ def test_bm25_query_empty_after_clear():
     assert bm25_index.query("test") == []
 
 
-def test_bm25_persists_to_json_not_pickle():
-    """持久化文件应是 JSON（S-5 修复后）。"""
-    from src.qa import bm25_index
+def test_keyword_index_persists_to_sqlite():
+    from src.qa import bm25_index, lexical_store
     bm25_index.clear()
-    bm25_index.add_chunks([_make_chunk("c1", "persist test")])
-    # 文件应是 .json
-    idx_file = bm25_index._get_index_file()
-    assert idx_file.suffix == ".json"
-    # 内容应是合法 JSON
-    with open(idx_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    assert "chunk_ids" in data
-    assert "c1" in data["chunk_ids"]
+    bm25_index.add_chunks([_make_chunk('c1', 'persist test')])
+    with lexical_store.connection() as conn:
+        assert conn.execute('SELECT id FROM chunks').fetchone()[0] == 'c1'
+    assert bm25_index.stats()['backend'] == 'sqlite_fts5'
 
 
 def test_bm25_add_chunks_no_duplicates():
@@ -53,6 +49,20 @@ def test_bm25_add_chunks_no_duplicates():
     bm25_index.clear()
     bm25_index.add_chunks([_make_chunk("c1", "old text")])
     bm25_index.add_chunks([_make_chunk("c1", "new text")])
-    state = bm25_index._state_load()
-    assert state["chunk_ids"].count("c1") == 1
-    assert state["chunks"][0]["text"] == "new text"
+    assert bm25_index.stats()["chunk_count"] == 1
+    assert bm25_index.query("new")[0]["text"] == "new text"
+
+
+def test_legacy_migration_runs_once_and_preserves_updates(tmp_path, monkeypatch):
+    from src.qa import bm25_index, lexical_store
+    monkeypatch.setattr(lexical_store, 'path', lambda: tmp_path / 'keyword-index.sqlite')
+    legacy = tmp_path / 'bm25_index.json'
+    original = json.dumps({'chunks': [{'id': 'legacy', 'text': 'original token'}]})
+    legacy.write_text(original, encoding='utf-8')
+    assert bm25_index.query('original')[0]['id'] == 'legacy'
+    bm25_index.add_chunks([_make_chunk('legacy', 'replacement token')])
+    assert bm25_index.query('original') == []
+    assert bm25_index.query('replacement')[0]['id'] == 'legacy'
+    bm25_index.remove_chunks(['legacy'])
+    assert bm25_index.stats()['chunk_count'] == 0
+    assert legacy.read_text(encoding='utf-8') == original

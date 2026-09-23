@@ -43,6 +43,9 @@ def cleanup_run(run_id):
                 old_summary = _make_summary_chunk_id(row["file_id"], row["old_hash"])
                 vector_store.get_or_create_collection(row["collection_name"]).delete(ids=[old_summary])
                 db.remove_file_from_concepts(row["file_id"])
+            if not committed and row.get('reading_artifact'):
+                from src.knowledge.reading_index import root
+                (root() / row['reading_artifact']).unlink(missing_ok=True)
             spool = Path(row["spool_path"])
             spool.unlink(missing_ok=True)
             with db.get_cursor() as cur:
@@ -66,6 +69,7 @@ class IngestTransaction:
         self.id = uuid.uuid4().hex
         self.file_values = file_values
         self.committed = False
+        self.reading = None
         self.spool = db.settings.get_path("metadata_db").parent / "ingest-staging" / (self.id + ".jsonl")
         self.spool.parent.mkdir(parents=True, exist_ok=True)
         self.collection_name = collection_name
@@ -91,6 +95,11 @@ class IngestTransaction:
             except Exception:
                 cur.execute("ROLLBACK")
                 raise
+
+    def attach_reading(self, builder):
+        self.reading = builder
+        with db.get_cursor() as cur:
+            cur.execute('UPDATE ingest_runs SET reading_artifact=? WHERE id=?',(builder.name,self.id))
 
     def set_ids(self, ids):
         with db.get_cursor() as cur:
@@ -137,6 +146,8 @@ class IngestTransaction:
                             source_package=?,status='done',chunk_ids_json=?,chunk_count=?,processed_at=?,error_message=NULL
                             WHERE id=?""", (values['absolute_path'],values['content_hash'],values['file_size'],values['file_type'],
                             values['source_package'],json.dumps(ids),len(ids),datetime.now(timezone.utc).isoformat(),self.file_id))
+                        if self.reading:
+                            self.reading.publish(cur, self.file_id, values['content_hash'])
                         cur.execute("UPDATE document_meta SET summary=NULL, processed_level='raw' WHERE file_id=?",(self.file_id,))
                         if tid:
                             cur.execute("UPDATE upload_task_files SET skip_reason='main_import_completed' WHERE task_id=? AND absolute_path=? AND status='processing'",
@@ -161,4 +172,6 @@ class IngestTransaction:
                 raise
 
     def abort(self):
+        if self.reading:
+            self.reading.finish()
         cleanup_run(self.id)
