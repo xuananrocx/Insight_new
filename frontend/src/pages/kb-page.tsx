@@ -1,3 +1,4 @@
+import { kbLabel } from '@/lib/kb-label'
 // 知识库管理页
 // 提供 KB 的 CRUD 操作：列出所有 KB、新建 KB、重命名 KB、删除 KB（仅非 builtin 且非默认 KB）
 //                + 导出 KB Pack + 导入 KB Pack（SSE 流式进度）
@@ -113,11 +114,11 @@ export default function KbPage() {
       queryClient.invalidateQueries({ queryKey: ['kbs'] })
       setRebuildConfirm(null)
       if (!data.task_id) {
-        toast.info(`已清理 ${kb.name} 的 collection（无文件需要重投喂）`)
+        toast.info(`已清理 ${kbLabel(kb)} 的 collection（无文件需要重投喂）`)
         return
       }
       toast.success(
-        `${kb.name} 重建已启动：将重新投喂 ${data.total} 个文件（新维度 ${data.new_dim ?? '?'}维）`,
+        `${kbLabel(kb)} 重建已启动：将重新投喂 ${data.total} 个文件（新维度 ${data.new_dim ?? '?'}维）`,
       )
       // 跳转到批量上传进度页（复用 streamUploadTask）
       navigate(`/knowledge?rebuild_task=${data.task_id}`)
@@ -171,7 +172,7 @@ export default function KbPage() {
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
-    toast.success(`正在导出：${kb.name}`)
+    toast.success(`正在导出：${kbLabel(kb)}`)
   }
 
   // ===== 导入 =====
@@ -390,7 +391,7 @@ export default function KbPage() {
               <div className="flex-1">
                 <div className="mb-3 flex items-center gap-2">
                   <Database className="h-5 w-5 text-primary" />
-                  <h3 className="text-base font-semibold group-hover:text-primary">{kb.name}</h3>
+                  <h3 className="text-base font-semibold group-hover:text-primary">{kbLabel(kb)}</h3>
                   {kb.is_default && (
                     <span className="rounded bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
                       默认

@@ -91,7 +91,7 @@ export function useBackground() {
   useEffect(() => {
     apply(background)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [background, apply])
 
   return { background, set }
 }

@@ -586,6 +586,10 @@ def update_policy(rid: str, req: PolicyChange):
                 (rid,),
             ):
                 raise HTTPException(409, "请先移除共享授权，再转为私有知识库")
+        if req.owner_id or (req.scope and req.scope != old["scope"]):
+            from src.core import kb_names
+            kb = cur.execute("SELECT name FROM kbs WHERE id=?", (rid,)).fetchone()
+            kb_names.check(cur, kb[0], kb_id=rid, scope=req.scope or old["scope"], owner_id=req.owner_id)
         if req.owner_id:
             if not a.rows(
                 "SELECT 1 FROM auth_users WHERE id=? AND disabled=0", (req.owner_id,)

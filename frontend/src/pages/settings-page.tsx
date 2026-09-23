@@ -1,3 +1,4 @@
+import { kbLabel } from '@/lib/kb-label'
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
@@ -208,7 +209,7 @@ function DefaultKbCard() {
             <SelectItem value="builtin">使用内置默认（is_default）</SelectItem>
             {(kbList.data ?? []).map((kb) => (
               <SelectItem key={kb.id} value={kb.id}>
-                {kb.name}
+                {kbLabel(kb)}
                 {kb.is_default ? '（内置）' : ''}
               </SelectItem>
             ))}

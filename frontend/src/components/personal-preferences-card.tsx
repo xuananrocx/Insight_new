@@ -23,7 +23,7 @@ export function PersonalPreferencesCard() {
     <div className="flex items-center justify-between gap-4"><h2 className="font-semibold">个人偏好</h2>
       <Toggle label="使用个人偏好" checked={query.data?.enabled ?? true} disabled={!query.data || save.isPending} onChange={enabled => { if (query.data) save.mutate({ ...query.data, enabled }) }} />
     </div>
-    <p className="text-sm text-muted-foreground">记录回答风格、常用环境和协作习惯。AI 增强和深度 AI 都会参考；当前问题的明确要求优先。仅由你编辑，AI 不会自动修改。</p>
+    <p className="text-sm text-muted-foreground">记录回答风格、常用环境和协作习惯。增强AI和深度AI 都会参考；当前问题的明确要求优先。仅由你编辑，AI 不会自动修改。</p>
     {query.error && <p className="text-sm text-destructive">{query.error.message}<Button variant="ghost" onClick={() => void query.refetch()}>重新加载</Button></p>}
     <div className="flex items-center gap-3"><Button variant="outline" disabled={!query.data || save.isPending} onClick={() => setDraft({ ...query.data! })}>编辑个人偏好</Button><span className="text-xs text-muted-foreground">{query.data?.content.length ?? 0} / 4000 字符</span></div>
     {draft && <ManagementDialog title="编辑个人偏好" busy={save.isPending} onClose={() => setDraft(null)}>

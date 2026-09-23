@@ -26,7 +26,7 @@ from src.core.retrieval_modes import VALID_MODES
 
 # SQLite 连接：每次操作开新连接（避免 threading.local 在 WAL 模式下跨线程读到 stale snapshot）
 # 当前 schema 版本（每次表结构变更 +1）
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 19
 
 
 # ===== 哨兵：区分「不更新」和「清空为 NULL」 =====
@@ -357,6 +357,8 @@ def init_db() -> None:
             _migrate_v14_to_v15(cur)
             _migrate_v15_to_v16(cur)
             _migrate_v16_to_v17(cur)
+            _migrate_v17_to_v18(cur)
+            _migrate_v18_to_v19(cur)
             # 全新建库直接落在最新版本、不跑迁移链，
             # 默认知识库必须在这里显式播种
             _ensure_default_kb(cur)
@@ -1641,19 +1643,24 @@ def create_session(
     updated_at: int,
     kb_scope: str | None = None,
     retrieval_mode: str = "ai",
+    group_id: str | None = None,
 ) -> None:
     if retrieval_mode not in VALID_MODES:
         retrieval_mode = "ai"
     with get_cursor() as cur:
+        from src.db.session_groups import require_group
+        cur.execute("BEGIN IMMEDIATE")
+        require_group(cur, group_id)
         cur.execute(
             """
-            INSERT INTO sessions (id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
+            INSERT INTO sessions (id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode, group_id, title_source)
+            VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
             """,
-            (session_id, title[:80] or "未命名会话", created_at, updated_at, kb_scope, retrieval_mode),
+            (session_id, title[:80] or "未命名会话", created_at, updated_at, kb_scope, retrieval_mode, group_id, "default" if title == "新会话" else "manual"),
         )
         from src.core import accounts
         accounts.claim("session", session_id, cur=cur)
+        cur.connection.commit()
 
 
 def list_sessions(limit: int = 200) -> list[dict]:
@@ -1662,7 +1669,7 @@ def list_sessions(limit: int = 200) -> list[dict]:
     with get_cursor() as cur:
         cur.execute(
             f"""
-            SELECT id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode
+            SELECT id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode, group_id, title_source
             FROM sessions WHERE {scope}
             ORDER BY updated_at DESC
             LIMIT ?
@@ -1677,7 +1684,7 @@ def get_session(session_id: str) -> dict | None:
     with get_cursor() as cur:
         cur.execute(
             """
-            SELECT id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode
+            SELECT id, title, created_at, updated_at, turn_count, kb_scope, retrieval_mode, group_id, title_source
             FROM sessions WHERE id=?
             """,
             (session_id,),
@@ -1689,7 +1696,7 @@ def get_session(session_id: str) -> dict | None:
         cur.execute(
             """
             SELECT id, order_idx, question, answer, sources_json, trace_json,
-                   used_provider, liked, error, created_at, mode
+                   used_provider, liked, error, created_at, mode, expansion_json
             FROM turns
             WHERE session_id=?
             ORDER BY order_idx ASC
@@ -1701,6 +1708,7 @@ def get_session(session_id: str) -> dict | None:
             t = dict(r)
             t["sources"] = json.loads(t.pop("sources_json") or "[]")
             t["trace"] = json.loads(t.pop("trace_json") or "[]")
+            t["expansion"] = json.loads(t.pop("expansion_json") or "null")
             t["liked"] = bool(t["liked"])
             turns.append(t)
         session["turns"] = turns
@@ -1713,6 +1721,8 @@ def update_session(
     updated_at: int | None | _Unset = _UNSET,
     kb_scope: str | None | _Unset = _UNSET,
     retrieval_mode: str | None | _Unset = _UNSET,
+    group_id: str | None | _Unset = _UNSET,
+    automatic_title: bool = False,
 ) -> bool:
     """更新会话元数据。返回是否找到。
 
@@ -1723,7 +1733,12 @@ def update_session(
     """
     fields = []
     params: list[Any] = []
+    if not isinstance(group_id, _Unset):
+        fields.append("group_id=?")
+        params.append(group_id)
     if not isinstance(title, _Unset):
+        fields.append("title_source=?")
+        params.append("automatic" if automatic_title else "manual")
         fields.append("title=?")
         # _UNSET 不更新；None 显式清空（兜底为"未命名会话"，因 NOT NULL）；
         # 全空白也兜底（避免 "   " 被当 truthy 保留）
@@ -1747,8 +1762,18 @@ def update_session(
         return False
     params.append(session_id)
     with get_cursor() as cur:
+        cur.execute("BEGIN IMMEDIATE")
+        if not isinstance(group_id, _Unset):
+            from src.db.session_groups import require_group
+            require_group(cur, group_id)
+        if automatic_title:
+            row = cur.execute("SELECT title_source FROM sessions WHERE id=?", (session_id,)).fetchone()
+            if row and row["title_source"] != "default":
+                return True
         cur.execute(f"UPDATE sessions SET {', '.join(fields)} WHERE id=?", params)
-        return cur.rowcount > 0
+        updated = cur.rowcount > 0
+        cur.connection.commit()
+        return updated
 
 
 def delete_session(session_id: str) -> bool:
@@ -1831,6 +1856,7 @@ def update_turn(
     liked: bool | None | _Unset = _UNSET,
     error: str | None | _Unset = _UNSET,
     updated_at: int | None | _Unset = _UNSET,
+    expansion_json: str | None | _Unset = _UNSET,
 ) -> bool:
     """更新 turn 字段。同时刷新 session.updated_at（如果传了 updated_at）。
 
@@ -1841,6 +1867,9 @@ def update_turn(
     """
     fields = []
     params: list[Any] = []
+    if not isinstance(expansion_json, _Unset):
+        fields.append("expansion_json=?")
+        params.append(expansion_json)
     if not isinstance(answer, _Unset):
         fields.append("answer=?")
         params.append(answer)
@@ -1916,7 +1945,7 @@ def get_turn(session_id: str, turn_id: str) -> dict | None:
         cur.execute(
             """
             SELECT id, session_id, order_idx, question, answer, sources_json, trace_json,
-                   used_provider, liked, error, created_at, mode
+                   used_provider, liked, error, created_at, mode, expansion_json
             FROM turns WHERE session_id=? AND id=?
             """,
             (session_id, turn_id),
@@ -1937,12 +1966,16 @@ def create_kb(
     embedding_model: str | None = None,
     embedding_dim: int | None = None,
     is_default: bool = False,
+    access_scope: str = "private",
 ) -> None:
     """新建 KB。"""
     import time
 
     now_ms = int(time.time() * 1000)
     with get_cursor() as cur:
+        from src.core import kb_names
+        cur.execute("BEGIN IMMEDIATE")
+        name = kb_names.check(cur, name, scope=access_scope)
         cur.execute(
             """
             INSERT INTO kbs (id, name, description, collection_name, source, embedding_model, embedding_dim, is_default, created_at, updated_at)
@@ -1952,6 +1985,9 @@ def create_kb(
         )
         from src.core import accounts
         accounts.claim("kb", kb_id, cur=cur)
+        if accounts.identity.get():
+            cur.execute("INSERT INTO permission_kbs VALUES (?,?,1)", (kb_id, access_scope))
+        cur.connection.commit()
 
 
 def list_kbs(limit: int = 100) -> list[dict]:
@@ -2050,8 +2086,14 @@ def update_kb(
 
     params.append(kb_id)
     with get_cursor() as cur:
+        cur.execute("BEGIN IMMEDIATE")
+        if not isinstance(name, _Unset):
+            from src.core import kb_names
+            kb_names.check(cur, params[0], kb_id=kb_id)
         cur.execute(f"UPDATE kbs SET {', '.join(fields)} WHERE id=?", params)
-        return cur.rowcount > 0
+        updated = cur.rowcount > 0
+        cur.connection.commit()
+        return updated
 
 
 def update_kb_global_summary(
@@ -2745,3 +2787,22 @@ def _migrate_v15_to_v16(cur: sqlite3.Cursor) -> None:
 def _migrate_v16_to_v17(cur):
     from src.knowledge.reading_index import schema
     schema(cur)
+
+
+@_register_schema_migration(17)
+def _migrate_v17_to_v18(cur: sqlite3.Cursor) -> None:
+    columns = {row[1] for row in cur.execute("PRAGMA table_info(turns)")}
+    if "expansion_json" not in columns:
+        cur.execute("ALTER TABLE turns ADD COLUMN expansion_json TEXT")
+
+
+@_register_schema_migration(18)
+def _migrate_v18_to_v19(cur: sqlite3.Cursor) -> None:
+    cur.execute("CREATE TABLE IF NOT EXISTS session_groups (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, name TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0)")
+    cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS session_groups_owner_name ON session_groups(owner_id, name)")
+    columns = {row[1] for row in cur.execute("PRAGMA table_info(sessions)")}
+    if "group_id" not in columns:
+        cur.execute("ALTER TABLE sessions ADD COLUMN group_id TEXT REFERENCES session_groups(id) ON DELETE SET NULL")
+    if "title_source" not in columns:
+        cur.execute("ALTER TABLE sessions ADD COLUMN title_source TEXT NOT NULL DEFAULT 'manual'")
+        cur.execute("UPDATE sessions SET title_source='default' WHERE title='新会话'")

@@ -1,3 +1,5 @@
+import { kbLabel } from '@/lib/kb-label'
+import { SessionRename } from '@/components/session-rename'
 import { useDeepAiOptions } from '@/hooks/use-deep-ai-options'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -25,12 +27,12 @@ import { ThinkingPanel } from '@/components/thinking-panel'
 import { CitationSources } from '@/components/citation-sources'
 import { TopKSelect } from '@/components/top-k-select'
 import { RetrievalModeSelect } from '@/components/retrieval-mode-select'
-import { SearchResultsList } from '@/components/search-results-list'
+import { SearchTurnResults } from '@/components/search-turn-results'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { useLocalStorage } from '@/hooks/use-local-storage'
 import { useApiRetryCount } from '@/hooks/use-api-retry-count'
 import { type ChatTurn, type ThinkingState } from '@/hooks/use-chat-sessions'
-import { api, type ChatMessage, type RetrievalMode, type SearchHit, type QaSource, type QaTraceStage } from '@/lib/api'
+import { api, type ChatMessage, type RetrievalMode, type QaSource, type QaTraceStage } from '@/lib/api'
 import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
 
 // thinking 重建守卫：流式期间若 turnsState / detail cache 被 refetch 重置导致 thinking 丢失，
@@ -47,6 +49,13 @@ export function ChatPage() {
   const [input, setInput] = useState('')
   const [topK, setTopK] = useState(10)
   // 空状态（无会话）下选的检索模式，首问建会话时带过去
+  const [legacyModeNotice, setLegacyModeNotice] = useLocalStorage('amd-ui-mode-merge-notice', false)
+  useEffect(() => {
+    if (session?.retrieval_mode === 'deep' && !legacyModeNotice) {
+      toast.info('深度检索已合并到基础检索，可在每轮结果中点击扩展检索。')
+      setLegacyModeNotice(true)
+    }
+  }, [session?.retrieval_mode, legacyModeNotice, setLegacyModeNotice])
   const [newSessionMode, setNewSessionMode] = useState<RetrievalMode>('ai')
   const [showStats, setShowStats] = useLocalStorage('amd-ui-show-stats', true)
   const [showKbSwitch, setShowKbSwitch] = useState(false)
@@ -131,6 +140,7 @@ export function ChatPage() {
     const turn: ChatTurn = {
       id: turnId,
       question,
+      createdAt: Date.now(),
       mode,
       thinking: {
         stages: [],
@@ -212,7 +222,7 @@ export function ChatPage() {
                 if (latest.title !== '新会话' || !data.answer) return
                 const result = await api.qa.summarizeTitle(question, data.answer, providerId, sessionId)
                 if (result.title) {
-                  await ctx.renameSession(sessionId, result.title)
+                  await ctx.renameSession(sessionId, result.title, true)
                 }
               } catch {
                 // 静默失败，不影响主流程
@@ -305,7 +315,8 @@ export function ChatPage() {
 
     let sessionId = ctx.activeId
     let history: ChatMessage[] = []
-    const mode: RetrievalMode = session?.retrieval_mode ?? newSessionMode
+    const selectedMode = session?.retrieval_mode ?? newSessionMode
+    const mode: RetrievalMode = selectedMode === 'deep' ? 'basic' : selectedMode
     if (!sessionId) {
       try {
         sessionId = await ctx.createSession(selectedKbForNewSession || undefined, mode)
@@ -355,7 +366,7 @@ export function ChatPage() {
                 <Library className="h-3 w-3" />
                 <span className="font-medium">知识库：</span>
                 <span className="text-accent-foreground">
-                  {kbListQuery.data?.find(kb => kb.id === selectedKbForNewSession)?.name ||
+                  {kbLabel(kbListQuery.data?.find(kb => kb.id === selectedKbForNewSession)) ||
                    kbListQuery.data?.find(kb => kb.is_default)?.name ||
                    '默认'}
                 </span>
@@ -410,7 +421,8 @@ export function ChatPage() {
               />
               <div className="mt-3 flex items-center justify-between border-t pt-3">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                  <RetrievalModeSelect
+                  {ctx.newGroupId && <span className="text-xs text-muted-foreground">分组：{ctx.groups.find(g => g.id === ctx.newGroupId)?.name ?? '未分组'}</span>}
+              <RetrievalModeSelect
                     value={newSessionMode}
                     onChange={(v) => setNewSessionMode(v)}
                   />
@@ -470,7 +482,7 @@ export function ChatPage() {
                   >
                     <div className="flex items-center gap-2">
                       <Library className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-medium">{kb.name}</span>
+                      <span className="font-medium">{kbLabel(kb)}</span>
                       {kb.is_default && (
                         <span className="text-xs text-muted-foreground">（默认）</span>
                       )}
@@ -502,6 +514,7 @@ export function ChatPage() {
           <div className="min-w-0">
             <h1 className="flex items-center gap-2 text-[16px] font-semibold tracking-tight">
               <span className="truncate">{title}</span>
+              {session && <SessionRename id={session.id} title={title} />}
               {titleMutation.isPending ? (
                 <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
               ) : null}
@@ -513,7 +526,7 @@ export function ChatPage() {
               <Library className="h-3 w-3" />
               <span className="font-medium">知识库：</span>
               <span className="text-accent-foreground">
-                {kbListQuery.data?.find(kb => kb.id === session?.kb_scope)?.name || session?.kb_scope || '默认'}
+                {kbLabel(kbListQuery.data?.find(kb => kb.id === session?.kb_scope)) || session?.kb_scope || '默认'}
               </span>
               <button
                 type="button"
@@ -538,7 +551,7 @@ export function ChatPage() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-          <div className="mx-auto max-w-4xl space-y-4 pb-4">
+          <div className="mx-auto max-w-4xl space-y-5 pb-4">
             {turns.map((turn) => {
               const turnSessionId = ctx.activeId
               const streamingTurnId = turnSessionId ? streamingMap[turnSessionId] : undefined
@@ -546,6 +559,10 @@ export function ChatPage() {
                 <TurnCard
                   key={turn.id}
                   turn={turn}
+                  searchResults={<SearchTurnResults turn={turn} sessionId={turnSessionId!}
+                    kbScope={session?.kb_scope ?? undefined} topK={topK}
+                    canExpand={canAskKb && !streamingTurnId}
+                    onSaved={expansion => ctx.updateTurn(turnSessionId!, turn.id, t => ({ ...t, expansion }))} />}
                   onStop={streamingTurnId === turn.id ? () => handleStop(turnSessionId ?? undefined) : undefined}
                 />
               )
@@ -643,7 +660,7 @@ export function ChatPage() {
                 >
                   <div className="flex items-center gap-2">
                     <Library className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">{kb.name}</span>
+                    <span className="font-medium">{kbLabel(kb)}</span>
                     {kb.is_default && (
                       <span className="text-xs text-muted-foreground">（默认）</span>
                     )}
@@ -705,7 +722,7 @@ export function ChatPage() {
   )
 }
 
-function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
+function TurnCard({ turn, onStop, searchResults }: { turn: ChatTurn; onStop?: () => void; searchResults: React.ReactNode }) {
   const [copied, setCopied] = useState(false)
   const [showThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
   const [showCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
@@ -727,20 +744,16 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
   }
 
   return (
-    <Card className="p-5">
-      <div className="mb-3 flex items-start gap-2">
-        <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-secondary text-[10px] font-medium text-secondary-foreground">
-          Q
-        </span>
+    <article className="min-w-0 space-y-1" aria-label="一轮问答">
+      <div className="min-w-0 rounded-t-xl rounded-b-none border bg-secondary/60 px-5 py-3">
+        <span className="mb-1 block text-[10px] font-medium text-muted-foreground">你</span>
         <div className="min-w-0 flex-1 text-[13px] font-medium leading-relaxed [overflow-wrap:anywhere]">{turn.question}</div>
       </div>
 
-      <div className="flex items-start gap-2">
-        <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-primary text-[10px] font-medium text-primary-foreground">
-          A
-        </span>
+      <div className="min-w-0 rounded-t-none rounded-b-xl border bg-card/80 px-5 py-4">
+        <span className="mb-2 block text-[10px] font-medium text-muted-foreground">{isSearchMode ? '基础检索' : turn.mode === 'deep_ai' ? '深度AI' : '增强AI'}</span>
         <div className="min-w-0 flex-1">
-          {isStreaming || (showThinking && stages.length > 0) ? (
+          {isStreaming || (showThinking && stages.length > 0 && !(isSearchMode && (turn.expansion || turn.mode === 'deep'))) ? (
             <ThinkingPanel thinking={thinking} onStop={onStop} showDetails={showThinking} showCitations={showCitations} />
           ) : null}
           {showContext && stages.some(stage => stage.stage === 'conversation_context') && <details className="mb-3 rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground"><summary className="cursor-pointer font-medium">上下文使用情况</summary><p className="mt-2 leading-relaxed">{stages.findLast(stage => stage.stage === 'conversation_context')?.notes}</p><p className="mt-1">本轮历史查阅 {stages.filter(stage => ['搜索会话历史', '阅读历史问答'].includes(stage.label)).length} 次</p></details>}
@@ -752,10 +765,7 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
           ) : null}
           {!isStreaming && !turn.error && resultStage?.status === 'partial' && <p className="mb-2 text-xs text-muted-foreground">部分完成 · {resultStage.notes || '回答未完整生成'}</p>}
           {!isStreaming && !turn.error && isSearchMode ? (
-            <SearchResultsList
-              hits={(turn.sources ?? []) as SearchHit[]}
-              question={turn.question}
-            />
+            searchResults
           ) : null}
           {!isStreaming && (!turn.error || !!turn.answer) && !isSearchMode && (
             <>
@@ -784,12 +794,12 @@ function TurnCard({ turn, onStop }: { turn: ChatTurn; onStop?: () => void }) {
               </div>
             </>
           )}
+          {!isSearchMode && showCitations && (
+            <CitationSources sources={turn.sources ?? []} prefix={citationPrefix} selection={citationSelection} />
+          )}
+          {!!turn.createdAt && <time dateTime={new Date(turn.createdAt).toISOString()} className="mt-3 block text-[10px] text-muted-foreground">提问于 {new Date(turn.createdAt).toLocaleString('zh-CN', { hour12: false })}</time>}
         </div>
       </div>
-
-      {!isSearchMode && showCitations && (
-        <CitationSources sources={turn.sources ?? []} prefix={citationPrefix} selection={citationSelection} />
-      )}
-    </Card>
+    </article>
   )
 }

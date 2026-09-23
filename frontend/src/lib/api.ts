@@ -82,6 +82,9 @@ export type KnowledgeFilesResponse = {
 }
 
 export type KB = {
+  owner_id?: string | null
+  owner_username?: string | null
+  name_conflict?: boolean
   capabilities: string[]
   scope: string
   role?: string
@@ -269,7 +272,14 @@ export type QaAnswer = {
   trace?: QaTraceStage[]
 }
 
+export type SearchExpansion = {
+  sources: SearchHit[]
+  trace: QaTraceStage[]
+  completed_at: number
+}
+
 export type QaStreamDone = {
+  expansion?: SearchExpansion
   outcome?: 'success' | 'partial'
   reason?: string
   verification?: string
@@ -1037,6 +1047,7 @@ export const api = {
       strictKnowledge?: boolean,
       apiRetryCount = 10,
       deepAiOptions?: DeepAiOptions,
+      operation: 'ask' | 'expand' = 'ask',
     ): Promise<void> => {
      let terminal = false
      try {
@@ -1051,6 +1062,7 @@ export const api = {
           strict_knowledge: strictKnowledge ?? false,
           api_retry_count: apiRetryCount,
           deep_ai_options: deepAiOptions,
+          operation,
           session_id: sessionId,
           turn_id: turnId,
           top_k: topK,
@@ -1292,6 +1304,12 @@ export const api = {
       }),
   },
 
+  sessionGroups: {
+    list: () => request<SessionGroup[]>('/sessions/groups'),
+    create: (name: string) => request<SessionGroup>('/sessions/groups', { method: 'POST', body: JSON.stringify({ name }) }),
+    update: (id: string, payload: { name?: string; direction?: 'up' | 'down' }) => request(`/sessions/groups/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+    remove: (id: string) => request(`/sessions/groups/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  },
   sessions: {
     list: () => request<SessionSummary[]>('/sessions'),
     get: (id: string) => request<SessionDetail>(`/sessions/${encodeURIComponent(id)}`),
@@ -1301,6 +1319,7 @@ export const api = {
       created_at: number
       kb_scope?: string
       retrieval_mode?: RetrievalMode
+      group_id?: string | null
     }) =>
       request<SessionSummary>('/sessions', {
         method: 'POST',
@@ -1308,7 +1327,7 @@ export const api = {
       }),
     update: (
       id: string,
-      payload: { title?: string; kb_scope?: string; retrieval_mode?: RetrievalMode },
+      payload: { title?: string; kb_scope?: string; retrieval_mode?: RetrievalMode; group_id?: string | null; automatic_title?: boolean },
     ) =>
       request<SessionSummary>(`/sessions/${encodeURIComponent(id)}`, {
         method: 'PATCH',
@@ -1556,7 +1575,11 @@ export type LLMTimeoutsInfo = {
   request_timeout_seconds: number
 }
 
+export type SessionGroup = { id: string; name: string; position: number }
+
 export type SessionSummary = {
+  group_id?: string | null
+  title_source?: string
   id: string
   title: string
   created_at: number
@@ -1567,6 +1590,7 @@ export type SessionSummary = {
 }
 
 export type PersistedTurn = {
+  expansion?: SearchExpansion | null
   id: string
   order_idx: number
   question: string

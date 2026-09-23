@@ -12,11 +12,11 @@ import re
 import time
 import zipfile
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, UploadFile, File, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.db import metadata_db
 from src.core.retrieval_modes import RetrievalMode, VALID_MODES
@@ -134,12 +134,14 @@ def _normalize_turn(turn: dict) -> dict:
         "error": turn.get("error"),
         "created_at": turn.get("created_at") or 0,
         "mode": turn.get("mode") or "ai",
+        "expansion": turn.get("expansion"),
     }
 
 
 # ===== Request/Response Models =====
 
 class CreateSessionRequest(BaseModel):
+    group_id: str | None = None
     id: str = Field(..., min_length=1, max_length=64)
     title: str = Field("新会话", max_length=80)
     created_at: int = Field(..., ge=0)
@@ -148,6 +150,18 @@ class CreateSessionRequest(BaseModel):
 
 
 class UpdateSessionRequest(BaseModel):
+    group_id: str | None = None
+    automatic_title: bool = False
+
+    @field_validator("title")
+    @classmethod
+    def valid_title(cls, value):
+        if value is not None:
+            value = value.strip()
+            if not value:
+                raise ValueError("会话名称不能为空")
+        return value
+
     title: str | None = Field(None, max_length=80)
     kb_scope: str | None = None
     retrieval_mode: RetrievalMode | None = None
@@ -165,9 +179,12 @@ class TurnModel(BaseModel):
     error: str | None = None
     created_at: int
     mode: RetrievalMode = "ai"
+    expansion: dict | None = None
 
 
 class SessionSummary(BaseModel):
+    group_id: str | None = None
+    title_source: str = "manual"
     id: str
     title: str
     created_at: int
@@ -206,6 +223,40 @@ class UpdateTurnRequest(BaseModel):
 
 # ===== Endpoints =====
 
+from src.db import session_groups
+
+
+class GroupRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=80)
+
+
+class GroupUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=80)
+    direction: Literal["up", "down"] | None = None
+
+
+@router.get("/groups")
+def list_groups():
+    return session_groups.list_groups()
+
+
+@router.post("/groups", status_code=201)
+def create_group(req: GroupRequest):
+    return session_groups.create(req.name)
+
+
+@router.patch("/groups/{group_id}")
+def update_group(group_id: str, req: GroupUpdate):
+    session_groups.change(group_id, req.name, req.direction)
+    return {"ok": True}
+
+
+@router.delete("/groups/{group_id}")
+def delete_group(group_id: str):
+    session_groups.change(group_id, delete=True)
+    return {"ok": True}
+
+
 @router.get("", response_model=list[SessionSummary])
 def list_sessions(limit: int = 200) -> list[dict]:
     return metadata_db.list_sessions(limit=limit)
@@ -229,7 +280,10 @@ def create_session(req: CreateSessionRequest) -> dict:
             updated_at=req.created_at,
             kb_scope=req.kb_scope,
             retrieval_mode=req.retrieval_mode,
+            group_id=req.group_id,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         msg = str(e)
         if "UNIQUE constraint failed" in msg:
@@ -244,6 +298,8 @@ def create_session(req: CreateSessionRequest) -> dict:
         "turn_count": 0,
         "kb_scope": req.kb_scope,
         "retrieval_mode": req.retrieval_mode,
+        "group_id": req.group_id,
+        "title_source": "default" if req.title == "新会话" else "manual",
     }
 
 
@@ -407,6 +463,7 @@ def _build_session_payload(session_id: str) -> dict | None:
             "updated_at": s["updated_at"],
             "kb_scope": s.get("kb_scope"),
             "retrieval_mode": s.get("retrieval_mode", "ai"),
+            "group_name": next((g["name"] for g in session_groups.list_groups() if g["id"] == s.get("group_id")), None),
         },
         "turns": s.get("turns", []),
     }
@@ -514,8 +571,14 @@ def _import_one_session(payload: dict) -> dict:
     now_ms = int(time.time() * 1000)
     new_id = _gen_new_session_id()
 
+    group_id = None
+    if isinstance(sess.get("group_name"), str) and sess["group_name"].strip():
+        group_name = sess["group_name"].strip()[:80]
+        group = next((g for g in session_groups.list_groups() if g["name"] == group_name), None)
+        group_id = (group or session_groups.create(group_name))["id"]
     try:
         metadata_db.create_session(
+            group_id=group_id,
             session_id=new_id,
             title=title,
             created_at=now_ms,
@@ -548,6 +611,13 @@ def _import_one_session(payload: dict) -> dict:
                 created_at=int(t.get("created_at") or now_ms),
                 mode=t.get("mode") if t.get("mode") in VALID_MODES else "ai",
             )
+            if isinstance(t.get("expansion"), dict):
+                expansion = t["expansion"]
+                metadata_db.update_turn(new_id, f"{new_id}_t{idx}", expansion_json=json.dumps({
+                    "sources": _trim_sources(expansion.get("sources"), long_content=True),
+                    "trace": _trim_trace(expansion.get("trace")),
+                    "completed_at": int(expansion.get("completed_at") or now_ms),
+                }, ensure_ascii=False))
             imported_turn_count += 1
         except Exception as e:
             logger.warning(f"import turn {idx} failed: {e}")

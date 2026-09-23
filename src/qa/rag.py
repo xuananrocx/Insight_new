@@ -1005,6 +1005,16 @@ async def ask_stream(
         asyncio.to_thread(_run_pipeline, question, top_k, history, trace, None, kb_scope, strategy)
     )
 
+    # Retrieve late worker exceptions even if the SSE consumer has disconnected.
+    def settle_pipeline(task):
+        if task.cancelled():
+            return
+        error = task.exception()
+        if error and not isinstance(error, PipelineCancelled) and cancel_event.is_set():
+            logger.warning("pipeline failed after stream closed: %s", error, exc_info=error)
+
+    pipeline_task.add_done_callback(settle_pipeline)
+    queue_task = None
     # 持续从 queue 拉 stage 事件，直到 pipeline 完成
     try:
         while True:
@@ -1040,6 +1050,12 @@ async def ask_stream(
         logger.exception("ask_stream pipeline 失败")
         yield {"type": "error", "data": {"message": str(e)}}
         return
+
+    finally:
+        if queue_task is not None and not queue_task.done():
+            queue_task.cancel()
+        if not pipeline_task.done():
+            cancel_event.set()
 
     # basic / deep：不调 LLM，直接返回片段列表
     if mode in ("basic", "deep"):

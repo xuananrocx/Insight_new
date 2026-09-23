@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import time
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Literal
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
@@ -24,6 +26,7 @@ router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
 
 class AskRequest(BaseModel):
+    operation: Literal["ask", "expand"] = "ask"
     deep_ai_options: DeepAiOptions | None = None
     api_retry_count: int = Field(10, ge=0, le=10, strict=True)
     strict_knowledge: bool = False
@@ -64,6 +67,8 @@ class AskResponse(BaseModel):
 @router.post("/ask", response_model=AskResponse)
 def ask_endpoint(req: AskRequest) -> AskResponse:
     """问答接口。"""
+    if req.operation != "ask":
+        raise HTTPException(400, "扩展检索请使用流式接口")
     from src.knowledge import rebuild
     if rebuild.is_rebuilding():
         raise HTTPException(
@@ -123,10 +128,73 @@ def _resolve_mode(req: AskRequest) -> str:
         try:
             s = metadata_db.get_session(req.session_id)
             if s and s.get("retrieval_mode") in VALID_MODES:
-                return s["retrieval_mode"]
+                return "basic" if s["retrieval_mode"] == "deep" else s["retrieval_mode"]
         except Exception:
             pass
     return "ai"
+
+
+# Per-turn guard also covers repeated clicks from separate browser tabs.
+_active_expansions: set[tuple[str, str]] = set()
+
+
+def _expansion_turn(req: AskRequest) -> dict:
+    from src.db import metadata_db
+    from src.core import accounts
+    if not req.session_id or not req.turn_id or req.mode != "deep":
+        raise HTTPException(400, "扩展检索需要指定会话、问答和 deep 检索操作")
+    if accounts.enabled:
+        accounts.require_owner("session", req.session_id)
+        accounts.require_kb(req.kb_scope)
+    session = metadata_db.get_session(req.session_id)
+    turn = metadata_db.get_turn(req.session_id, req.turn_id)
+    if not session or not turn:
+        raise HTTPException(404, "原问答已不存在")
+    if session.get("kb_scope") != req.kb_scope or turn["question"] != req.question:
+        raise HTTPException(400, "扩展检索必须使用原问题和原知识库")
+    if turn.get("mode") not in ("basic", "deep"):
+        raise HTTPException(400, "仅检索结果支持扩展检索")
+    return turn
+
+
+def _save_expansion(req: AskRequest, data: dict) -> dict:
+    from src.db import metadata_db
+    from src.api.routes_sessions import _trim_sources, _trim_trace
+    _expansion_turn(req)  # Recheck ownership, access and original turn before saving.
+    result = {
+        "sources": _trim_sources(data.get("sources"), long_content=True),
+        "trace": _trim_trace(data.get("trace")),
+        "completed_at": int(time.time() * 1000),
+    }
+    if not metadata_db.update_turn(req.session_id, req.turn_id,
+            expansion_json=json.dumps(result, ensure_ascii=False)):
+        raise HTTPException(404, "原问答已不存在，扩展结果未保存")
+    return result
+
+
+_access_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="qa-access")
+_ACCESS_WAIT = 5.0
+_ACCESS_GRACE = 10.0
+
+
+async def _check_stream_access(check, req):
+    """Keep authorization off the retrieval pool; never release unchecked output."""
+    started = time.monotonic()
+    task = asyncio.get_running_loop().run_in_executor(
+        _access_executor, contextvars.copy_context().run, check)
+    try:
+        try:
+            await asyncio.wait_for(asyncio.shield(task), _ACCESS_WAIT)
+        except asyncio.TimeoutError:
+            logger.warning("stream access delayed session=%s turn=%s operation=%s elapsed_ms=%.0f",
+                           req.session_id, req.turn_id, req.operation, (time.monotonic()-started)*1000)
+            # Continue waiting for the same check, without duplicating DB work.
+            await asyncio.wait_for(asyncio.shield(task), _ACCESS_GRACE)
+    finally:
+        task.add_done_callback(lambda done: done.exception() if not done.cancelled() else None)
+        elapsed = (time.monotonic() - started) * 1000
+        if elapsed >= 1000:
+            logger.info("stream access finished session=%s turn=%s elapsed_ms=%.0f", req.session_id, req.turn_id, elapsed)
 
 
 async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
@@ -134,7 +202,14 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
     queue: asyncio.Queue = asyncio.Queue()
     start_time = time.time()
     mode = await asyncio.to_thread(_resolve_mode, req)
-    logger.info(f"ask_stream start mode={mode}")
+    expansion_key = (req.session_id, req.turn_id)
+    if req.operation == "expand":
+        if expansion_key in _active_expansions:
+            yield 'event: error\ndata: {"message":"该问答正在扩展检索，请稍候"}\n\n'.encode("utf-8")
+            return
+        _active_expansions.add(expansion_key)
+    logger.info("ask_stream start mode=%s operation=%s session=%s turn=%s",
+                "basic" if req.operation == "expand" else mode, req.operation, req.session_id, req.turn_id)
 
     async def producer() -> None:
         from src.core.api_retry import retry_observer
@@ -219,13 +294,20 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
                         break
                     texts.append(following["data"]["text"])
                 evt = {"type": "token", "data": {"text": "".join(texts)}}
+            output_stage = evt.get("data", {}).get("stage", evt.get("type")) if isinstance(evt.get("data"), dict) else evt.get("type")
             if evt.get('type') != 'error':
                 try:
-                    await asyncio.wait_for(asyncio.to_thread(check_access), 5)
+                    await _check_stream_access(check_access, req)
                 except HTTPException as exc:
                     evt = {'type':'error','data':{'message':exc.detail}}
                 except asyncio.TimeoutError:
                     evt = {'type':'error','data':{'message':'权限检查超时，请稍后重试。'}}
+            if evt.get("type") == "done" and req.operation == "expand":
+                try:
+                    evt["data"]["expansion"] = await asyncio.to_thread(_save_expansion, req, evt["data"])
+                except Exception as exc:
+                    logger.exception("expansion save failed session=%s turn=%s", req.session_id, req.turn_id)
+                    evt = {"type": "error", "data": {"message": str(getattr(exc, "detail", exc))}}
             evt_type = evt.get("type", "message")
             data = evt.get("data", {})
             if evt_type == "done":
@@ -234,14 +316,18 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
                 final_chunks = data.get("used_chunks", 0) if isinstance(data, dict) else 0
             elif evt_type == "error":
                 outcome = "failed"
+                logger.warning("stream failed session=%s turn=%s operation=%s stage=%s reason=%s",
+                               req.session_id, req.turn_id, req.operation, output_stage, str(data.get("message", ""))[:1000])
             payload = f"event: {evt_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
             yield payload.encode("utf-8")
             if evt_type == "done" or evt_type == "error":
                 break
     finally:
+        if req.operation == "expand":
+            _active_expansions.discard(expansion_key)
         duration_ms = (time.time() - start_time) * 1000
-        logger.info("ask_stream finished session=%s turn=%s outcome=%s %.0fms chunks=%s answer_len=%s",
-                    req.session_id, req.turn_id, outcome, duration_ms, final_chunks, final_answer_len)
+        logger.info("ask_stream finished session=%s turn=%s operation=%s outcome=%s %.0fms chunks=%s answer_len=%s",
+                    req.session_id, req.turn_id, req.operation, outcome, duration_ms, final_chunks, final_answer_len)
         if not producer_task.done():
             producer_task.cancel()
             try:
@@ -262,6 +348,8 @@ async def ask_stream_endpoint(req: AskRequest):
         done → 完整答案 + trace
         error → 错误信息
     """
+    if req.operation == "expand":
+        await asyncio.to_thread(_expansion_turn, req)
     from src.knowledge import rebuild
     if rebuild.is_rebuilding():
         raise HTTPException(

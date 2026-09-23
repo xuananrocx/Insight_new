@@ -64,10 +64,10 @@ def main():
     r.raise_for_status()
     assert r.json()["retrieval_mode"] == "deep", "create 应返回 deep"
 
-    evts = stream_events(None, sid=sid)  # 不传 mode → 应读会话的 deep
+    evts = stream_events(None, sid=sid)  # 不传 mode → 旧 deep 会话后续提问归一为 basic
     results = next((e for e in evts if e.get("type") == "results"), {}).get("data", {})
-    assert results.get("mode") == "deep", f"应回落到会话 mode=deep，实际 {results.get('mode')}"
-    print(f"[session] 回落会话 mode=deep OK")
+    assert results.get("mode") == "basic", f"旧 deep 会话应归一到 basic，实际 {results.get('mode')}"
+    print(f"[session] 旧 deep 会话归一到 basic OK")
 
     # 4. turns 带 mode 落库（turns.id 全局唯一，每次跑要用新 id）
     tid = f"t-smoke-{int(time.time())}"

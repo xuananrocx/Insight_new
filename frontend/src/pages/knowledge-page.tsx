@@ -1,3 +1,4 @@
+import { kbLabel } from '@/lib/kb-label'
 import { useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
@@ -216,7 +217,7 @@ export function KnowledgePage() {
                     >
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <span className="truncate font-medium">{kb.name}</span>
+                          <span className="truncate font-medium">{kbLabel(kb)}</span>
                           {kb.is_default ? (
                             <span className="text-[10px] text-muted-foreground">默认</span>
                           ) : null}

@@ -2,7 +2,7 @@ import { accountKey } from '@/lib/account-api'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { api, type PersistedTurn, type QaSource, type QaTraceStage, type RetrievalMode, type SessionDetail, type SessionSummary } from '@/lib/api'
+import { api, type PersistedTurn, type SearchExpansion, type QaSource, type QaTraceStage, type RetrievalMode, type SessionDetail, type SessionSummary } from '@/lib/api'
 
 export type ThinkingState = {
   stages: QaTraceStage[]
@@ -16,6 +16,8 @@ export type ThinkingState = {
 }
 
 export type ChatTurn = {
+  createdAt?: number
+  expansion?: SearchExpansion | null
   id: string
   question: string
   answer?: string
@@ -45,6 +47,7 @@ function persistedToChatTurn(t: PersistedTurn): ChatTurn {
   return {
     id: t.id,
     question: t.question,
+    createdAt: t.created_at,
     answer: t.answer ?? undefined,
     sources: t.sources as unknown as QaSource[],
     trace: t.trace,
@@ -52,6 +55,7 @@ function persistedToChatTurn(t: PersistedTurn): ChatTurn {
     error: t.error ?? undefined,
     thinking,
     mode: t.mode,
+    expansion: t.expansion,
   }
 }
 
@@ -65,13 +69,15 @@ function chatTurnToAddRequest(t: ChatTurn, createdAt: number) {
     used_provider: t.thinking?.usedProvider,
     liked: t.liked ?? false,
     error: t.error,
-    created_at: createdAt,
+    created_at: t.createdAt ?? createdAt,
     mode: t.mode,
   }
 }
 
 export function useChatSessions() {
   const qc = useQueryClient()
+  const [newGroupId, setNewGroupId] = useState<string | null>(null)
+  const groupsQuery = useQuery({ queryKey: ['session-groups'], queryFn: api.sessionGroups.list })
   const [activeId, setActiveId] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null
     return localStorage.getItem(activeKey()) || null
@@ -126,6 +132,8 @@ export function useChatSessions() {
       turn_count: turns.length,
       kb_scope: d.kb_scope ?? null,
       retrieval_mode: d.retrieval_mode ?? 'ai',
+      group_id: d.group_id,
+      title_source: d.title_source,
       turns,
     }
   })()
@@ -169,9 +177,12 @@ export function useChatSessions() {
   })
 
   const renameMutation = useMutation({
-    mutationFn: ({ id, title }: { id: string; title: string }) =>
-      api.sessions.update(id, { title }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['sessions'] }),
+    mutationFn: ({ id, title, automatic }: { id: string; title: string; automatic?: boolean }) =>
+      api.sessions.update(id, { title, automatic_title: automatic }),
+    onSuccess: (result, { id }) => {
+      qc.setQueryData<SessionDetail>(['session', id], old => old ? { ...old, ...result } : old)
+      qc.invalidateQueries({ queryKey: ['sessions'] })
+    },
   })
 
   const addTurnMutation = useMutation({
@@ -205,7 +216,7 @@ export function useChatSessions() {
       kb_scope = defaultKb?.id || undefined
     }
 
-    await createMutation.mutateAsync({ id, title: '新会话', created_at: now, kb_scope, retrieval_mode: mode })
+    await createMutation.mutateAsync({ id, title: '新会话', created_at: now, kb_scope, retrieval_mode: mode, group_id: newGroupId })
     // 乐观：在 detail cache 里塞一个空 session，避免 appendTurn 时 activeSession 为空
     const optimistic: SessionDetail = {
       id,
@@ -216,11 +227,12 @@ export function useChatSessions() {
       kb_scope,
       retrieval_mode: mode ?? 'ai',
       turns: [],
+      group_id: newGroupId,
     }
     qc.setQueryData(['session', id], optimistic)
     setActiveId(id)
     return id
-  }, [createMutation, qc, kbListQuery.data])
+  }, [createMutation, qc, kbListQuery.data, newGroupId])
 
   // 切换会话不中断后台生成中的流（token 继续写入该会话的 query cache，切回即见）
   const selectSession = useCallback((id: string) => {
@@ -245,9 +257,7 @@ export function useChatSessions() {
   )
 
   const renameSession = useCallback(
-    (id: string, title: string) => {
-      renameMutation.mutate({ id, title })
-    },
+    (id: string, title: string, automatic = false) => renameMutation.mutateAsync({ id, title, automatic }),
     [renameMutation],
   )
 
@@ -349,7 +359,7 @@ export function useChatSessions() {
             used_provider: turn.thinking?.usedProvider ?? null,
             liked: turn.liked ?? false,
             error: turn.error ?? null,
-            created_at: Date.now(),
+            created_at: turn.createdAt ?? Date.now(),
             mode: turn.mode,
             thinking: turn.thinking,  // 塞进 cache，让切走再切回时也能拿到 thinking
           } as PersistedTurn & { thinking?: ThinkingState }],
@@ -376,16 +386,21 @@ export function useChatSessions() {
         const prevChatTurn: ChatTurn = {
           id: persisted.id,
           question: persisted.question,
+          createdAt: persisted.created_at,
           answer: persisted.answer ?? undefined,
           sources: persisted.sources as unknown as QaSource[],
           trace: persisted.trace,
           liked: persisted.liked,
           error: persisted.error ?? undefined,
           thinking: prevThinking,
+          mode: persisted.mode,
+          expansion: persisted.expansion,
         }
         const updated = updater(prevChatTurn)
         const newTurn = {
           ...persisted,
+          mode: updated.mode,
+          expansion: updated.expansion,
           answer: updated.answer ?? null,
           sources: (updated.sources ?? []) as QaSource[],
           trace: updated.trace ?? [],
@@ -424,7 +439,7 @@ export function useChatSessions() {
       const error = override?.error ?? baseTurn?.error
       const liked = baseTurn?.liked ?? false
       // 检索模式 answer 为空但 sources 有命中，也要持久化
-      if (!answer && !error && !sources.length) return  // 没东西可持久化
+      if (!answer && !error && !sources.length && !trace.length) return  // 没东西可持久化
 
       try {
         await patchTurnMutation.mutateAsync({
@@ -469,6 +484,8 @@ export function useChatSessions() {
   )
 
   return {
+    groups: groupsQuery.data ?? [],
+    newGroupId, setNewGroupId,
     sessions: listQuery.data ?? [],
     activeSession,
     activeId,

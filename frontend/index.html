@@ -30,11 +30,7 @@
             'obsidian': 'bg-obsidian',
             'galaxy-mesh': 'bg-galaxy-mesh',
           };
-          var bRaw = localStorage.getItem('amd-ui-background');
-          var b = null;
-          if (bRaw) {
-            try { b = JSON.parse(bRaw); } catch (e) { b = bRaw; }
-          }
+          var b = 'moonlit-mint';
           if (b && bgMap[b] && t === 'macos') {
             document.documentElement.classList.add(bgMap[b]);
           }

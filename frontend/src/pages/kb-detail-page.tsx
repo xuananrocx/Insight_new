@@ -1,3 +1,4 @@
+import { kbLabel } from '@/lib/kb-label'
 // KB 详情页：单个知识库的元信息 / 统计 / 文档预览 / 绑定的会话
 import { useAuth } from '@/hooks/use-auth'
 import { Grants } from '@/pages/account-page'
@@ -129,7 +130,7 @@ export default function KbDetailPage() {
           <div className="min-w-0 flex-1">
             <h1 className="flex items-center gap-2 text-2xl font-semibold">
               <Database className="h-5 w-5 text-primary" />
-              <span className="truncate">{kb.name}</span>
+              <span className="truncate">{kbLabel(kb)}</span>
               {kb.is_default && (
                 <span className="rounded bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary">
                   默认

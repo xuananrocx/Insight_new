@@ -70,7 +70,7 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
   }
   return <Card className="space-y-4 p-5">
     <div className="flex flex-wrap items-center justify-between gap-3"><h2 className="font-semibold">{team ? '团队 API' : '我的 AI API'}</h2><div className="flex gap-2">{!team && can('api.personal') && <Button size="sm" onClick={() => setForm({ scope: 'personal' })}>新增个人 API</Button>}{team && can('api.manage') && <Button size="sm" variant="outline" onClick={() => setForm({ scope: 'team' })}>新增团队公共 API</Button>}</div></div>
-    <p className="text-sm text-muted-foreground">选择一个默认 API 用于 AI 回答、深度 AI、标题和你发起的文档摘要。公共 API 需授权，调用失败不会自动换用其他人的 API。向量模型由系统统一配置。</p>
+    <p className="text-sm text-muted-foreground">选择一个默认 API 用于 AI 回答、深度AI、标题和你发起的文档摘要。公共 API 需授权，调用失败不会自动换用其他人的 API。向量模型由系统统一配置。</p>
     {providers.error && <p className="text-destructive">{providers.error.message}</p>}
     {form && <ProviderForm key={form.initial?.id || form.scope} {...form} onClose={() => setForm(null)} />}
     {!providers.isLoading && !providers.data?.items.length && <p className="rounded border border-dashed p-6 text-center text-sm text-muted-foreground">还没有可用 API。可以添加个人配置，或请管理员授权团队 API。</p>}
@@ -88,11 +88,11 @@ export function AccountPage() {
   return <div className="mx-auto max-w-4xl space-y-5 p-6 md:p-8"><div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">设置</h1><p className="mt-1 text-sm text-muted-foreground">{user.username} · {user.roles.filter(r => r.enabled).map(r => r.name).join('、') || '无启用角色'}</p></div></div>
     <ProviderSettings />
     <PersonalPreferencesCard />
-    <Card className="space-y-3 p-5"><h2 className="font-semibold">深度 AI</h2><p className="text-sm text-muted-foreground">深度 AI 主动查阅知识库，按所选策略分析回答，需要 API 支持工具调用。策略自动保存，仅用于深度 AI。</p><DeepAiOptionsFields />
+    <Card className="space-y-3 p-5"><h2 className="font-semibold">深度AI</h2><p className="text-sm text-muted-foreground">深度AI 主动查阅知识库，按所选策略分析回答，需要 API 支持工具调用。策略自动保存，仅用于深度AI。</p><DeepAiOptionsFields />
     </Card>
     <Card className="space-y-3 p-5"><h2 className="font-semibold">API 请求重试</h2>
       <div className="flex items-center justify-between gap-4 text-sm"><span>API 失败重试次数</span><OptionSelect aria-label="API 失败重试次数" value={String(apiRetryCount)} onValueChange={value => setApiRetryCount(Number(value))} options={Array.from({ length: 11 }, (_, value) => ({ value: String(value), label: value === 0 ? '不重试' : `${value} 次${value === 10 ? '（默认）' : ''}` }))} /></div>
-      <p className="text-xs text-muted-foreground">自动保存，适用于 AI 增强和深度 AI。默认最多重试 10 次，间隔约 1、2、4、8、16、30 秒，之后最多 30 秒。所有尝试和等待都计入时间预算，次数不保证用完。已输出内容后中断会保留部分答案；服务要求等待超过 30 秒的限流或暂不可用错误，会提示稍后重试。</p>
+      <p className="text-xs text-muted-foreground">自动保存，适用于 增强AI和深度AI。默认最多重试 10 次，间隔约 1、2、4、8、16、30 秒，之后最多 30 秒。所有尝试和等待都计入时间预算，次数不保证用完。已输出内容后中断会保留部分答案；服务要求等待超过 30 秒的限流或暂不可用错误，会提示稍后重试。</p>
     </Card>
     <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>显示上下文使用情况（可展开）</span><Toggle label="显示上下文使用情况" checked={showContext} onChange={setShowContext} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div>{can('logs.view') && <div className="flex items-center justify-between gap-4 text-sm"><span>在侧边栏显示「系统日志」入口</span><Toggle label="显示系统日志入口" checked={logs} onChange={setLogs} /></div>}</Card>
     <Card className="p-5"><h2 className="mb-4 font-semibold">修改密码</h2><div className="max-w-md"><PasswordForm onDone={logout} /></div></Card>

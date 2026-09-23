@@ -1,3 +1,4 @@
+import { useBackground } from '@/hooks/use-background'
 import { useState, type ReactNode } from 'react'
 import { AuthBoundary, useAuth } from '@/hooks/use-auth'
 import { AccountPage } from '@/pages/account-page'
@@ -83,6 +84,7 @@ function SystemSettings() {
   return <fieldset disabled={!can('system.edit')} className="min-w-0">{!can('system.edit') && <p className="p-4 text-sm text-muted-foreground">当前为只读权限。</p>}<SettingsPage /></fieldset>
 }
 function Workspace() {
+  useBackground()
   return (
     <ChatSessionProvider>
       <div className="flex h-screen overflow-hidden bg-background">

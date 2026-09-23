@@ -10,6 +10,7 @@
 - 导入 KB Pack（含预检和重建，SSE 流式进度）
 """
 from __future__ import annotations
+from src.core import kb_names
 
 import asyncio
 import json
@@ -52,6 +53,9 @@ class UpdateKBRequest(BaseModel):
 
 
 class KBResponse(BaseModel):
+    name_conflict: bool = False
+    owner_id: str | None = None
+    owner_username: str | None = None
     role: str | None = None
     capabilities: list[str] = Field(default_factory=list)
     scope: str = "private"
@@ -130,6 +134,7 @@ def list_kbs() -> list[KBResponse]:
                 role=accounts.kb_role(kb_id) if accounts.enabled else None,
         capabilities=permissions.resource("kb",kb_id)["actions"] if accounts.enabled else permissions.KB_ACTIONS,
         scope=permissions.kb_policy(kb_id)["scope"] if accounts.enabled else "private",
+                **kb_names.attribution(kb["id"]),
                 id=kb["id"],
                 name=kb["name"],
                 description=kb.get("description"),
@@ -148,6 +153,10 @@ def list_kbs() -> list[KBResponse]:
             )
         )
 
+    for item in result:
+        item.name_conflict = sum(other.name.strip().casefold() == item.name.strip().casefold()
+                                 and other.scope == item.scope and (item.scope == "team" or other.owner_id == item.owner_id)
+                                 for other in result) > 1
     return result
 
 
@@ -180,6 +189,7 @@ def get_kb(kb_id: str) -> KBResponse:
         role=accounts.kb_role(kb_id) if accounts.enabled else None,
         capabilities=permissions.resource("kb",kb_id)["actions"] if accounts.enabled else permissions.KB_ACTIONS,
         scope=permissions.kb_policy(kb_id)["scope"] if accounts.enabled else "private",
+        **kb_names.attribution(kb["id"]),
         id=kb["id"],
         name=kb["name"],
         description=kb.get("description"),
@@ -206,6 +216,8 @@ def create_kb(req: CreateKBRequest) -> KBResponse:
     - 自动创建独立 Chroma collection（kb_<uuid>）
     - source='user'（用户自建）
     """
+    with metadata_db.get_cursor() as cur:
+        req.name = kb_names.check(cur, req.name, scope=req.scope)
     # 生成唯一 kb_id
     kb_id = f"kb_{uuid.uuid4().hex}"
     collection_name = f"kb_{uuid.uuid4().hex}"
@@ -238,6 +250,7 @@ def create_kb(req: CreateKBRequest) -> KBResponse:
             description=req.description,
             collection_name=collection_name,
             source="user",
+            access_scope=req.scope,
             embedding_model=embedding_model_name,
             embedding_dim=embedding_dim_value,
         )
@@ -252,6 +265,8 @@ def create_kb(req: CreateKBRequest) -> KBResponse:
             logger.info(f"rolled back Chroma collection: {collection_name}")
         except Exception:
             logger.warning(f"failed to rollback Chroma collection: {collection_name}")
+        if isinstance(e, HTTPException):
+            raise
         raise HTTPException(status_code=500, detail=f"创建知识库失败: {e}")
 
     if accounts.enabled:

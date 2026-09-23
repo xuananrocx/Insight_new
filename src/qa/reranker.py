@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +38,7 @@ _ONNX_FILES = [
 
 _reranker_cache: dict[str, Any] = {}
 _onnx_cache: dict[str, tuple[Any, Any]] = {}
+_model_load_lock = threading.RLock()
 
 
 def _onnx_model_dir() -> Path:
@@ -67,6 +69,11 @@ def _download_onnx(mdir: Path) -> None:
 
 
 def _get_onnx(model_dir: str | Path | None = None) -> tuple[Any, Any]:
+    with _model_load_lock:
+        return _load_onnx(model_dir)
+
+
+def _load_onnx(model_dir: str | Path | None = None) -> tuple[Any, Any]:
     """延迟加载 ONNX int8 reranker，返回 (tokenizer, InferenceSession)。"""
     key = str(model_dir or _onnx_model_dir())
     if key in _onnx_cache:
@@ -82,7 +89,13 @@ def _get_onnx(model_dir: str | Path | None = None) -> tuple[Any, Any]:
         raise FileNotFoundError(f"ONNX reranker 模型下载后仍不存在: {model_file}")
     logger.info(f"加载 reranker ONNX int8: {model_file}")
     tok = AutoTokenizer.from_pretrained(str(mdir))
-    sess = ort.InferenceSession(str(model_file), providers=["CPUExecutionProvider"])
+    # Keep CPU capacity for HTTP, permission checks and other conversations.
+    options = ort.SessionOptions()
+    options.intra_op_num_threads = 2
+    options.inter_op_num_threads = 1
+    options.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    options.add_session_config_entry("session.inter_op.allow_spinning", "0")
+    sess = ort.InferenceSession(str(model_file), sess_options=options, providers=["CPUExecutionProvider"])
     _onnx_cache[key] = (tok, sess)
     logger.info("reranker ONNX int8 加载完成")
     return tok, sess

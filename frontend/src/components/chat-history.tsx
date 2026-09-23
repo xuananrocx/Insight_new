@@ -1,45 +1,23 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MessageSquare, Plus, Trash2, Search, Download, Upload, ChevronDown } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import * as Menu from '@radix-ui/react-dropdown-menu'
+import { Plus, Search, Download, Upload, ChevronRight, MoreHorizontal, MessageSquare } from 'lucide-react'
 import { toast } from 'sonner'
-
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
-import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { api, type SessionSummary } from '@/lib/api'
+import { useLocalStorage } from '@/hooks/use-local-storage'
 import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Button } from '@/components/ui/button'
+import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
-function relativeTime(ts: number): string {
-  const diff = Date.now() - ts
-  const m = Math.floor(diff / 60_000)
-  if (m < 1) return '刚刚'
-  if (m < 60) return `${m} 分钟前`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h} 小时前`
-  const d = Math.floor(h / 24)
-  if (d < 7) return `${d} 天前`
-  return new Date(ts).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
-}
-
-function groupByDate(sessions: { id: string; updatedAt: number }[]) {
-  const now = new Date()
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
-  const yesterday = today - 24 * 60 * 60 * 1000
-  const weekAgo = today - 7 * 24 * 60 * 60 * 1000
-
-  const groups: { label: string; items: typeof sessions }[] = [
-    { label: '今天', items: [] },
-    { label: '昨天', items: [] },
-    { label: '本周', items: [] },
-    { label: '更早', items: [] },
-  ]
-
-  for (const s of sessions) {
-    if (s.updatedAt >= today) groups[0].items.push(s)
-    else if (s.updatedAt >= yesterday) groups[1].items.push(s)
-    else if (s.updatedAt >= weekAgo) groups[2].items.push(s)
-    else groups[3].items.push(s)
-  }
-  return groups.filter((g) => g.items.length > 0)
+function Actions({ items }: { items: { label: string; run: () => void }[] }) {
+  return <Menu.Root modal={false}><Menu.Trigger asChild><button type="button" aria-label="更多操作" className="rounded p-1 text-muted-foreground hover:bg-accent"><MoreHorizontal className="h-3.5 w-3.5" /></button></Menu.Trigger>
+    <Menu.Portal><Menu.Content sideOffset={4} className="z-50 min-w-32 rounded-md border bg-popover p-1 text-xs shadow-lg">
+      {items.map(item => <Menu.Item key={item.label} onSelect={item.run} className="cursor-pointer rounded px-3 py-2 outline-none focus:bg-accent">{item.label}</Menu.Item>)}
+    </Menu.Content></Menu.Portal>
+  </Menu.Root>
 }
 
 // 浏览器侧把 Blob 保存成文件
@@ -57,19 +35,57 @@ function saveBlob(blob: Blob, filename: string) {
 export function ChatHistory() {
   const ctx = useChatSessionsCtx()
   const navigate = useNavigate()
-  const streaming = useAnswerStreams((s) => s.streaming)
+  const qc = useQueryClient()
+  const streaming = useAnswerStreams(s => s.streaming)
   const [query, setQuery] = useState('')
   const [exportingAll, setExportingAll] = useState(false)
   const [importing, setImporting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
-
-  const filtered = query.trim()
-    ? ctx.sessions.filter((s) => s.title.toLowerCase().includes(query.toLowerCase()))
-    : ctx.sessions
-
-  const groups = groupByDate(filtered.map((s) => ({ id: s.id, updatedAt: s.updated_at })))
-  const sessionMap = new Map(ctx.sessions.map((s) => [s.id, s]))
-
+  const [collapsed, setCollapsed] = useLocalStorage<Record<string, boolean>>('session-group-collapse', {})
+  const [action, setAction] = useState<{ kind: string; id?: string; label?: string } | null>(null)
+  const [name, setName] = useState('')
+  const [target, setTarget] = useState('ungrouped')
+  const [busy, setBusy] = useState(false)
+  const groups = [...ctx.groups, { id: 'ungrouped', name: '未分组', position: -1 }]
+  async function refresh() {
+    await Promise.all([qc.invalidateQueries({ queryKey: ['sessions'] }), qc.invalidateQueries({ queryKey: ['session-groups'] }), qc.invalidateQueries({ queryKey: ['session'] })])
+  }
+  function open(kind: string, id?: string, label = '') { setName(label); setAction({ kind, id, label }) }
+  function newSession(groupId: string | null) { ctx.setNewGroupId(groupId); ctx.clearActive(); navigate('/') }
+  async function reorder(id: string, direction: 'up' | 'down') {
+    try { await api.sessionGroups.update(id, { direction }); await refresh() } catch (error) { toast.error(String(error)) }
+  }
+  async function save() {
+    if (!action || busy) return
+    setBusy(true)
+    try {
+      if (action.kind === '新建分组') await api.sessionGroups.create(name.trim())
+      if (action.kind === '重命名分组') await api.sessionGroups.update(action.id!, { name: name.trim() })
+      if (action.kind === '删除分组') {
+        await api.sessionGroups.remove(action.id!)
+        if (ctx.newGroupId === action.id) ctx.setNewGroupId(null)
+      }
+      if (action.kind === '重命名会话') await ctx.renameSession(action.id!, name.trim())
+      if (action.kind === '移动到分组') await api.sessions.update(action.id!, { group_id: target === 'ungrouped' ? null : target })
+      if (action.kind === '删除会话') { abortAnswerStream(action.id!); await api.sessions.remove(action.id!); if (ctx.activeId === action.id) ctx.clearActive() }
+      await refresh(); setAction(null)
+    } catch (error) { toast.error(String(error)) } finally { setBusy(false) }
+  }
+  function item(s: SessionSummary) {
+    return <div key={s.id} className={`flex min-w-0 items-center gap-1 rounded px-2 py-1 ${ctx.activeId === s.id ? 'bg-accent' : 'hover:bg-accent/40'}`}>
+      <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => { ctx.selectSession(s.id); navigate('/') }}>
+        <MessageSquare className="h-3 w-3 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1"><span className="block truncate text-xs" title={s.title}>{s.title}</span>
+          <span className="block text-[10px] text-muted-foreground">{streaming[s.id] ? '生成中' : new Date(s.updated_at).toLocaleDateString()} · {s.turn_count}轮</span></span>
+      </button>
+      <Actions items={[
+        { label: '重命名', run: () => open('重命名会话', s.id, s.title) },
+        { label: '移动到分组', run: () => { setTarget(s.group_id ?? 'ungrouped'); open('移动到分组', s.id, s.title) } },
+        { label: '导出', run: () => { void api.sessions.exportOne(s.id).then(({ blob, filename }) => saveBlob(blob, filename)).catch(error => toast.error(String(error))) } },
+        { label: '删除', run: () => open('删除会话', s.id, s.title) },
+      ]} />
+    </div>
+  }
   async function handleExportAll() {
     if (ctx.sessions.length === 0) {
       toast.info('暂无会话可导出')
@@ -95,6 +111,7 @@ export function ChatHistory() {
     setImporting(true)
     try {
       const result = await api.sessions.importFile(file)
+      await refresh()
       if (result.imported > 0) {
         const lines = result.sessions.map((s) => `• ${s.title}（${s.turn_count} 条）`).join('\n')
         toast.success(`已导入 ${result.imported} 个会话`, { description: lines })
@@ -110,217 +127,46 @@ export function ChatHistory() {
     }
   }
 
-  return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center justify-between px-2 py-1">
-        <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-          历史会话
-        </span>
-        <div className="flex items-center gap-0.5">
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={importing}
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-            title="导入会话"
-          >
-            <Upload className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={handleExportAll}
-            disabled={exportingAll || ctx.sessions.length === 0}
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:opacity-50"
-            title={ctx.sessions.length === 0 ? '暂无会话' : '导出全部会话'}
-          >
-            <Download className="h-3.5 w-3.5" />
-          </button>
-          <button
-            onClick={() => {
-              ctx.clearActive()
-              navigate('/')
-            }}
-            className="rounded p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            title="新建会话"
-          >
-            <Plus className="h-3.5 w-3.5" />
-          </button>
-        </div>
+  return <div className="flex h-full min-h-0 flex-col">
+    <div className="flex shrink-0 items-center justify-between px-2 py-1">
+      <span className="text-[10px] font-semibold text-muted-foreground">会话列表</span>
+      <div className="flex items-center gap-1">
+        <button title="导入会话" disabled={importing} onClick={() => fileInputRef.current?.click()}><Upload className="h-3.5 w-3.5" /></button>
+        <button title="导出全部会话" disabled={exportingAll || !ctx.sessions.length} onClick={() => void handleExportAll()}><Download className="h-3.5 w-3.5" /></button>
+        <Actions items={[{ label: '新建会话', run: () => newSession(null) }, { label: '新建分组', run: () => open('新建分组') }]} />
       </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".json,.zip,application/json,application/zip"
-        onChange={handleImportFile}
-        className="hidden"
-      />
-
-      {ctx.sessions.length > 5 ? (
-        <div className="mb-1.5 shrink-0 px-2">
-          <div className="flex items-center gap-1.5 rounded-md bg-muted/40 px-2 py-1">
-            <Search className="h-3 w-3 text-muted-foreground" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索会话..."
-              className="w-full bg-transparent text-[11px] outline-none placeholder:text-muted-foreground"
-            />
+    </div>
+    <input ref={fileInputRef} type="file" accept=".json,.zip" onChange={handleImportFile} className="hidden" />
+    <div className="mx-2 my-1 flex items-center gap-1 rounded bg-muted/40 px-2 py-1"><Search className="h-3 w-3" /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索会话或分组…" className="min-w-0 flex-1 bg-transparent text-xs outline-none" /></div>
+    <div aria-label="会话列表" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5">
+      {groups.map(group => {
+        const matchesGroup = group.name.toLowerCase().includes(query.trim().toLowerCase())
+        const sessions = ctx.sessions.filter(s => (s.group_id ?? 'ungrouped') === group.id && (matchesGroup || s.title.toLowerCase().includes(query.trim().toLowerCase())))
+        if (query.trim() && !sessions.length && !matchesGroup) return null
+        const closed = !query.trim() && collapsed[group.id]
+        return <div key={group.id} className="mb-2">
+          <div className="flex items-center gap-1">
+            <button className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground" onClick={() => setCollapsed({ ...collapsed, [group.id]: !collapsed[group.id] })} aria-expanded={!closed}>
+              <ChevronRight className={`h-3 w-3 shrink-0 ${closed ? '' : 'rotate-90'}`} /><span className="truncate">{group.name}</span><span>{sessions.length}</span>
+            </button>
+            <button title={`在${group.name}中新建会话`} onClick={() => newSession(group.id === 'ungrouped' ? null : group.id)}><Plus className="h-3 w-3" /></button>
+            {group.id !== 'ungrouped' && <Actions items={[
+              { label: '重命名分组', run: () => open('重命名分组', group.id, group.name) },
+              { label: '上移', run: () => void reorder(group.id, 'up') },
+              { label: '下移', run: () => void reorder(group.id, 'down') },
+              { label: '删除分组', run: () => open('删除分组', group.id, group.name) },
+            ]} />}
           </div>
+          {!closed && (sessions.length ? sessions.map(item) : <p className="px-5 py-1 text-[10px] text-muted-foreground">暂无会话</p>)}
         </div>
-      ) : null}
-
-      {ctx.sessions.length === 0 ? (
-        <div className="px-3 py-2 text-[11px] text-muted-foreground">
-          暂无会话，点击 + 新建
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="px-3 py-2 text-[11px] text-muted-foreground">
-          未匹配到「{query}」
-        </div>
-      ) : (
-        <div aria-label="历史会话列表" className="min-h-0 flex-1 space-y-0.5 overflow-y-auto overscroll-contain px-1.5">
-          {groups.map((group) => (
-            <div key={group.label} className="mb-1">
-              <div className="px-2 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground/70">
-                {group.label}
-              </div>
-              {group.items.map((item) => {
-                const s = sessionMap.get(item.id)!
-                const isActive = s.id === ctx.activeId
-                const turnsCount = s.turn_count
-                return (
-                  <HistoryItem
-                    key={s.id}
-                    title={s.title}
-                    time={relativeTime(s.updated_at)}
-                    turnsCount={turnsCount}
-                    isActive={isActive}
-                    streaming={!!streaming[s.id]}
-                    onSelect={() => {
-                      ctx.selectSession(s.id)
-                      navigate('/')
-                    }}
-                    onDelete={() => {
-                      abortAnswerStream(s.id)  // 删除正在生成的会话时先停流
-                      ctx.deleteSession(s.id)
-                    }}
-                    onExport={async () => {
-                      try {
-                        const { blob, filename } = await api.sessions.exportOne(s.id)
-                        saveBlob(blob, filename)
-                        toast.success('已导出', { description: filename })
-                      } catch (e) {
-                        toast.error('导出失败', { description: (e as Error).message })
-                      }
-                    }}
-                  />
-                )
-              })}
-            </div>
-          ))}
-        </div>
-      )}
+      })}
     </div>
-  )
-}
-
-function HistoryItem({
-  title,
-  time,
-  turnsCount,
-  isActive,
-  streaming,
-  onSelect,
-  onDelete,
-  onExport,
-}: {
-  title: string
-  time: string
-  turnsCount: number
-  isActive: boolean
-  streaming: boolean
-  onSelect: () => void
-  onDelete: () => void
-  onExport: () => Promise<void>
-}) {
-  const [confirming, setConfirming] = useState(false)
-  const [exporting, setExporting] = useState(false)
-  return (
-    <div
-      className={cn(
-        'group flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors',
-        isActive
-          ? 'bg-accent font-medium text-accent-foreground'
-          : 'text-foreground/75 hover:bg-accent/40 hover:text-foreground',
-      )}
-      onClick={onSelect}
-    >
-      <MessageSquare className="h-3 w-3 shrink-0 opacity-60" />
-      <div className="min-w-0 flex-1">
-        <div className="truncate text-[12px]">{title}</div>
-        <div className="text-[10px] text-muted-foreground">
-          {turnsCount > 0 ? `${turnsCount} 条 · ${time}` : time}
-        </div>
-      </div>
-      {streaming ? (
-        <span className="flex shrink-0 items-center gap-1 text-[10px] text-blue-500" title="后台生成中，切回可见">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500" />
-          </span>
-          生成中
-        </span>
-      ) : confirming ? (
-        <div className="flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-          <button
-            onClick={() => {
-              onDelete()
-              setConfirming(false)
-            }}
-            className="rounded px-1 text-[10px] text-destructive hover:bg-destructive/10"
-          >
-            删除
-          </button>
-          <button
-            onClick={() => setConfirming(false)}
-            className="rounded px-1 text-[10px] text-muted-foreground hover:bg-muted"
-          >
-            取消
-          </button>
-        </div>
-      ) : (
-        <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-          <button
-            onClick={async (e) => {
-              e.stopPropagation()
-              setExporting(true)
-              try {
-                await onExport()
-              } finally {
-                setExporting(false)
-              }
-            }}
-            disabled={exporting}
-            className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
-            title="导出此会话"
-          >
-            {exporting ? (
-              <ChevronDown className="h-3 w-3 animate-pulse" />
-            ) : (
-              <Download className="h-3 w-3" />
-            )}
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation()
-              setConfirming(true)
-            }}
-            className="rounded p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-            title="删除"
-          >
-            <Trash2 className="h-3 w-3" />
-          </button>
-        </div>
-      )}
-    </div>
-  )
+    <Dialog open={!!action} onOpenChange={value => { if (!value) setAction(null) }}><DialogContent>
+      <DialogTitle>{action?.kind}</DialogTitle><DialogDescription className="mt-2">{action?.kind === '删除分组' ? '组内会话将移到未分组，不会删除。' : action?.kind === '删除会话' ? `删除「${action.label}」及其问答记录？` : action?.kind === '移动到分组' ? '仅调整归类，不改变会话的知识库或上下文。' : '名称最多80字。'}</DialogDescription>
+      <form className="mt-4 space-y-4" onSubmit={e => { e.preventDefault(); void save() }}>
+        {action?.kind === '移动到分组' ? <Select value={target} onValueChange={setTarget}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent></Select> : !action?.kind.startsWith('删除') && <input autoFocus aria-label="名称" maxLength={80} value={name} onChange={e => setName(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" />}
+        <div className="flex justify-end gap-2"><Button type="button" variant="outline" onClick={() => setAction(null)}>取消</Button><Button type="submit" disabled={busy || (!action?.kind.startsWith('删除') && action?.kind !== '移动到分组' && !name.trim())}>{action?.kind.startsWith('删除') ? '删除' : '保存'}</Button></div>
+      </form>
+    </DialogContent></Dialog>
+  </div>
 }
