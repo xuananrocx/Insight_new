@@ -1,3 +1,4 @@
+import { ManagementDialog } from '@/components/management-dialog'
 import { AlertCircle, CheckCircle2, Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -51,8 +52,7 @@ export function RebuildProgressDialog({
   const isFailed = status?.status === 'failed'
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded-lg border border-input bg-card p-5 shadow-lg">
+    <ManagementDialog title="向量库重建" onClose={() => {}} busy={true} className="max-w-lg">
         <div className="mb-3 flex items-start gap-3">
           <div className="mt-0.5">
             {isRunning ? <Loader2 className="h-5 w-5 animate-spin text-primary" />
@@ -101,7 +101,6 @@ export function RebuildProgressDialog({
         ) : null}
 
         {(isSucceeded || isFailed) && !completedRef.current ? null : null}
-      </div>
-    </div>
+      </ManagementDialog>
   )
 }

@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { cn } from '@/lib/utils'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -12,10 +13,11 @@ function focusReturnTarget() {
 }
 
 /** Shared shell for management forms, including nested permission previews. */
-export function ManagementDialog({ title, onClose, busy = false, children }: {
+export function ManagementDialog({ title, onClose, busy = false, className, children }: {
   title: string
   onClose: () => void
   busy?: boolean
+  className?: string
   children: ReactNode
 }) {
   const opener = useRef(focusReturnTarget())
@@ -40,7 +42,7 @@ export function ManagementDialog({ title, onClose, busy = false, children }: {
   }, [])
   return <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}>
     <DialogContent
-      className="flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-3xl flex-col gap-4 overflow-hidden p-4 sm:p-6"
+      className={cn('flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-3xl flex-col gap-4 overflow-hidden p-4 sm:p-6', className)}
       style={position}
       aria-describedby={undefined}
       data-management-dialog

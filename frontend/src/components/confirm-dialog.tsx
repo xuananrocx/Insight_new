@@ -1,10 +1,5 @@
 import { Loader2, AlertTriangle } from 'lucide-react'
-import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
-  DialogDescription,
-} from '@/components/ui/dialog'
+import { ManagementDialog } from '@/components/management-dialog'
 import { Button } from '@/components/ui/button'
 
 export type ConfirmDialogProps = {
@@ -37,22 +32,18 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  if (!open) return null
   return (
-    <Dialog open={open} onOpenChange={(o) => !o && onCancel()}>
-      <DialogContent
-        aria-describedby={undefined}
-        onEscapeKeyDown={onCancel}
-        onPointerDownOutside={onCancel}
-      >
+    <ManagementDialog title={title} onClose={onCancel} busy={loading} className="max-w-md">
         <div className="mb-2 flex items-center gap-2">
           {danger ? (
             <div className="flex h-7 w-7 items-center justify-center rounded-full bg-destructive/10">
               <AlertTriangle className="h-4 w-4 text-destructive" />
             </div>
           ) : null}
-          <DialogTitle>{title}</DialogTitle>
+          {danger && <span className="text-sm font-medium text-destructive">请确认操作影响</span>}
         </div>
-        <DialogDescription className="mb-4">{message}</DialogDescription>
+        <p className="mb-4 whitespace-pre-wrap text-sm text-muted-foreground">{message}</p>
         <div className="flex justify-end gap-2">
           <Button variant="outline" size="sm" onClick={onCancel} disabled={loading}>
             {cancelText}
@@ -67,7 +58,6 @@ export function ConfirmDialog({
             {confirmText}
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+    </ManagementDialog>
   )
 }

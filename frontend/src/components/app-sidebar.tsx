@@ -1,4 +1,4 @@
-import { adminLinks, pagePermission } from '@/lib/navigation'
+import { adminLinks, DEFAULT_MENU_ORDER, visibleMenuOrder } from '@/lib/navigation'
 import { useAuth } from '@/hooks/use-auth'
 import { useId, type ReactNode } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
@@ -64,18 +64,7 @@ const STATIC_ITEMS: SidebarItem[] = [
   { to: '/kbs', label: '知识库管理', icon: Database },
   { to: '/stats', label: '分析', icon: BarChart3 },
   { to: '/ai-logs', label: 'AI 日志', icon: Bot },
-  { to: '/settings', label: '设置', icon: Settings },
-]
-
-// 默认菜单顺序（存到 localStorage 后可被用户覆盖）
-const DEFAULT_MENU_ORDER = [
-  '/',
-  '/knowledge',
-  '/kbs',
-  '/review',
-  '/stats',
-  '/ai-logs',
-  '/settings',
+  { to: '/settings', label: '个人设置', icon: Settings },
 ]
 
 export function AppSidebar() {
@@ -116,27 +105,11 @@ export function AppSidebar() {
     },
     ...STATIC_ITEMS.slice(2),  // 分析、设置
   ]
-  const allItems = showLogs && can('logs.view')
-    ? [...items, { to: '/logs', label: '系统日志', icon: ScrollText }]
-    : items
-
-  // 按 menuOrder 重排（缺失的项追加到末尾，多余的保留）
-  const orderedItems: SidebarItem[] = (() => {
-    const byPath = new Map(allItems.filter(it => !pagePermission[it.to] || can(pagePermission[it.to])).map((it) => [it.to, it]))
-    const ordered: SidebarItem[] = []
-    const seen = new Set<string>()
-    for (const p of menuOrder) {
-      const it = byPath.get(p)
-      if (it && !seen.has(p)) {
-        ordered.push(it)
-        seen.add(p)
-      }
-    }
-    for (const it of allItems.filter(it => !pagePermission[it.to] || can(pagePermission[it.to]))) {
-      if (!seen.has(it.to)) ordered.push(it)
-    }
-    return ordered
-  })()
+  const allItems: SidebarItem[] = [...items, { to: '/logs', label: '系统日志', icon: ScrollText }]
+  const byPath = new Map(allItems.map(item => [item.to, item]))
+  const orderedItems = visibleMenuOrder(menuOrder, can, showLogs)
+    .map(path => byPath.get(path))
+    .filter((item): item is SidebarItem => !!item)
   const visibleAdminItems = adminLinks.filter(item => !item.permission || can(item.permission))
   const matchesPage = (to: string) => to === '/' ? pathname === '/' && !ctx.activeId : pathname === to || pathname.startsWith(`${to}/`)
   const activeMain = orderedItems.find(item => matchesPage(item.to))?.label

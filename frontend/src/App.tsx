@@ -1,3 +1,4 @@
+import { ConfirmationProvider } from '@/components/confirmation-provider'
 import { useBackground } from '@/hooks/use-background'
 import { useState, type ReactNode } from 'react'
 import { AuthBoundary, useAuth } from '@/hooks/use-auth'
@@ -51,7 +52,7 @@ function MobileNav() {
                 { to: '/', label: '对话' },
                 { to: '/knowledge', label: '知识' },
                 { to: '/kbs', label: '知识库' },
-                { to: '/settings', label: '设置' },
+                { to: '/settings', label: '个人设置' },
                 ...(showLogs ? [{ to: '/logs', label: '系统日志' }] : []),
                 ...adminLinks.filter(item => !item.permission || can(item.permission)),
               ].filter(item => !pagePermission[item.to] || can(pagePermission[item.to])).map((item) => (
@@ -78,10 +79,6 @@ function MobileNav() {
 function Guard({ permission, children }: { permission: string; children: ReactNode }) {
   const { can } = useAuth()
   return can(permission) ? children : <p className="p-8 text-muted-foreground">没有此页面的访问权限，请联系管理员。</p>
-}
-function SystemSettings() {
-  const { can } = useAuth()
-  return <fieldset disabled={!can('system.edit')} className="min-w-0">{!can('system.edit') && <p className="p-4 text-sm text-muted-foreground">当前为只读权限。</p>}<SettingsPage /></fieldset>
 }
 function Workspace() {
   useBackground()
@@ -110,7 +107,7 @@ function Workspace() {
               <Route path="/admin/knowledge-access" element={<ResourcesPage />} />
               <Route path="/admin/team-api" element={<Guard permission="api.view"><TeamApiPage /></Guard>} />
               <Route path="/admin/audit" element={<Guard permission="audit.view"><AuditPage /></Guard>} />
-              <Route path="/system-settings" element={<Guard permission="system.view"><SystemSettings /></Guard>} />
+              <Route path="/system-settings" element={<Guard permission="system.view"><SettingsPage /></Guard>} />
               <Route path="/ai-logs" element={<Guard permission="ai_logs.view"><AiLogsPage /></Guard>} />
               <Route path="/logs" element={<Guard permission="logs.view"><LogsPage /></Guard>} />
               <Route path="*" element={<p className="p-8">页面不存在。</p>} />
@@ -124,4 +121,4 @@ function Workspace() {
   )
 }
 
-export default function App() { return <AuthBoundary><Workspace /></AuthBoundary> }
+export default function App() { return <AuthBoundary><ConfirmationProvider><Workspace /></ConfirmationProvider></AuthBoundary> }

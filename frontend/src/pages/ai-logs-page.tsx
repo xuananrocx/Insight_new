@@ -1,5 +1,8 @@
+import { ManagementDialog } from '@/components/management-dialog'
+import { useConfirm } from '@/components/confirmation-provider'
+import { useAuth } from '@/hooks/use-auth'
 import { formatDuration } from '@/lib/format-duration'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -13,9 +16,6 @@ import {
 } from 'lucide-react'
 
 import {
-  Dialog,
-  DialogContent,
-  DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -53,6 +53,8 @@ const PAGE_SIZE = 30
 
 export function AiLogsPage() {
   const qc = useQueryClient()
+  const { can } = useAuth()
+  const canDetail = can('ai_logs.detail')
   const [provider, setProvider] = useState<string>('')
   const [scene, setScene] = useState<string>('')
   const [successFilter, setSuccessFilter] = useState<string>('')  // '' / 'success' / 'failed'
@@ -60,8 +62,15 @@ export function AiLogsPage() {
   const [detailId, setDetailId] = useState<number | null>(null)
   const [showDeleteAllConfirm, setShowDeleteAllConfirm] = useState(false)
 
+  useEffect(() => {
+    if (!canDetail) {
+      setDetailId(null)
+      void qc.cancelQueries({ queryKey: ['ai-logs', 'detail'] }).then(() => qc.removeQueries({ queryKey: ['ai-logs', 'detail'] }))
+    }
+  }, [canDetail, qc])
+
   const list = useQuery({
-    queryKey: ['ai-logs', provider, scene, successFilter, page],
+    queryKey: ['ai-logs', provider, scene, successFilter, page, canDetail],
     queryFn: () =>
       api.aiLogs.list({
         provider: provider || undefined,
@@ -117,7 +126,7 @@ export function AiLogsPage() {
         <div>
           <h1 className="text-2xl font-semibold">AI 调用日志</h1>
           <p className="mt-1 text-[12px] text-muted-foreground">
-            记录每次 LLM 调用的完整 prompt + 消息 + 响应（保留 30 天）
+            {canDetail ? '查看自己的 AI 调用记录及完整请求、响应详情。' : '仅可查看自己的调用列表与统计，完整请求、响应和错误详情需要单独授权。'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -228,7 +237,7 @@ export function AiLogsPage() {
               <LogRow
                 key={item.id}
                 item={item}
-                onClick={() => setDetailId(item.id)}
+                onClick={canDetail ? () => setDetailId(item.id) : undefined}
                 onDelete={() => deleteMutation.mutate(item.id)}
                 deleting={deleteMutation.isPending && deleteMutation.variables === item.id}
               />
@@ -263,7 +272,7 @@ export function AiLogsPage() {
       ) : null}
 
       {/* 详情对话框 */}
-      {detailId !== null ? (
+      {canDetail && detailId !== null ? (
         <DetailDialog
           id={detailId}
           onClose={() => setDetailId(null)}
@@ -271,12 +280,7 @@ export function AiLogsPage() {
       ) : null}
 
       {/* 删除全部二次确认 */}
-      <Dialog open={showDeleteAllConfirm} onOpenChange={(o) => !deleteAllMutation.isPending && setShowDeleteAllConfirm(o)}>
-        <DialogContent className="max-w-md" aria-describedby={undefined}>
-          <DialogTitle className="flex items-center gap-2 text-destructive">
-            <AlertCircle className="h-4 w-4" />
-            删除全部 AI 调用日志
-          </DialogTitle>
+      {showDeleteAllConfirm && <ManagementDialog title="删除全部 AI 调用日志" onClose={() => setShowDeleteAllConfirm(false)} busy={deleteAllMutation.isPending} className="max-w-md">
           <DialogDescription>
             即将删除全部 <span className="font-semibold text-foreground">{total}</span> 条 AI 调用日志。
           </DialogDescription>
@@ -310,8 +314,7 @@ export function AiLogsPage() {
               确认删除全部
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+      </ManagementDialog>}
       </div>
     </div>
   )
@@ -530,14 +533,16 @@ function LogRow({
   deleting,
 }: {
   item: AiCallLogListItem
-  onClick: () => void
+  onClick?: () => void
   onDelete: () => void
   deleting: boolean
 }) {
+  const confirm = useConfirm()
   const isSuccess = item.success === 1
   return (
     <div
-      className="flex cursor-pointer items-center gap-3 px-3 py-2 text-[12px] hover:bg-accent/40"
+      className={cn('flex items-center gap-3 px-3 py-2 text-[12px]', onClick && 'cursor-pointer hover:bg-accent/40')}
+      title={onClick ? '查看调用详情' : '没有查看详情的权限'}
       onClick={onClick}
     >
       <div className="shrink-0">
@@ -569,9 +574,9 @@ function LogRow({
       </div>
       <button
         className="shrink-0 text-muted-foreground hover:text-destructive"
-        onClick={(e) => {
+        onClick={async (e) => {
           e.stopPropagation()
-          if (confirm('确定删除这条日志？')) onDelete()
+          if (await confirm('确定删除这条日志？', '删除 AI 日志')) onDelete()
         }}
         title="删除"
       >
@@ -595,11 +600,7 @@ function DetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
   })
 
   return (
-    <Dialog open={true} onOpenChange={(o) => !o && onClose()}>
-      <DialogContent
-        className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col"
-        aria-describedby={undefined}
-      >
+    <ManagementDialog title={`AI 调用详情 #${id}`} onClose={onClose}>
         {detail.isLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
@@ -611,8 +612,7 @@ function DetailDialog({ id, onClose }: { id: number; onClose: () => void }) {
         ) : detail.data ? (
           <DetailContent log={detail.data} />
         ) : null}
-      </DialogContent>
-    </Dialog>
+    </ManagementDialog>
   )
 }
 
@@ -621,7 +621,6 @@ function DetailContent({ log }: { log: AiCallLogDetail }) {
   const isSuccess = log.success === 1
   return (
     <>
-      <DialogTitle>AI 调用详情 #{log.id}</DialogTitle>
       <DialogDescription className="mb-3">
         {formatTimestamp(log.created_at)} · {log.provider} / {log.model || '?'}
       </DialogDescription>

@@ -1,10 +1,10 @@
+import { SettingsLayout } from '@/components/settings-layout'
+import { useAuth } from '@/hooks/use-auth'
 import { kbLabel } from '@/lib/kb-label'
 import { useState, useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import {
-  Settings,
   Cpu,
   CheckCircle2,
   Loader2,
@@ -12,13 +12,8 @@ import {
   HardDrive,
   Layers,
   X,
-  Palette,
-  Terminal,
   Save,
   Library,
-  ChevronUp,
-  ChevronDown,
-  PanelLeft,
   Timer,
 } from 'lucide-react'
 
@@ -38,10 +33,6 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 import { AiSummaryConfigCard } from '@/components/ai-summary-config-card'
 import { AiCallLogConfigCard } from '@/components/ai-call-log-config-card'
 import { api, type EmbeddingPrecheckResult, type EmbeddingRebuildStatus } from '@/lib/api'
-import { useTheme } from '@/hooks/use-theme'
-import { useBackground, BACKGROUND_OPTIONS, BACKGROUND_PREVIEW_CSS } from '@/hooks/use-background'
-import { useGlassOpacity } from '@/hooks/use-glass-opacity'
-import { useLocalStorage } from '@/hooks/use-local-storage'
 import { cn } from '@/lib/utils'
 
 const SIZE_TO_MB: Record<string, number> = {
@@ -223,108 +214,10 @@ function DefaultKbCard() {
   )
 }
 
-// ===== 侧边栏设置 =====
-
-// 与 app-sidebar 的默认顺序保持一致
-const DEFAULT_MENU_ORDER = [
-  '/',
-  '/knowledge',
-  '/kbs',
-  '/review',
-  '/stats',
-  '/ai-logs',
-  '/settings',
-]
-
-// 菜单路径 → 显示名（与 app-sidebar 的 label 一致）
-const MENU_LABELS: Record<string, string> = {
-  '/': '提问',
-  '/knowledge': '文档管理',
-  '/kbs': '知识库管理',
-  '/review': '审批',
-  '/stats': '分析',
-  '/ai-logs': 'AI 日志',
-  '/logs': '系统日志',
-  '/settings': '设置',
-}
-
-function SidebarSettingsCard() {
-  const [menuOrder, setMenuOrder] = useLocalStorage<string[]>(
-    'amd-ui-menu-order',
-    DEFAULT_MENU_ORDER,
-  )
-
-  const move = (idx: number, dir: 'up' | 'down') => {
-    const next = [...menuOrder]
-    const target = dir === 'up' ? idx - 1 : idx + 1
-    if (target < 0 || target >= next.length) return
-    ;[next[idx], next[target]] = [next[target], next[idx]]
-    setMenuOrder(next)
-  }
-
-  const reset = () => setMenuOrder(DEFAULT_MENU_ORDER)
-
-  return (
-    <Card className="mb-4 p-5">
-      <div className="mb-3 flex items-center gap-2">
-        <PanelLeft className="h-4 w-4 text-muted-foreground" />
-        <span className="text-[14px] font-medium">侧边栏</span>
-      </div>
-      <p className="mb-3 text-[12px] text-muted-foreground">
-        调整左侧菜单的显示顺序。改动立即生效，关闭浏览器后仍保留。
-      </p>
-      <div className="space-y-1">
-        {menuOrder.map((path, idx) => {
-          const label = MENU_LABELS[path] ?? path
-          return (
-            <div
-              key={path}
-              className="flex items-center justify-between rounded-md border bg-background px-3 py-2 text-[13px]"
-            >
-              <span className="flex items-center gap-2">
-                <span className="text-muted-foreground">{idx + 1}.</span>
-                {label}
-              </span>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => move(idx, 'up')}
-                  disabled={idx === 0}
-                  className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
-                  title="上移"
-                >
-                  <ChevronUp className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  onClick={() => move(idx, 'down')}
-                  disabled={idx === menuOrder.length - 1}
-                  className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-30"
-                  title="下移"
-                >
-                  <ChevronDown className="h-3.5 w-3.5" />
-                </button>
-              </div>
-            </div>
-          )
-        })}
-      </div>
-      <div className="mt-3 flex justify-end">
-        <Button variant="outline" size="sm" onClick={reset} className="text-[12px]">
-          恢复默认顺序
-        </Button>
-      </div>
-    </Card>
-  )
-}
-
 export function SettingsPage() {
   const qc = useQueryClient()
   const [confirmDisable, setConfirmDisable] = useState(false)
-  const [showLogs, setShowLogs] = useLocalStorage<boolean>('amd-ui-show-logs', false)
-  const [showThinking, setShowThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
-  const [showCitations, setShowCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
-  const { theme } = useTheme()
-  const { background, set: setBackground } = useBackground()
-  const [glassOpacity, setGlassOpacity] = useGlassOpacity()
+  const { can } = useAuth()
 
   // 切换流程状态：null → 'prechecking' → 'confirm' → 'switching' → 'rebuilding' → null
   const [switchTarget, setSwitchTarget] = useState<{ name: string; label: string } | null>(null)
@@ -418,17 +311,8 @@ export function SettingsPage() {
   const cachedCount = e?.cached_models?.length ?? 0
 
   return (
-    <div className="mx-auto max-w-4xl px-8 py-8">
-      <div className="mb-6">
-        <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-tight">
-          <Settings className="h-5 w-5" />
-          设置
-        </h1>
-        <p className="mt-1 text-[13px] text-muted-foreground">
-          模型配置、Embedding 切换、系统状态
-        </p>
-      </div>
-
+    <SettingsLayout title="系统设置" description="管理全局配置。" readOnly={!can('system.edit')} sections={[
+      { id: 'retrieval', label: '知识库与检索', description: '默认知识库、向量模型与缓存', content: <>
       <Card className="mb-4 p-5">
         <div className="mb-4 flex items-center gap-2">
           <Cpu className="h-4 w-4 text-muted-foreground" />
@@ -511,110 +395,6 @@ export function SettingsPage() {
 
       <DefaultKbCard />
 
-      <SidebarSettingsCard />
-
-      <Card className="mb-4 p-5">
-        <div className="mb-3 text-[14px] font-medium">对话显示</div>
-        <div className="flex items-center justify-between gap-4 rounded-md border bg-muted/20 p-3">
-          <span>
-            <span className="block text-[13px] font-medium">显示思考过程</span>
-            <span className="mt-0.5 block text-[11px] text-muted-foreground">默认折叠，可手动展开；回答完成后保留。关闭仅隐藏步骤，不影响记录保存。</span>
-          </span>
-          <button
-            type="button" role="switch" aria-label="显示思考过程" aria-checked={showThinking}
-            onClick={() => setShowThinking(!showThinking)}
-            className={cn('relative h-5 w-9 shrink-0 rounded-full transition-colors', showThinking ? 'bg-primary' : 'bg-muted')}
-          >
-            <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all', showThinking ? 'left-[18px]' : 'left-0.5')} />
-          </button>
-        </div>
-        <div className="mt-3 flex items-center justify-between gap-4 rounded-md border bg-muted/20 p-3">
-          <span>
-            <span className="block text-[13px] font-medium">显示引用</span>
-            <span className="mt-0.5 block text-[11px] text-muted-foreground">同时显示答案中的 [1][2] 等引用编号和引用来源，默认关闭。</span>
-          </span>
-          <button
-            type="button" role="switch" aria-label="显示引用" aria-checked={showCitations}
-            onClick={() => setShowCitations(!showCitations)}
-            className={cn('relative h-5 w-9 shrink-0 rounded-full transition-colors', showCitations ? 'bg-primary' : 'bg-muted')}
-          >
-            <span className={cn('absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all', showCitations ? 'left-[18px]' : 'left-0.5')} />
-          </button>
-        </div>
-      </Card>
-
-      <Card className="mb-4 p-5">
-        <div className="mb-3 flex items-center gap-2">
-          <Palette className="h-4 w-4 text-muted-foreground" />
-          <span className="text-[14px] font-medium">外观</span>
-        </div>
-
-        {theme === 'macos' ? (
-          <div>
-            <div className="mb-2 flex items-center justify-between">
-              <label className="text-[12px] text-muted-foreground">毛玻璃透明度</label>
-              <span className="font-mono text-[11px] text-muted-foreground">
-                {Math.round(glassOpacity * 100)}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min={0.3}
-              max={1}
-              step={0.05}
-              value={glassOpacity}
-              onChange={(e) => setGlassOpacity(parseFloat(e.target.value))}
-              className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary"
-            />
-            <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
-              <span>透明（看到背景）</span>
-              <span>不透明（清晰易读）</span>
-            </div>
-            <div className="mt-3 text-[11px] text-muted-foreground">
-              实时生效，立即看到效果。设置自动保存。
-            </div>
-
-            {/* 毛玻璃背景渐变 */}
-            <div className="mt-5 mb-2 flex items-center justify-between">
-              <label className="text-[12px] text-muted-foreground">背景渐变</label>
-              <span className="font-mono text-[11px] text-muted-foreground">
-                {BACKGROUND_OPTIONS.find((o) => o.key === background)?.label ?? 'Moonlit Mint'}
-              </span>
-            </div>
-            <div className="grid grid-cols-3 gap-2">
-              {BACKGROUND_OPTIONS.map((opt) => (
-                <button
-                  key={opt.key}
-                  onClick={() => setBackground(opt.key)}
-                  className={
-                    'relative h-16 rounded-md overflow-hidden transition-all ' +
-                    (background === opt.key
-                      ? 'ring-2 ring-primary ring-offset-2 ring-offset-background'
-                      : 'ring-1 ring-border hover:ring-primary/50')
-                  }
-                  style={{ background: BACKGROUND_PREVIEW_CSS[opt.key] }}
-                  title={`${opt.label} · ${opt.description}`}
-                >
-                  <span
-                    className="absolute bottom-1 left-1.5 text-[10px] font-medium text-white"
-                    style={{ textShadow: '0 1px 3px rgba(0,0,0,0.7)' }}
-                  >
-                    {opt.label}
-                  </span>
-                </button>
-              ))}
-            </div>
-            <div className="mt-1.5 text-[11px] text-muted-foreground">
-              切换主题后背景会自动恢复默认（Moonlit Mint）。
-            </div>
-          </div>
-        ) : (
-          <div className="rounded-md bg-muted/20 p-3 text-[12px] text-muted-foreground">
-            切换到 macOS 毛玻璃主题后，这里会出现透明度调节。
-          </div>
-        )}
-      </Card>
-
       <Card className="mb-4 p-5">
         <div className="mb-3 flex items-center gap-2">
           <Layers className="h-4 w-4 text-muted-foreground" />
@@ -674,61 +454,11 @@ export function SettingsPage() {
         ) : null}
       </Card>
 
-      <LLMTimeoutsCard />
-
-      <SystemPromptCard />
-
-      <AiSummaryConfigCard />
-
-      <AiCallLogConfigCard />
-
-      <Card className="mb-4 p-5">
-        <div className="mb-4 flex items-center gap-2">
-          <Terminal className="h-4 w-4 text-muted-foreground" />
-          <span className="text-[14px] font-medium">开发者选项</span>
-        </div>
-
-        <div className="flex items-center justify-between rounded-md border bg-muted/20 p-3">
-          <div>
-            <div className="text-[13px] font-medium">在侧边栏显示「日志」入口</div>
-            <div className="mt-0.5 text-[11px] text-muted-foreground">
-              关闭后仍可直接访问 <code className="rounded bg-muted/60 px-1 py-0.5 font-mono text-[10px]">/logs</code> 路径
-            </div>
-          </div>
-          <button
-            onClick={() => setShowLogs(!showLogs)}
-            className={cn(
-              'relative h-5 w-9 shrink-0 rounded-full transition-colors',
-              showLogs ? 'bg-primary' : 'bg-muted',
-            )}
-            aria-label={showLogs ? '关闭' : '开启'}
-          >
-            <span
-              className={cn(
-                'absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all',
-                showLogs ? 'left-[18px]' : 'left-0.5',
-              )}
-            />
-          </button>
-        </div>
-
-        <Link
-          to="/logs"
-          className={cn(
-            'mt-3 flex items-center justify-between rounded-md border bg-muted/20 p-3 text-[12px] transition-colors',
-            showLogs ? 'hover:bg-accent/30' : 'pointer-events-none opacity-50',
-          )}
-          aria-disabled={!showLogs}
-          title={showLogs ? undefined : '请先开启侧边栏日志入口'}
-        >
-          <div className="flex items-center gap-2">
-            <Terminal className="h-3.5 w-3.5 text-muted-foreground" />
-            <span>查看应用日志</span>
-          </div>
-          <span className="text-muted-foreground">→</span>
-        </Link>
-      </Card>
-
+      </> },
+      { id: 'documents', label: '文档处理', description: '导入时的摘要与概念提取', content: <AiSummaryConfigCard /> },
+      { id: 'ai', label: 'AI 运行配置', description: '系统提示词与请求超时', content: <><LLMTimeoutsCard /><SystemPromptCard /></> },
+      { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
+    ]}>
       {confirmDisable ? (
         <ConfirmDialog
           title="禁用缓存？"
@@ -774,7 +504,7 @@ export function SettingsPage() {
           {precheckError}
         </div>
       ) : null}
-    </div>
+    </SettingsLayout>
   )
 }
 

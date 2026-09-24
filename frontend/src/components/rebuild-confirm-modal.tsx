@@ -1,3 +1,4 @@
+import { ManagementDialog } from '@/components/management-dialog'
 import { AlertTriangle, Loader2, X } from 'lucide-react'
 import { useState } from 'react'
 
@@ -23,8 +24,7 @@ export function RebuildConfirmModal({
 }) {
   const [confirming, setConfirming] = useState(false)
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-md rounded-lg border border-input bg-card p-5 shadow-lg">
+    <ManagementDialog title="切换向量模型" onClose={onCancel} busy={confirming} className="max-w-lg">
         <div className="mb-3 flex items-start gap-3">
           <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-warning/15">
             <AlertTriangle className="h-4 w-4 text-warning" />
@@ -35,7 +35,7 @@ export function RebuildConfirmModal({
               Embedding 维度变化（{precheck.current_dim} → {precheck.new_dim}），现有向量库无法继续使用。
             </p>
           </div>
-          <button onClick={onCancel} className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
+          <button disabled={confirming} onClick={onCancel} className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground">
             <X className="h-3.5 w-3.5" />
           </button>
         </div>
@@ -75,7 +75,6 @@ export function RebuildConfirmModal({
             {confirming ? '启动中...' : '确认重建并切换'}
           </Button>
         </div>
-      </div>
-    </div>
+      </ManagementDialog>
   )
 }

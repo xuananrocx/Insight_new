@@ -228,6 +228,8 @@ async def authorize(request: Request):
     if path.startswith("/api/v1/ai_logs"):
         p.require("ai_logs.view")
         if params.get("log_id"):
+            if method in SAFE:
+                p.require("ai_logs.detail")
             a.require_owner("log", params["log_id"])
         if method not in SAFE and path.endswith("/config"):
             p.require("system.edit")

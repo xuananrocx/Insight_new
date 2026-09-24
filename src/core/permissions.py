@@ -10,7 +10,8 @@ CATALOG = {
     "documents.view": ("工作空间", "文档管理页面"),
     "analysis.view": ("工作空间", "个人分析页面"),
     "feedback.view": ("工作空间", "个人反馈页面"),
-    "ai_logs.view": ("工作空间", "个人 AI 日志页面"),
+    "ai_logs.view": ("工作空间", "查看个人 AI 日志列表与统计"),
+    "ai_logs.detail": ("工作空间", "查看个人 AI 日志详情"),
     "kb.create": ("知识库", "创建私有知识库 / 导入"),
     "kb.team_create": ("知识库", "创建团队知识库"),
     "kb.team_manage": ("知识库", "管理团队知识库归属及授权"),
@@ -40,10 +41,12 @@ MEMBER = [
     "analysis.view",
     "feedback.view",
     "ai_logs.view",
+    "ai_logs.detail",
     "kb.create",
     "api.personal",
 ]
 DEPENDENCIES = {
+    "ai_logs.detail": "ai_logs.view",
     **{
         p: "users.view" for p in CATALOG if p.startswith("users.") and p != "users.view"
     },
@@ -110,9 +113,19 @@ def init():
             # Customized roles require explicit grants; revoked rights stay revoked.
             cur.execute("SELECT permissions FROM permission_roles WHERE id='admin'")
             admin = cur.fetchone()
-            if admin and set(json.loads(admin["permissions"])) == set(CATALOG) - {"logs.view", "logs.clear"}:
-                cur.execute("UPDATE permission_roles SET permissions=? WHERE id='admin'", (json.dumps(list(CATALOG)),))
+            if admin and (set(json.loads(admin["permissions"])) - {"ai_logs.detail"}) == set(CATALOG) - {"logs.view", "logs.clear", "ai_logs.detail"}:
+                cur.execute("UPDATE permission_roles SET permissions=? WHERE id='admin'", (json.dumps(sorted(set(json.loads(admin["permissions"])) | {"logs.view", "logs.clear"})),))
             cur.execute("INSERT INTO permission_seed VALUES (2)")
+            bump(cur)
+        cur.execute("SELECT 1 FROM permission_seed WHERE id=3")
+        if not cur.fetchone():
+            cur.execute("SELECT id,permissions FROM permission_roles")
+            for role in cur.fetchall():
+                caps = json.loads(role["permissions"])
+                if "ai_logs.view" in caps and "ai_logs.detail" not in caps:
+                    cur.execute("UPDATE permission_roles SET permissions=? WHERE id=?",
+                                (json.dumps([*caps, "ai_logs.detail"]), role["id"]))
+            cur.execute("INSERT INTO permission_seed VALUES (3)")
             bump(cur)
         cur.execute(
             "UPDATE permission_roles SET permissions=?,enabled=1,protected=1 WHERE id='super'",

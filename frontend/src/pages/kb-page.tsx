@@ -1,3 +1,4 @@
+import { ManagementDialog } from '@/components/management-dialog'
 import { kbLabel } from '@/lib/kb-label'
 // 知识库管理页
 // 提供 KB 的 CRUD 操作：列出所有 KB、新建 KB、重命名 KB、删除 KB（仅非 builtin 且非默认 KB）
@@ -499,9 +500,8 @@ export default function KbPage() {
 
       {/* 创建对话框 */}
       {showCreateDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-popover rounded-lg shadow-lg w-full max-w-md p-6">
-            <h2 className="text-lg font-semibold mb-2">新建知识库</h2>
+        <ManagementDialog title="新建知识库" onClose={() => setShowCreateDialog(false)} busy={createMutation.isPending} className="max-w-lg">
+
             <p className="text-sm text-muted-foreground mb-4">创建一个新的独立知识库</p>
 
             <div className="space-y-4 mb-6">
@@ -527,22 +527,20 @@ export default function KbPage() {
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
+              <Button variant="outline" disabled={createMutation.isPending} onClick={() => setShowCreateDialog(false)}>
                 取消
               </Button>
               <Button onClick={handleCreate} disabled={createMutation.isPending}>
                 {createMutation.isPending ? '创建中...' : '创建'}
               </Button>
             </div>
-          </div>
-        </div>
+          </ManagementDialog>
       )}
 
       {/* 编辑对话框 */}
       {showEditDialog && selectedKb && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-popover rounded-lg shadow-lg w-full max-w-md p-6">
-            <h2 className="text-lg font-semibold mb-2">重命名知识库</h2>
+        <ManagementDialog title="重命名知识库" onClose={() => setShowEditDialog(false)} busy={updateMutation.isPending} className="max-w-lg">
+
             <p className="text-sm text-muted-foreground mb-4">修改知识库名称和描述</p>
 
             <div className="space-y-4 mb-6">
@@ -568,22 +566,20 @@ export default function KbPage() {
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowEditDialog(false)}>
+              <Button variant="outline" disabled={updateMutation.isPending} onClick={() => setShowEditDialog(false)}>
                 取消
               </Button>
               <Button onClick={handleUpdate} disabled={updateMutation.isPending}>
                 {updateMutation.isPending ? '更新中...' : '更新'}
               </Button>
             </div>
-          </div>
-        </div>
+          </ManagementDialog>
       )}
 
       {/* 删除确认对话框 */}
       {showDeleteDialog && selectedKb && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-popover rounded-lg shadow-lg w-full max-w-md p-6">
-            <h2 className="text-lg font-semibold mb-2">删除知识库</h2>
+        <ManagementDialog title="删除知识库" onClose={() => setShowDeleteDialog(false)} busy={deleteMutation.isPending} className="max-w-lg">
+
             <p className="text-sm text-muted-foreground mb-4">
               此操作将删除知识库及其所有文档，且不可恢复
             </p>
@@ -602,7 +598,7 @@ export default function KbPage() {
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
+              <Button variant="outline" disabled={deleteMutation.isPending} onClick={() => setShowDeleteDialog(false)}>
                 取消
               </Button>
               <Button
@@ -613,14 +609,12 @@ export default function KbPage() {
                 {deleteMutation.isPending ? '删除中...' : '确认删除'}
               </Button>
             </div>
-          </div>
-        </div>
+          </ManagementDialog>
       )}
 
       {/* 重建 KB 对话框 */}
       {rebuildConfirm && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-popover rounded-lg shadow-lg w-full max-w-md p-6">
+        <ManagementDialog title="重建知识库" onClose={() => setRebuildConfirm(null)} busy={rebuildMutation.isPending} className="max-w-lg">
             <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
               <AlertTriangle className="h-5 w-5 text-destructive" />
               重建知识库
@@ -657,7 +651,7 @@ export default function KbPage() {
             </div>
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setRebuildConfirm(null)}>
+              <Button variant="outline" disabled={rebuildMutation.isPending} onClick={() => setRebuildConfirm(null)}>
                 取消
               </Button>
               <Button
@@ -668,14 +662,12 @@ export default function KbPage() {
                 {rebuildMutation.isPending ? '重建中…' : '确认重建'}
               </Button>
             </div>
-          </div>
-        </div>
+          </ManagementDialog>
       )}
 
       {/* 导入 Pack 对话框 */}
       {importStep !== 'idle' && importFile && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-popover rounded-lg shadow-lg w-full max-w-md p-6">
+        <ManagementDialog title="导入知识库" onClose={resetImport} busy={importStep !== 'confirm' || importMutation.isPending} className="max-w-lg">
             {importStep === 'prechecking' && (
               <>
                 <h2 className="text-lg font-semibold mb-2">正在预检 Pack...</h2>
@@ -845,8 +837,7 @@ export default function KbPage() {
                 </div>
               </>
             )}
-          </div>
-        </div>
+          </ManagementDialog>
       )}
     </div>
   )

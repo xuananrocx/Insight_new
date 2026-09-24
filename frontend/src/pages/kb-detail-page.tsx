@@ -1,3 +1,4 @@
+import { ManagementDialog } from '@/components/management-dialog'
 import { kbLabel } from '@/lib/kb-label'
 // KB 详情页：单个知识库的元信息 / 统计 / 文档预览 / 绑定的会话
 import { useAuth } from '@/hooks/use-auth'
@@ -8,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
+  ChevronRight,
   Database,
   FileText,
   HardDrive,
@@ -51,6 +53,8 @@ export default function KbDetailPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [expandedDocumentsKb, setExpandedDocumentsKb] = useState<string | null>(null)
+  const documentsExpanded = expandedDocumentsKb === id
 
   const kbQuery = useQuery({
     queryKey: ['kb', id],
@@ -270,21 +274,27 @@ export default function KbDetailPage() {
       {/* 文档列表（只读） */}
       <Card className="mb-6 overflow-hidden">
         <div className="flex items-center justify-between border-b px-5 py-3">
-          <div className="flex items-center gap-2">
+          <button type="button" aria-expanded={documentsExpanded} aria-controls={`kb-documents-${kb.id}`} onClick={() => setExpandedDocumentsKb(documentsExpanded ? null : id)} className="flex items-center gap-2">
+            <ChevronRight className={`h-4 w-4 transition-transform ${documentsExpanded ? 'rotate-90' : ''}`} />
             <FileText className="h-4 w-4 text-muted-foreground" />
             <span className="text-[14px] font-medium">文档</span>
             <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-              {files.length}
+              {can('documents.view') && filesQuery.data ? files.length : kb.document_count}
             </span>
-          </div>
-          <Button variant="outline" size="sm" asChild>
+          </button>
+          {documentsExpanded && can('documents.view') && <Button variant="outline" size="sm" asChild>
             <Link to={`/knowledge?kb=${kb.id}`}>
               管理文档
               <ExternalLink className="ml-1.5 h-3 w-3" />
             </Link>
-          </Button>
+          </Button>}
         </div>
-        {filesQuery.isLoading ? (
+        {documentsExpanded && <div id={`kb-documents-${kb.id}`}>
+        {!can('documents.view') ? (
+          <p className="px-5 py-6 text-sm text-muted-foreground">没有文档管理页面权限，无法查看此处的文档列表。知识库查询权限不受影响。</p>
+        ) : filesQuery.isError ? (
+          <p role="alert" className="px-5 py-6 text-sm text-destructive">文档列表加载失败：{filesQuery.error.message}</p>
+        ) : filesQuery.isLoading ? (
           <div className="py-8 text-center text-[12px] text-muted-foreground">
             加载中...
           </div>
@@ -327,14 +337,15 @@ export default function KbDetailPage() {
             })}
           </div>
         )}
+        </div>}
       </Card>
 
       {/* KB 全局概览（迭代 6）*/}
-      <KbIndexCard key={kb.id} kbId={kb.id} canManage={kb.capabilities.includes('manage')} />
+      <KbIndexCard key={`indexes-${kb.id}`} kbId={kb.id} canManage={kb.capabilities.includes('manage')} />
       <KbGlobalSummaryCard kbId={kb.id} canManage={kb.capabilities.includes('manage')} />
 
       {/* 核心概念（迭代 4）*/}
-      <KbConceptsTable key={kb.id} kbId={kb.id} />
+      <KbConceptsTable key={`concepts-${kb.id}`} kbId={kb.id} />
 
       {/* 文档关联图（迭代 4）*/}
       <KbDocumentGraph kbId={kb.id} />
@@ -387,9 +398,8 @@ export default function KbDetailPage() {
 
       {/* 删除二次确认 */}
       {confirmDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="max-w-md p-6">
-            <h3 className="mb-3 text-lg font-semibold">删除知识库</h3>
+        <ManagementDialog title="删除知识库" onClose={() => setConfirmDelete(false)} busy={deleteMutation.isPending} className="max-w-lg">
+
             <p className="mb-2 text-sm text-muted-foreground">
               确认删除知识库「{kbQuery.data?.name}」？此操作不可撤销，将一并删除：
             </p>
@@ -416,8 +426,7 @@ export default function KbDetailPage() {
                 {deleteMutation.isPending ? '删除中...' : '确认删除'}
               </Button>
             </div>
-          </Card>
-        </div>
+          </ManagementDialog>
       )}
     </div>
   )

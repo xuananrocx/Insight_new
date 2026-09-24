@@ -1,3 +1,4 @@
+import { ManagementDialog } from '@/components/management-dialog'
 import { MessageNavigation } from '@/components/message-navigation'
 import { useChatScroll } from '@/hooks/use-chat-scroll'
 import { kbLabel } from '@/lib/kb-label'
@@ -465,11 +466,8 @@ export function ChatPage() {
 
         {/* KB 选择弹窗（空状态和会话状态共用） */}
         {showKbSwitch && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-            <div className="bg-popover rounded-lg shadow-lg w-full max-w-md p-6">
-              <h2 className="text-lg font-semibold mb-2">
-                选择知识库
-              </h2>
+          <ManagementDialog title="选择知识库" onClose={() => setShowKbSwitch(false)} busy={false} className="max-w-lg">
+
               <p className="text-sm text-muted-foreground mb-4">
                 选择用于新对话的知识库
               </p>
@@ -508,8 +506,7 @@ export function ChatPage() {
                   取消
                 </Button>
               </div>
-            </div>
-          </div>
+            </ManagementDialog>
         )}
       </>
     )
@@ -641,8 +638,7 @@ export function ChatPage() {
 
       {/* KB 切换弹窗（组件级别，空状态和会话状态共用） */}
       {showKbSwitch && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-popover rounded-lg shadow-lg w-full max-w-md p-6">
+        <ManagementDialog title="选择知识库" onClose={() => setShowKbSwitch(false)} busy={false} className="max-w-lg">
             <h2 className="text-lg font-semibold mb-2">
               {session ? '切换知识库' : '选择知识库'}
             </h2>
@@ -694,21 +690,19 @@ export function ChatPage() {
                 取消
               </Button>
             </div>
-          </div>
-        </div>
+          </ManagementDialog>
       )}
 
       {/* KB 切换确认弹窗 */}
       {pendingKbScope && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-popover rounded-lg shadow-lg w-full max-w-sm p-6">
-            <h2 className="text-lg font-semibold mb-2">确认切换知识库</h2>
+        <ManagementDialog title="确认切换知识库" onClose={() => setPendingKbScope(null)} busy={switchingKb} className="max-w-lg">
+
             <p className="text-sm text-muted-foreground mb-4">
               切换知识库将清空当前会话的问答历史，会话本身会保留。继续？
             </p>
 
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setPendingKbScope(null)}>
+              <Button variant="outline" disabled={switchingKb} onClick={() => setPendingKbScope(null)}>
                 取消
               </Button>
               <Button
@@ -732,8 +726,7 @@ export function ChatPage() {
                 {switchingKb ? '切换中…' : '确认切换'}
               </Button>
             </div>
-          </div>
-        </div>
+          </ManagementDialog>
       )}
     </>
   )

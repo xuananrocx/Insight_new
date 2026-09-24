@@ -151,7 +151,7 @@
     --success: 152 60% 48%;
     --warning: 35 92% 52%;
 
-    --border: 0 0% 100% / 0.2;
+    --border: 220 8% 24%;
     --input: 0 0% 100% / 0.15;
     --ring: 211 100% 56%;
 
@@ -260,6 +260,7 @@
 
   /* Card 与消息气泡共用毛玻璃，统一跟随透明度设置。 */
   .theme-macos .bg-card,
+  .theme-macos .settings-index,
   .theme-macos .chat-bubble {
     background-color: hsl(220 25% 28% / var(--glass-alpha));
     backdrop-filter: blur(40px) saturate(200%) brightness(1.05);

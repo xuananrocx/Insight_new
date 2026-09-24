@@ -2,17 +2,40 @@
 from __future__ import annotations
 
 import logging
+import json
+import re
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from src.core.config import settings
+from src.core import permissions
 from src.db import metadata_db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/ai_logs", tags=["ai_logs"])
+
+
+def safe_error_summary(message: str | None) -> str | None:
+    """Never forward untrusted error bodies to list-only viewers."""
+    if not message:
+        return None
+    parts = ["调用失败"]
+    try:
+        data = json.loads(message)
+    except (ValueError, TypeError):
+        return parts[0]
+    if not isinstance(data, dict):
+        return parts[0]
+    status = data.get("http_status")
+    if type(status) is int and 400 <= status <= 599:
+        parts.append(f"HTTP {status}")
+    call_id = data.get("call_id")
+    if isinstance(call_id, str) and re.fullmatch(r"[a-fA-F0-9]{16,32}", call_id):
+        parts.append(f"调用编号：{call_id}")
+    return " · ".join(parts)
 
 
 class BatchDeleteRequest(BaseModel):
@@ -50,6 +73,8 @@ def list_logs(
         limit=limit,
         offset=offset,
     )
+    if not permissions.has("ai_logs.detail"):
+        items = [{**item, "error_message": safe_error_summary(item.get("error_message"))} for item in items]
     return {
         "items": items,
         "total": total,

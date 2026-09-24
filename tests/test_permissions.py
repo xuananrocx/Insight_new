@@ -365,3 +365,74 @@ def test_all_question_modes_are_available_without_feature_roles(env, monkeypatch
         ).status_code
         == 403
     )
+
+
+def test_ai_log_detail_permission_and_list_error_redaction(env):
+    import json
+    viewer = role(env.admin, ["ai_logs.view"])
+    assign(env, env.alice_id, [viewer])
+    private_error = json.dumps({"call_id": "305497e8711044d1", "http_status": 502,
+                                "response_error": "PRIVATE_RESPONSE", "phase": "PRIVATE_PHASE",
+                                "exception_chain": [{"message": "PRIVATE_EXCEPTION"}]})
+    with actor(env.alice_id):
+        lid = db.insert_ai_call_log(provider="p", model="m", scene="qa_chat",
+                                    messages=[{"role": "user", "content": "PRIVATE_INPUT"}],
+                                    error_message=private_error, success=False)
+    result = env.alice.get("/api/v1/ai_logs")
+    assert result.status_code == 200
+    assert "PRIVATE_" not in result.text
+    assert "HTTP 502" in result.text
+    assert "305497e8711044d1" in result.text
+    assert env.alice.get(f"/api/v1/ai_logs/{lid}").status_code == 403
+    assert env.alice.get("/api/v1/ai_logs/stats").status_code == 200
+    detailed = role(env.admin, ["ai_logs.view", "ai_logs.detail"])
+    assign(env, env.alice_id, [detailed])
+    assert "PRIVATE_INPUT" in env.alice.get(f"/api/v1/ai_logs/{lid}").text
+    assert env.bob.get(f"/api/v1/ai_logs/{lid}").status_code == 404
+    assert env.admin.get(f"/api/v1/ai_logs/{lid}").status_code == 404
+    assign(env, env.alice_id, [viewer])
+    assert env.alice.get(f"/api/v1/ai_logs/{lid}").status_code == 403
+    assert env.admin.post("/api/v1/admin/roles", json={"name": "invalid-detail", "permissions": ["ai_logs.detail"]}).status_code == 400
+
+
+def test_ai_log_detail_migration_only_once(env):
+    import json
+    from src.core import permissions as p
+    rid = role(env.admin, ["ai_logs.view"])
+    empty = role(env.admin, [])
+    a.execute("DELETE FROM permission_seed WHERE id=3")
+    p.init()
+    caps = json.loads(a.rows("SELECT permissions FROM permission_roles WHERE id=?", (rid,))[0]["permissions"])
+    assert "ai_logs.detail" in caps
+    assert json.loads(a.rows("SELECT permissions FROM permission_roles WHERE id=?", (empty,))[0]["permissions"]) == []
+    a.execute("UPDATE permission_roles SET permissions=? WHERE id=?", (json.dumps(["ai_logs.view"]), rid))
+    p.init()
+    assert json.loads(a.rows("SELECT permissions FROM permission_roles WHERE id=?", (rid,))[0]["permissions"]) == ["ai_logs.view"]
+
+
+def test_download_inherited_from_role_and_revoked_at_source(env):
+    kid = kb(env.alice)
+    shared = role(env.admin, [])
+    assign(env, env.bob_id, ["member", shared])
+    grant(env.alice, "kb", kid, env.bob_id, ["query"])
+    grant(env.alice, "kb", kid, shared, ["query", "download"], "role")
+    base = a.settings.feed_folder / kid
+    base.mkdir(parents=True, exist_ok=True)
+    source = base / "role-download.txt"
+    source.write_text("role content")
+    db.upsert_file(relative_path=source.name, absolute_path=str(source), content_hash="role-hash",
+                   file_size=12, file_type="txt", kb_id=kid)
+    fid = db.get_file_by_path(source.name, kb_id=kid)["id"]
+    path = f"/api/v1/knowledge/download/{fid}?kb_id={kid}"
+    assert env.bob.get(path).text == "role content"
+    effective = env.alice.get(f"/api/v1/access/kb/{kid}/effective/{env.bob_id}").json()
+    assert any(s["source"].startswith("角色：") and "download" in s["actions"] for s in effective["sources"])
+    grant(env.alice, "kb", kid, shared, ["query"], "role")
+    assert env.bob.get(path).status_code == 403
+    assert env.bob.get(f"/api/v1/kbs/{kid}").status_code == 200
+
+
+@pytest.mark.parametrize("message", ["PRIVATE_TEXT", '["PRIVATE_TEXT"]', '{"http_status": "PRIVATE_TEXT", "call_id": "PRIVATE_TEXT"}'])
+def test_list_error_summary_never_forwards_unstructured_content(message):
+    from src.api.routes_ai_logs import safe_error_summary
+    assert safe_error_summary(message) == "调用失败"
