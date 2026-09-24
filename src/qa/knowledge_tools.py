@@ -27,7 +27,7 @@ def definition(name, description, properties=None, required=None):
 LEGACY_TOOLS = [
     definition("get_kb_overview", "读取当前知识库背景和入库状态；概览不是可引用的原文证据。"),
     definition("search_knowledge", "在当前知识库语义和关键词检索。返回原文证据及引用编号；可换词补查或按 document_id 查指定文档。",
-               {"query": {"type": "string", "minLength": 1, "maxLength": 1000}, "document_id": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 8}}, ["query"]),
+               {"query": {"type": "string", "minLength": 1, "maxLength": 1000}, "document_id": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1}}, ["query"]),
     definition("list_documents", "按文件名查找文档，包含入库状态。标题不能当作正文引用。支持分页。",
                {"query": {"type": "string", "maxLength": 200}, "offset": {"type": "integer", "minimum": 0}}),
     definition("get_document_outline", "获取文档章节、版本和索引完整性。章节编号用于 read_document；目录不是正文证据。",
@@ -39,7 +39,7 @@ LABELS = {"get_kb_overview": "查看知识库背景", "search_knowledge": "检�
 
 
 QUERY = {"type": "string", "minLength": 1, "maxLength": 1000, "description": "关键词、字段名、错误码或自然语言问题"}
-LIMIT = {"type": "integer", "minimum": 1, "maximum": 8, "description": "最多返回的原文片段数"}
+LIMIT = {"type": "integer", "minimum": 1, "description": "本次希望返回的原文条数，须为正整数。省略时使用用户设置的默认数量；明确指定时使用该值。实际返回受匹配结果、候选范围和剩余资料预算限制，结合 coverage 与 next_cursor 判断是否继续查阅。"}
 TOOLS = [
     definition("get_kb_overview", "了解当前授权知识库及相关文档目录；目录仅供选择来源，不是原文证据，未列出的文档仍可搜索。"),
     definition("list_documents", "按名称查找文档及真实编号，支持分页。用于寻找文件、类型或名称中的版本；空结果仅表示文件名未命中，不代表正文无资料。",
@@ -93,11 +93,18 @@ class KnowledgeToolError(ValueError):
 
 
 class KnowledgeTools:
+    @staticmethod
+    def search_limit(value, default):
+        value = default if value is None else value
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError('limit 必须为正整数')
+        return value
+
     def __init__(self, kb_id, check_cancel=lambda: None, *, max_chars=48000, top_k=8, question=''):
         self.kb_id = kb_id
         self.check_cancel = check_cancel
         self.max_chars = max_chars
-        self.top_k = min(8, max(1, top_k or 8))
+        self.top_k = self.search_limit(top_k, 8)
         self.hits: list[dict] = []
         self.cache: dict[str, dict] = {}
         self.used_chars = 0
@@ -304,7 +311,7 @@ class KnowledgeTools:
         scoped = any(v is not None for v in (section, object_id, sheet))
         if scoped and document_id is None:
             raise ValueError('指定范围搜索需要 document_id')
-        limit = min(limit or self.top_k, 8)
+        limit = self.search_limit(limit, self.top_k)
         query_key=json.dumps([query,document_id,match_mode,section,object_id,sheet],ensure_ascii=False)
         old_key=self.search_queries.get(query_key)
         if _snapshot is None and old_key in self.search_pages:
@@ -402,7 +409,7 @@ class KnowledgeTools:
                         pool = vector_store.query_by_embedding(vectors[0],k=min(100,offset+limit+1),collection_name=db.get_kb(self.kb_id)['collection_name'])
                 elif match_mode == 'keyword':
                     with tool_navigation.timed(self,'keyword_query'):
-                        pool = bm25_index.query_enhanced(query,offset+limit+1,self.kb_id)
+                        pool = bm25_index.query_enhanced(query,min(1500,offset+limit+1),self.kb_id)
                 else:
                     try:
                         with tool_navigation.timed(self,'hybrid_retrieval'):
@@ -413,7 +420,7 @@ class KnowledgeTools:
                         self.check()
                         logger.warning('Agent semantic search unavailable; trying lexical index', exc_info=True)
                         with tool_navigation.timed(self,'keyword_query'):
-                            pool = bm25_index.query_enhanced(query,offset+limit+1,self.kb_id)
+                            pool = bm25_index.query_enhanced(query,min(1500,offset+limit+1),self.kb_id)
                         note = '语义检索暂不可用，本次仅使用关键词检索'
                 pool = self.unique_chunks(pool)
                 more = offset+limit < len(pool)
@@ -648,7 +655,7 @@ class KnowledgeTools:
             if "enum" in p and value not in p["enum"]:
                 raise ValueError(f"{key} 选项不合法")
             if p["type"] == "integer":
-                if type(value) is not int or not p.get("minimum", 0) <= value <= p.get("maximum", 10000000):
+                if type(value) is not int or value < p.get("minimum", 0) or (key != "limit" and value > p.get("maximum", 10000000)):
                     raise ValueError(f"{key} 必须是范围内的整数")
             elif not isinstance(value, str) or not p.get("minLength", 0) <= len(value.strip()) <= p.get("maxLength", 1000):
                 raise ValueError(f"{key} 文本长度不合法")
@@ -678,7 +685,7 @@ class KnowledgeTools:
             elif name=='search_scope':
                 file,bounds=tool_navigation.resolve(self,args['scope_ref'])
                 from src.qa import canonical_search
-                result=canonical_search.search(self,[file],args['query'],args.get('match_mode','related'),args.get('limit',self.top_k),
+                result=canonical_search.search(self,[file],args['query'],args.get('match_mode','related'),self.search_limit(args.get('limit'),self.top_k),
                     bounds={k:v for k,v in bounds.items() if k in ('section','object_id','sheet')})
                 result.pop('_snapshot_key',None)
             elif name=='get_object_members':

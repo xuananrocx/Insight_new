@@ -181,7 +181,7 @@ def test_quality_fixture_evidence_preserves_conditions_and_source_boundaries(kno
 
 @pytest.mark.parametrize('name,args', [('delete_document', {}), ('read_document', {'document_id': 1, 'version': 'v1', 'kb_id': 'other'}),
                                        ('search_knowledge', '{broken'), ('read_document', {'document_id': True, 'version': 'v1'}),
-                                       ('search_knowledge', {'query': ''}), ('search_knowledge', {'query': 'q', 'limit': 100})])
+                                       ('search_knowledge', {'query': ''}), ('search_knowledge', {'query': 'q', 'limit': 0})])
 def test_untrusted_arguments_rejected(knowledge, name, args):
     assert kt.KnowledgeTools('kb').execute(name, args)['error']
 
@@ -1163,3 +1163,58 @@ async def test_capacity_fallback_keeps_recent_analysis_and_history(knowledge, mo
     assert '已有分析：先核对依赖版本' in content
     assert '只考虑 Linux 离线环境' in content
     assert '失败时检查依赖版本和安装日志。' in content
+
+
+@pytest.mark.parametrize('default', [5, 10, 15, 20, None])
+def test_search_default_count_and_explicit_override(knowledge, monkeypatch, default):
+    kb = kt.KnowledgeTools('kb', top_k=default)
+    expected = 8 if default is None else default
+    assert kb.top_k == expected
+    from src.qa import canonical_search
+    seen = []
+    snap = {'kind': 'canonical'}
+    kb.search_queries['["needle", null, "related", null, null, null]'] = 'snapshot'
+    kb.search_pages['snapshot'] = snap
+    monkeypatch.setattr(kt.tool_navigation, 'cursor', lambda owner, key, offset, limit: seen.append(limit) or 'cursor')
+    monkeypatch.setattr(kt.tool_navigation, 'get_page', lambda *a: ({}, snap))
+    monkeypatch.setattr(canonical_search, 'page', lambda owner, key, snap, offset, limit: {'count': limit})
+    assert kb.search('needle')['count'] == expected
+    assert kb.search('needle', limit=25)['count'] == 25
+    assert seen == [expected, 25]
+
+
+@pytest.mark.parametrize('value', [0, -1, True, 1.5, '10'])
+def test_search_limit_rejects_invalid_values(knowledge, value):
+    kb = kt.KnowledgeTools('kb')
+    with pytest.raises(ValueError):
+        kb.search('needle', limit=value)
+
+
+def test_search_schema_accepts_explicit_counts_above_eight(knowledge):
+    kb = kt.KnowledgeTools('kb')
+    for name, args in [('search_knowledge', {'query': 'x'}),
+                       ('search_knowledge', {'query': 'x', 'document_id': 1}),
+                       ('search_document', {'query': 'x', 'document_id': 1}),
+                       ('search_scope', {'query': 'x', 'scope_ref': 'scope'})]:
+        assert kb.validate(name, {**args, 'limit': 25})['limit'] == 25
+    for spec in kt.TOOLS:
+        limit = spec['parameters']['properties'].get('limit')
+        if limit:
+            assert 'maximum' not in limit
+
+
+def test_search_more_than_eight_pages_without_skipping(knowledge):
+    files, chunks = knowledge
+    chunks.clear()
+    for i in range(31):
+        cid = f'item-{i}'
+        chunks[cid] = dict(id=cid, text=f'needle unique record {i}', section_index=i, chunk_index=0, section_label=str(i))
+    files[0]['chunk_ids_json'] = json.dumps(list(chunks))
+    kb = kt.KnowledgeTools('kb', top_k=15)
+    first = kb.execute('search_knowledge', {'query': 'needle', 'match_mode': 'exact'})
+    assert len(first['evidence']) == 15
+    second = kb.execute('continue_search', {'cursor': first['next_cursor']})
+    assert len(second['evidence']) == 15
+    third = kb.execute('continue_search', {'cursor': second['next_cursor']})
+    assert len(third['evidence']) == 1 and third['next_cursor'] is None
+    assert len({e['text'] for page in (first, second, third) for e in page['evidence']}) == 31

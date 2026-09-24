@@ -29,7 +29,7 @@ export function TopKSelect({ value, onChange, className }: Props) {
         'inline-flex items-center gap-1.5 rounded-md border bg-background px-2 py-1 text-[11px] ' +
         (className ?? '')
       }
-      title={`答案深度：从知识库取 N 段最相关内容喂给 LLM（当前 ${active.topK} 段）`}
+      title={`当前 ${active.topK} 条：基础检索控制结果数量；增强 AI 控制参考资料上限；深度 AI 控制单次搜索默认数量，AI 显式指定数量时优先。不控制查阅轮数或整轮资料总量。`}
     >
       <Settings2 className="h-3.5 w-3.5 text-muted-foreground" />
       <span className="text-muted-foreground">答案深度</span>
