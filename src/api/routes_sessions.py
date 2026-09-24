@@ -146,7 +146,7 @@ class CreateSessionRequest(BaseModel):
     title: str = Field("新会话", max_length=80)
     created_at: int = Field(..., ge=0)
     kb_scope: str | None = None
-    retrieval_mode: RetrievalMode = "ai"
+    retrieval_mode: RetrievalMode = "deep_ai"
 
 
 class UpdateSessionRequest(BaseModel):

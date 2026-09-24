@@ -2,7 +2,7 @@ import { ManagementDialog } from '@/components/management-dialog'
 import { useConfirm } from '@/components/confirmation-provider'
 import { useAuth } from '@/hooks/use-auth'
 import { formatDuration } from '@/lib/format-duration'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -419,9 +419,9 @@ function StatsView({ stats }: { stats: AiCallLogStats }) {
       {stats.by_day.length > 0 ? (
         <Card className="p-3">
           <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            最近 {stats.by_day.length} 天调用趋势
+            每日调用趋势
           </div>
-          <DayChart data={[...stats.by_day].reverse()} />
+          <DayChart data={stats.by_day} />
         </Card>
       ) : null}
     </div>
@@ -460,61 +460,68 @@ function StatCard({
 }
 
 function DayChart({ data }: { data: Array<{ date: string; total: number; success: number; failed: number }> }) {
-  // 简易 SVG 柱状图（不依赖 recharts 避免 bundle 大）
-  if (data.length === 0) return null
-  const max = Math.max(...data.map((d) => d.total), 1)
-  const slotWidth = 100 / data.length
-  // 限制单根柱子最大宽度（避免 data.length 很小时柱子过粗）
-  const MAX_BAR_WIDTH = 12
-  const barWidth = Math.min(slotWidth * 0.6, MAX_BAR_WIDTH)
-  return (
-    <div>
-      <svg viewBox="0 0 100 60" className="h-32 w-full" preserveAspectRatio="none">
-        {data.map((d, i) => {
-          const successH = (d.success / max) * 50
-          const failedH = (d.failed / max) * 50
-          // 柱子在 slot 内居中
-          const slotCenter = i * slotWidth + slotWidth / 2
-          const barX = slotCenter - barWidth / 2
-          return (
-            <g key={d.date}>
-              <rect
-                x={barX}
-                y={50 - successH - failedH}
-                width={barWidth}
-                height={failedH}
-                className="fill-destructive"
-              />
-              <rect
-                x={barX}
-                y={50 - successH}
-                width={barWidth}
-                height={successH}
-                className="fill-primary"
-              />
-            </g>
-          )
-        })}
-        <line x1="0" y1="50" x2="100" y2="50" className="stroke-border" strokeWidth="0.3" />
-      </svg>
-      <div className="mt-1 flex justify-between text-[10px] text-muted-foreground">
-        <span>{data[0]?.date.slice(5)}</span>
-        <span>{data[Math.floor(data.length / 2)]?.date.slice(5)}</span>
-        <span>{data[data.length - 1]?.date.slice(5)}</span>
-      </div>
-      <div className="mt-2 flex items-center gap-3 text-[10px] text-muted-foreground">
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-sm bg-primary" /> 成功
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block h-2 w-2 rounded-sm bg-destructive" /> 失败
-        </span>
-      </div>
+  const container = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(640)
+  const [hovered, setHovered] = useState<string | null>(null)
+  useEffect(() => {
+    const element = container.current
+    if (!element) return
+    const observer = new ResizeObserver(([entry]) => setWidth(Math.max(240, entry.contentRect.width)))
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  const days = [...data].sort((a, b) => a.date.localeCompare(b.date))
+  if (!days.length) return null
+  const left = 44, right = width - 24, top = 16, bottom = 186
+  const max = Math.max(1, ...days.map(day => Math.max(day.total, day.success, day.failed)))
+  const magnitude = 10 ** Math.floor(Math.log10(max / 4))
+  const step = Math.max(1, Math.ceil(max / 4 / magnitude) * magnitude)
+  const ceiling = Math.ceil(max / step) * step
+  const ticks = Array.from({ length: Math.round(ceiling / step) + 1 }, (_, i) => i * step)
+  const timestamp = (date: string) => Date.parse(`${date}T00:00:00Z`)
+  const first = timestamp(days[0].date), last = timestamp(days[days.length - 1].date)
+  const x = (date: string) => first === last ? (left + right) / 2 : left + (timestamp(date) - first) / (last - first) * (right - left)
+  const y = (value: number) => bottom - value / ceiling * (bottom - top)
+  // Labels share the exact data-point coordinates, thinning only when space is tight.
+  const tickDates = [days[0]]
+  for (const day of days.slice(1, -1)) {
+    if (x(day.date) - x(tickDates[tickDates.length - 1].date) >= 60 && right - x(day.date) >= 60) tickDates.push(day)
+  }
+  if (days.length > 1) tickDates.push(days[days.length - 1])
+  const selected = days.find(day => day.date === hovered) ?? days[days.length - 1]
+  const series = [
+    { key: 'total' as const, label: '总调用', color: 'hsl(var(--primary))' },
+    { key: 'success' as const, label: '成功', color: 'hsl(var(--success))' },
+    { key: 'failed' as const, label: '失败', color: 'hsl(var(--destructive))' },
+  ]
+  return <div ref={container} className="min-w-0">
+    <p className="text-xs text-muted-foreground">{days[0].date} 至 {days[days.length - 1].date} · 单位：次</p>
+    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs" aria-live="polite">
+      <span className="text-muted-foreground">{selected.date}</span>
+      {series.map(line => <span key={line.key} style={{ color: line.color }}>{line.label}：{selected[line.key]}</span>)}
     </div>
-  )
+    <svg viewBox={`0 0 ${width} 224`} className="block h-56 w-full" role="group" aria-label="每日 AI 调用折线图，可悬停、点击或聚焦数据点查看次数">
+      {ticks.map(value => <g key={value}>
+        <line x1={left} y1={y(value)} x2={right} y2={y(value)} stroke="hsl(var(--border))" strokeDasharray={value ? '3 4' : undefined} />
+        <text x={left - 8} y={y(value) + 4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize="10">{value}</text>
+      </g>)}
+      {tickDates.map(day => <text key={day.date} x={x(day.date)} y={bottom + 22} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize="10">{day.date.slice(5)}</text>)}
+      {series.map(line => <g key={line.key}>
+        <polyline points={days.map(day => `${x(day.date)},${y(day[line.key])}`).join(' ')} fill="none" stroke={line.color} strokeWidth="2" strokeLinejoin="round" strokeDasharray={line.key === 'total' ? '5 3' : undefined} />
+        {days.map(day => <circle key={day.date} cx={x(day.date)} cy={y(day[line.key])} r={hovered === day.date ? 4 : 3} fill={line.color} />)}
+      </g>)}
+      {days.map((day, i) => <rect key={day.date}
+        x={i === 0 ? left - 10 : (x(days[i - 1].date) + x(day.date)) / 2}
+        width={(i === days.length - 1 ? right + 10 : (x(day.date) + x(days[i + 1].date)) / 2) - (i === 0 ? left - 10 : (x(days[i - 1].date) + x(day.date)) / 2)}
+        y={top - 6} height={bottom - top + 12} fill="transparent" tabIndex={0} role="button"
+        aria-label={`${day.date}，总调用 ${day.total} 次，成功 ${day.success} 次，失败 ${day.failed} 次`}
+        onMouseEnter={() => setHovered(day.date)} onMouseLeave={() => setHovered(null)} onFocus={() => setHovered(day.date)} onBlur={() => setHovered(null)} onClick={() => setHovered(day.date)}
+        onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setHovered(day.date) } }}
+      />)}
+    </svg>
+    <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">{series.map(line => <span key={line.key} className="flex items-center gap-1.5"><span className="inline-block w-4 border-t-2" style={{ borderColor: line.color, borderTopStyle: line.key === 'total' ? 'dashed' : 'solid' }} />{line.label}</span>)}</div>
+  </div>
 }
-
-// ===== 列表行 =====
 
 function errorSummary(message: string) {
   try {

@@ -216,7 +216,7 @@ export function useChatSessions() {
       kb_scope = defaultKb?.id || undefined
     }
 
-    await createMutation.mutateAsync({ id, title: '新会话', created_at: now, kb_scope, retrieval_mode: mode, group_id: newGroupId })
+    await createMutation.mutateAsync({ id, title: '新会话', created_at: now, kb_scope, retrieval_mode: mode ?? 'deep_ai', group_id: newGroupId })
     // 乐观：在 detail cache 里塞一个空 session，避免 appendTurn 时 activeSession 为空
     const optimistic: SessionDetail = {
       id,
@@ -225,7 +225,7 @@ export function useChatSessions() {
       updated_at: now,
       turn_count: 0,
       kb_scope,
-      retrieval_mode: mode ?? 'ai',
+      retrieval_mode: mode ?? 'deep_ai',
       turns: [],
       group_id: newGroupId,
     }

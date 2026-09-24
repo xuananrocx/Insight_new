@@ -99,16 +99,16 @@ export function AccountPage() {
     { id: 'display', label: '会话显示', description: '思考过程、引用与上下文', content: <>
     <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>显示上下文使用情况（可展开）</span><Toggle label="显示上下文使用情况" checked={showContext} onChange={setShowContext} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div></Card>
     </> },
-    { id: 'ai', label: 'AI 回答', description: '个人偏好与回答策略', content: <>
-    <PersonalPreferencesCard />
-    <Card className="space-y-3 p-5"><h2 className="font-semibold">AI 回答设置</h2><p className="text-sm text-muted-foreground">AI约束策略适用于增强AI和深度AI。增强AI 一次检索后直接回答；深度AI 主动查阅知识库，需要 API 支持工具调用。下方查阅轮数与总时长设置仅用于深度AI。</p><DeepAiOptionsFields />
-    </Card>
-    </> },
     { id: 'providers', label: 'API 与连接', description: 'API 选择、配置与重试', content: <>
     <ProviderSettings />
     <Card className="space-y-3 p-5"><h2 className="font-semibold">API 请求重试</h2>
       <div className="flex items-center justify-between gap-4 text-sm"><span>API 失败重试次数</span><OptionSelect aria-label="API 失败重试次数" value={String(apiRetryCount)} onValueChange={value => setApiRetryCount(Number(value))} options={Array.from({ length: 11 }, (_, value) => ({ value: String(value), label: value === 0 ? '不重试' : `${value} 次${value === 10 ? '（默认）' : ''}` }))} /></div>
       <p className="text-xs text-muted-foreground">自动保存，适用于 增强AI和深度AI。默认最多重试 10 次，间隔约 1、2、4、8、16、30 秒，之后最多 30 秒。所有尝试和等待都计入时间预算，次数不保证用完。已输出内容后中断会保留部分答案；服务要求等待超过 30 秒的限流或暂不可用错误，会提示稍后重试。</p>
+    </Card>
+    </> },
+    { id: 'ai', label: 'AI 回答', description: '个人偏好与回答策略', content: <>
+    <PersonalPreferencesCard />
+    <Card className="space-y-3 p-5"><h2 className="font-semibold">AI 回答设置</h2><p className="text-sm text-muted-foreground">AI约束策略适用于增强AI和深度AI。增强AI 一次检索后直接回答；深度AI 主动查阅知识库，需要 API 支持工具调用。下方查阅轮数与总时长设置仅用于深度AI。</p><DeepAiOptionsFields />
     </Card>
     </> },
     { id: 'account', label: '账号与安全', description: '账号信息与密码', content: <>

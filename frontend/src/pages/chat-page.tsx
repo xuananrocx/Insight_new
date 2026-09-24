@@ -59,7 +59,7 @@ export function ChatPage() {
       setLegacyModeNotice(true)
     }
   }, [session?.retrieval_mode, legacyModeNotice, setLegacyModeNotice])
-  const [newSessionMode, setNewSessionMode] = useState<RetrievalMode>('ai')
+  const [newSessionMode, setNewSessionMode] = useState<RetrievalMode>('deep_ai')
   const [modeCounts, setModeCounts] = useLocalStorage<Record<string, number>>('amd-search-counts-by-mode', { basic: 10, ai: 10, deep_ai: 10 })
   const currentMode = session?.retrieval_mode ?? newSessionMode
   const countMode = currentMode === 'deep' ? 'basic' : currentMode
@@ -610,7 +610,7 @@ export function ChatPage() {
               <div className="mt-3 flex items-center justify-between gap-2">
                 <div className="flex min-w-0 flex-wrap items-center gap-1.5">
                   <RetrievalModeSelect
-                    value={session?.retrieval_mode ?? 'ai'}
+                    value={currentMode}
                     onChange={(v) => {
                       if (session) void ctx.updateSessionMode(session.id, v)
                     }}
