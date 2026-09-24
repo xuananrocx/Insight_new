@@ -50,7 +50,6 @@ export function ChatPage() {
   const ctx = useChatSessionsCtx()
   const session = ctx.activeSession
   const [input, setInput] = useState('')
-  const [topK, setTopK] = useState(10)
   // 空状态（无会话）下选的检索模式，首问建会话时带过去
   const [legacyModeNotice, setLegacyModeNotice] = useLocalStorage('amd-ui-mode-merge-notice', false)
   useEffect(() => {
@@ -60,6 +59,16 @@ export function ChatPage() {
     }
   }, [session?.retrieval_mode, legacyModeNotice, setLegacyModeNotice])
   const [newSessionMode, setNewSessionMode] = useState<RetrievalMode>('ai')
+  const [modeCounts, setModeCounts] = useLocalStorage<Record<string, number>>('amd-search-counts-by-mode', { basic: 10, ai: 10, deep_ai: 10 })
+  const currentMode = session?.retrieval_mode ?? newSessionMode
+  const countMode = currentMode === 'deep' ? 'basic' : currentMode
+  const countFor = (mode: RetrievalMode) => {
+    const stored = modeCounts?.[mode === 'deep' ? 'basic' : mode]
+    return [5, 10, 15, 20].includes(stored) ? stored : 10
+  }
+  const topK = countFor(countMode)
+  const setTopK = (value: number) => setModeCounts(previous => ({ ...previous, [countMode]: value }))
+
   const [showStats, setShowStats] = useLocalStorage('amd-ui-show-stats', true)
   const [showKbSwitch, setShowKbSwitch] = useState(false)
   const [searchParams] = useSearchParams()
@@ -425,6 +434,8 @@ export function ChatPage() {
                     onChange={(v) => setNewSessionMode(v)}
                   />
                   <TopKSelect
+                    key={countMode}
+                    mode={currentMode}
                     value={topK}
                     onChange={(v) => setTopK(v)}
                   />
@@ -560,7 +571,7 @@ export function ChatPage() {
                   key={turn.id}
                   turn={turn}
                   searchResults={<SearchTurnResults turn={turn} sessionId={turnSessionId!}
-                    kbScope={session?.kb_scope ?? undefined} topK={topK}
+                    kbScope={session?.kb_scope ?? undefined} topK={countFor('basic')}
                     canExpand={canAskKb && !streamingTurnId}
                     onSaved={expansion => ctx.updateTurn(turnSessionId!, turn.id, t => ({ ...t, expansion }))} />}
                   onStop={streamingTurnId === turn.id ? () => handleStop(turnSessionId ?? undefined) : undefined}
@@ -608,6 +619,8 @@ export function ChatPage() {
                     }}
                   />
                   <TopKSelect
+                    key={countMode}
+                    mode={currentMode}
                     value={topK}
                     onChange={(v) => setTopK(v)}
                   />
