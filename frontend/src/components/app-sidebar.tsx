@@ -211,7 +211,7 @@ export function AppSidebar() {
       </div>
 
       <div className={cn('shrink-0 border-t border-white/5', collapsed ? 'px-2 py-2 text-center' : 'px-4 py-2.5')}>
-        <span className="text-[10px] font-medium text-muted-foreground">V0.5</span>
+        <span className="text-[10px] font-medium text-muted-foreground">V{import.meta.env.VITE_APP_VERSION}</span>
       </div>
     </aside>
   )
