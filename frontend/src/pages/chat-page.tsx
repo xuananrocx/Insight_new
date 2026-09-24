@@ -621,6 +621,13 @@ export function ChatPage() {
                     value={topK}
                     onChange={(v) => setTopK(v)}
                   />
+                  <span
+                    className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground"
+                    title={`当前模型：${activeProvider?.name || '—'} · ${activeProvider?.chat_model || '—'}`}
+                  >
+                    <Zap className="h-3 w-3" />
+                    {providersLoading ? '…' : activeModelLabel}
+                  </span>
                 </div>
                 <Button type="submit" size="sm" className="gap-1.5 text-[12px]" disabled={isStreaming(ctx.activeId) || !input.trim()}>
                   {isStreaming(ctx.activeId) ? (
