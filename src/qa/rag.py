@@ -865,20 +865,12 @@ def ask(
     trace = TraceCollector()
     client = llm_client.get_client()
 
-    messages, hits, embed_provider = _run_pipeline(
-        question, top_k, history, trace, system_override, kb_scope, strategy="agentic",
+    from src.qa import enhanced_ai
+    messages, hits, embed_provider = enhanced_ai.prepare(
+        question, top_k, history, trace, system_override, kb_scope,
+        strict=strict_knowledge, options=deep_ai_options,
     )
-
-    if not hits:
-        return Answer(
-            question=question,
-            answer="知识库中暂无内容。请进入「知识库」页面上传文档，或点击「扫描投喂文件夹」导入文档后再提问。",
-            used_provider=embed_provider,
-            used_chunks=0,
-            trace=trace.to_list(),
-        )
-
-    chat_cfg = qa_cfg.get("chat_options", {})
+    chat_cfg = enhanced_ai.chat_options()
     with trace.stage("generation", "生成回答") as s:
         try:
             answer_text, chat_provider = client.chat(
@@ -946,7 +938,7 @@ async def ask_stream(
         mode: 检索模式 'basic' / 'deep' / 'ai' / 'deep_ai'（非法值回落 'ai'）
             - basic: 检索后直接返回片段列表，不调 LLM
             - deep: basic + 概念扩展 + 相邻片段合并，不调 LLM
-            - ai: LLM 流式作答（agentic 全量上下文）
+            - ai: 独立增强检索与资料预算，LLM 直接流式作答
             - deep_ai: AI 主动调用知识库工具，结合原文及明确标注的通用知识回答
     """
     if mode == "deep_ai":
@@ -1001,9 +993,16 @@ async def ask_stream(
     strategy = "agentic" if mode == "ai" else mode
 
     # 启动 pipeline 线程
-    pipeline_task = asyncio.create_task(
-        asyncio.to_thread(_run_pipeline, question, top_k, history, trace, None, kb_scope, strategy)
-    )
+    if mode == "ai":
+        from src.qa import enhanced_ai
+        pipeline_task = asyncio.create_task(asyncio.to_thread(
+            enhanced_ai.prepare, question, top_k, history, trace, None, kb_scope,
+            strict=strict_knowledge, options=deep_ai_options,
+        ))
+    else:
+        pipeline_task = asyncio.create_task(
+            asyncio.to_thread(_run_pipeline, question, top_k, history, trace, None, kb_scope, strategy)
+        )
 
     # Retrieve late worker exceptions even if the SSE consumer has disconnected.
     def settle_pipeline(task):
@@ -1082,26 +1081,12 @@ async def ask_stream(
         }
         return
 
-    if not hits:
-        yield {
-            "type": "done",
-            "data": {
-                "answer": "知识库中暂无内容。请进入「知识库」页面上传文档，或点击「扫描投喂文件夹」导入文档后再提问。",
-                "trace": trace.to_list(),
-                "sources": [],
-                "used_provider": embed_provider,
-                "used_chunks": 0,
-                "mode": "ai",
-            },
-        }
-        return
-
     # 提前发 sources（让用户在生成前就看到匹配数）
     sources = _hits_to_sources(hits)
     yield {"type": "sources", "data": sources}
 
     # 流式生成
-    chat_cfg = qa_cfg.get("chat_options", {})
+    chat_cfg = enhanced_ai.chat_options()
     full_answer_parts: list[str] = []
     used_provider = embed_provider
     gen_t0 = time.perf_counter()

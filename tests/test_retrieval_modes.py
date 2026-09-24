@@ -208,7 +208,7 @@ def test_search_modes_never_call_llm(monkeypatch, mode):
     assert done["used_provider"] == "local-bge"
 
 
-def test_ai_mode_maps_to_agentic_and_streams(monkeypatch):
+def test_ai_mode_uses_isolated_pipeline_and_streams(monkeypatch):
     class _StreamingClient(_FakeLLMClient):
         async def chat_stream(self, messages, **k):
             yield "你好", "fake-provider"
@@ -216,9 +216,11 @@ def test_ai_mode_maps_to_agentic_and_streams(monkeypatch):
     monkeypatch.setattr(rag.llm_client, "get_client", lambda: _StreamingClient())
     pipeline = _patch_pipeline(monkeypatch, _fake_hits())
 
+    from src.qa import enhanced_ai
+    monkeypatch.setattr(enhanced_ai, 'prepare', lambda *a, **k: ([{'role': 'user', 'content': 'question'}], _fake_hits(), 'local-bge'))
     events = _collect("weird-mode")  # 非法值回落 ai
 
-    assert pipeline.last_strategy == "agentic"
+    assert pipeline.last_strategy is None
     types = [e["type"] for e in events]
     assert "results" not in types
     assert "sources" in types and "token" in types

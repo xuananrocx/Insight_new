@@ -186,7 +186,14 @@ ingest:
     segment_chars: 30000
 qa:
   top_k: 5
-  # 普通/深度检索支持按业务配置术语别名；旧 AI 增强继续使用原检索流程。
+  # 独立增强 AI 配置，不影响 deep_ai 或共享工具的默认行为。
+  enhanced_ai:
+    max_tokens: 4096
+    evidence_tokens: 12000
+    rerank_enabled: false  # 增强 AI 默认不运行本地重排；深度 AI 不受影响
+    rerank_candidates: 16
+    rerank_seconds: 8  # 批次间软预算；不能中断正在执行的本地推理
+  # 普通/深度检索支持按业务配置术语别名；增强 AI 复用检索能力，并独立控制资料组织。
   retrieval:
     aliases: {}
     rerank_candidates: 24

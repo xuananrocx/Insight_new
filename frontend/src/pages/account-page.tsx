@@ -88,7 +88,7 @@ export function AccountPage() {
   return <div className="mx-auto max-w-4xl space-y-5 p-6 md:p-8"><div className="flex flex-wrap items-center justify-between gap-3"><div><h1 className="text-2xl font-semibold">设置</h1><p className="mt-1 text-sm text-muted-foreground">{user.username} · {user.roles.filter(r => r.enabled).map(r => r.name).join('、') || '无启用角色'}</p></div></div>
     <ProviderSettings />
     <PersonalPreferencesCard />
-    <Card className="space-y-3 p-5"><h2 className="font-semibold">深度AI</h2><p className="text-sm text-muted-foreground">深度AI 主动查阅知识库，按所选策略分析回答，需要 API 支持工具调用。策略自动保存，仅用于深度AI。</p><DeepAiOptionsFields />
+    <Card className="space-y-3 p-5"><h2 className="font-semibold">AI 回答设置</h2><p className="text-sm text-muted-foreground">AI约束策略适用于增强AI和深度AI。增强AI 一次检索后直接回答；深度AI 主动查阅知识库，需要 API 支持工具调用。下方查阅轮数与总时长设置仅用于深度AI。</p><DeepAiOptionsFields />
     </Card>
     <Card className="space-y-3 p-5"><h2 className="font-semibold">API 请求重试</h2>
       <div className="flex items-center justify-between gap-4 text-sm"><span>API 失败重试次数</span><OptionSelect aria-label="API 失败重试次数" value={String(apiRetryCount)} onValueChange={value => setApiRetryCount(Number(value))} options={Array.from({ length: 11 }, (_, value) => ({ value: String(value), label: value === 0 ? '不重试' : `${value} 次${value === 10 ? '（默认）' : ''}` }))} /></div>
