@@ -1,12 +1,15 @@
+import { MessageNavigation } from '@/components/message-navigation'
+import { useChatScroll } from '@/hooks/use-chat-scroll'
 import { kbLabel } from '@/lib/kb-label'
 import { SessionRename } from '@/components/session-rename'
 import { useDeepAiOptions } from '@/hooks/use-deep-ai-options'
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   ArrowUp,
+  ArrowDown,
   Zap,
   Library,
   Loader2,
@@ -330,6 +333,7 @@ export function ChatPage() {
       history = []
     }
 
+    scrollToBottom()
     setInput('')
     void handleAsk(q, sessionId, history.length > 0 ? history : undefined, mode).catch((error: unknown) => {
       toast.error(`发送失败：${error instanceof Error ? error.message : String(error)}`)
@@ -340,13 +344,7 @@ export function ChatPage() {
   const title = session ? session.title : '新对话'
   const turns = session?.turns ?? []
 
-  // 自动滚动到底部（新消息出现时）
-  const bottomRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (turns.length > 0) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-    }
-  }, [turns.length, turns[turns.length - 1]?.answer])
+  const { viewportRef, contentRef, showJump, scrollToBottom, jumpToTurn } = useChatScroll(ctx.activeId, turns.length > 0)
 
   // 空状态：保持原布局（标题 + 看板 + 输入框 + 示例问题）
   if (turns.length === 0) {
@@ -550,8 +548,10 @@ export function ChatPage() {
           </Button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto px-8 py-6">
-          <div className="mx-auto max-w-4xl space-y-5 pb-4">
+        <div className="relative min-h-0 flex-1">
+        <MessageNavigation key={ctx.activeId} turns={turns} viewportRef={viewportRef} contentRef={contentRef} onJump={jumpToTurn} />
+        <div ref={viewportRef} tabIndex={0} aria-label="会话消息" className={`h-full overflow-y-auto overscroll-contain pl-8 pr-[max(0px,calc(2rem-var(--chat-scrollbar-width,0px)))] pb-6 md:pt-6 [overflow-anchor:none] ${turns.length > 1 ? 'pt-12' : 'pt-6'}`}>
+          <div ref={contentRef} className="mx-auto max-w-4xl space-y-5 pb-4">
             {turns.map((turn) => {
               const turnSessionId = ctx.activeId
               const streamingTurnId = turnSessionId ? streamingMap[turnSessionId] : undefined
@@ -567,8 +567,12 @@ export function ChatPage() {
                 />
               )
             })}
-            <div ref={bottomRef} />
           </div>
+        </div>
+        {showJump && <Button type="button" variant="outline" size="sm" onClick={scrollToBottom}
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 gap-1.5 rounded-full bg-popover shadow-md">
+          <ArrowDown className="h-3.5 w-3.5" />回到底部
+        </Button>}
         </div>
 
         <div className="shrink-0 border-t border-white/10 px-8 py-3">
@@ -744,13 +748,13 @@ function TurnCard({ turn, onStop, searchResults }: { turn: ChatTurn; onStop?: ()
   }
 
   return (
-    <article className="min-w-0 space-y-1" aria-label="一轮问答">
-      <div className="min-w-0 rounded-t-xl rounded-b-none border bg-secondary/60 px-5 py-3">
+    <article data-turn-id={turn.id} className="min-w-0 space-y-1" aria-label="一轮问答">
+      <div className="chat-bubble min-w-0 rounded-t-xl rounded-b-none border bg-secondary/60 px-5 py-3">
         <span className="mb-1 block text-[10px] font-medium text-muted-foreground">你</span>
         <div className="min-w-0 flex-1 text-[13px] font-medium leading-relaxed [overflow-wrap:anywhere]">{turn.question}</div>
       </div>
 
-      <div className="min-w-0 rounded-t-none rounded-b-xl border bg-card/80 px-5 py-4">
+      <div className="chat-bubble min-w-0 rounded-t-none rounded-b-xl border bg-card/80 px-5 py-4">
         <span className="mb-2 block text-[10px] font-medium text-muted-foreground">{isSearchMode ? '基础检索' : turn.mode === 'deep_ai' ? '深度AI' : '增强AI'}</span>
         <div className="min-w-0 flex-1">
           {isStreaming || (showThinking && stages.length > 0 && !(isSearchMode && (turn.expansion || turn.mode === 'deep'))) ? (
@@ -797,7 +801,7 @@ function TurnCard({ turn, onStop, searchResults }: { turn: ChatTurn; onStop?: ()
           {!isSearchMode && showCitations && (
             <CitationSources sources={turn.sources ?? []} prefix={citationPrefix} selection={citationSelection} />
           )}
-          {!!turn.createdAt && <time dateTime={new Date(turn.createdAt).toISOString()} className="mt-3 block text-[10px] text-muted-foreground">提问于 {new Date(turn.createdAt).toLocaleString('zh-CN', { hour12: false })}</time>}
+          {!!turn.createdAt && <time dateTime={new Date(turn.createdAt).toISOString()} className="mt-3 block text-[10px] text-muted-foreground">{new Date(turn.createdAt).toLocaleString('zh-CN', { hour12: false })}</time>}
         </div>
       </div>
     </article>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, Files, Loader2, Sparkles, Square } from 'lucide-react'
 
 import type { ThinkingState } from '@/hooks/use-chat-sessions'
@@ -8,6 +8,15 @@ import { MarkdownContent } from './markdown-content'
 export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitations = true }: { thinking: ThinkingState; onStop?: () => void; showDetails?: boolean; showCitations?: boolean }) {
   const [elapsedMs, setElapsedMs] = useState(0)
   const [expanded, setExpanded] = useState(false)
+  const previousStatus = useRef(thinking.status)
+
+  useEffect(() => {
+    // Collapse once on successful completion; subsequent manual expansion stays open.
+    if (previousStatus.current === 'streaming' && thinking.status === 'done') {
+      setExpanded(false)
+    }
+    previousStatus.current = thinking.status
+  }, [thinking.status])
 
   useEffect(() => {
     if (thinking.status !== 'streaming') return

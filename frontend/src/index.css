@@ -258,8 +258,9 @@
     box-shadow: 0 8px 32px hsl(220 40% 30% / 0.15);
   }
 
-  /* Card 卡片毛玻璃 */
-  .theme-macos .bg-card {
+  /* Card 与消息气泡共用毛玻璃，统一跟随透明度设置。 */
+  .theme-macos .bg-card,
+  .theme-macos .chat-bubble {
     background-color: hsl(220 25% 28% / var(--glass-alpha));
     backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
     -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
