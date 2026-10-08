@@ -232,6 +232,10 @@ export function SettingsPage() {
 
   const switchMutation = useMutation({
     mutationFn: api.embedding.switch,
+    onError: (error: Error) => {
+      qc.invalidateQueries({ queryKey: ['embedding', 'status'] })
+      toast.error(`模型切换失败：${error.message}`)
+    },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['embedding', 'status'] })
       qc.invalidateQueries({ queryKey: ['kbs'] })

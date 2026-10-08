@@ -35,6 +35,9 @@ provider_snapshot: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     "provider_snapshot", default=None
 )
 enabled = False
+provider_binding_error: contextvars.ContextVar[tuple | None] = contextvars.ContextVar(
+    "provider_binding_error", default=None
+)
 passwords = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2)
 _dummy_hash = passwords.hash(secrets.token_urlsafe(32))
 COOKIE = "insight_session"
@@ -280,6 +283,8 @@ def resolve_provider(provider_id: str | None = None) -> dict:
 
     current = user()
     pid = provider_id if provider_id is not None else current["default_provider"]
+    if not pid and (error := provider_binding_error.get()) is not None:
+        raise HTTPException(error[0], error[1])
     if not pid:
         raise HTTPException(409, "请先选择个人 API 或已获授权的团队 API")
     found = rows("SELECT * FROM auth_providers WHERE id=? AND enabled=1", (pid,))
@@ -310,13 +315,15 @@ def provider_config(p: dict) -> dict:
 
 def bind_provider(provider_id: str | None = None, required: bool = True) -> None:
     """Freeze selection and configuration once; permission is still rechecked at use."""
+    provider_binding_error.set(None)
     try:
         p = resolve_provider(provider_id)
-    except HTTPException:
+    except HTTPException as exc:
         if required:
             raise
         selected_provider.set("")
         provider_snapshot.set(None)
+        provider_binding_error.set((exc.status_code, exc.detail))
         return
     selected_provider.set(p["id"])
     provider_snapshot.set(p)

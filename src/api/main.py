@@ -341,6 +341,9 @@ def embedding_switch(req: EmbeddingSwitchRequest) -> dict:
         return client.switch_embedding_model(req.model_name)
     except llm_client.EmbeddingBusyError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except Exception:
+        logger.exception("embedding 模型切换失败")
+        raise HTTPException(status_code=500, detail="模型切换失败，请检查模型文件是否完整及可访问；原模型保持可用。")
 
 
 @app.post("/api/v1/embedding/precheck")

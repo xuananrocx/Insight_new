@@ -19,6 +19,16 @@ class LLMError(Exception):
     """LLM 调用失败。"""
 
 
+class ChatText(str):
+    """String-compatible synchronous response with per-call diagnostics."""
+    def __new__(cls, text, *, usage=None, stop_reason=None, model=None):
+        value = super().__new__(cls, text)
+        value.usage = usage or {}
+        value.stop_reason = stop_reason
+        value.model = model
+        return value
+
+
 class BaseLLMProvider(ABC):
     """LLM Provider 抽象基类。"""
 
@@ -685,11 +695,15 @@ class AnthropicArchProvider(BaseLLMProvider):
                 err_body = resp.text[:500]
                 resp.raise_for_status()
             data = resp.json()
-            # 提取文本
-            for block in data.get("content", []):
-                if block.get("type") == "text":
-                    return block.get("text", "")
-            return ""
+            text = ''.join(block.get('text', '') for block in data.get('content', []) if block.get('type') == 'text')
+            reason = data.get('stop_reason')
+            logger.info("同步模型响应 provider=%s model=%s stop_reason=%s usage=%s text_chars=%s",
+                        self.name, data.get('model', self.chat_model), reason, data.get('usage'), len(text))
+            if not text.strip():
+                raise LLMError(f"模型返回空文本（stop_reason={reason}）")
+            if reason == 'max_tokens':
+                raise LLMError(f"模型输出达到 max_tokens={max_tokens} 上限，响应不完整")
+            return ChatText(text, usage=data.get('usage'), stop_reason=reason, model=data.get('model', self.chat_model))
         except Exception as e:
             raise LLMError(f"provider {self.name} chat 失败: {e}") from e
         finally:

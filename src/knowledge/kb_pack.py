@@ -27,6 +27,7 @@ from src.core import vector_store
 from src.core.config import settings
 from src.db import metadata_db
 from src.qa import bm25_index
+from src.knowledge.pack_validation import inspect_pack, portable_path
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,13 @@ def export_kb_to_zip(
 
     files = metadata_db.list_files(kb_id=kb_id, limit=100000)
     done_files = [f for f in files if f.get("status") == "done"]
+    from src.knowledge.reading_index import fingerprint
+    for file in done_files:
+        path = Path(file['absolute_path'])
+        if not path.is_file():
+            raise ValueError(f"原文件不存在，无法完整导出: {file['relative_path']}")
+        if file.get('content_hash') and fingerprint(path) != file['content_hash']:
+            raise ValueError(f"原文件已变化，请重新入库后导出: {file['relative_path']}")
     total_size = sum(f.get("file_size", 0) for f in done_files)
     total_chunks = sum(f.get("chunk_count", 0) for f in done_files)
     collection_name = kb["collection_name"]
@@ -174,7 +182,8 @@ def export_kb_to_zip(
             },
             "files": [
                 {
-                    "relative_path": f["relative_path"],
+                    "relative_path": portable_path(f["relative_path"]),
+                    "original_file_id": f["id"],
                     "file_size": f.get("file_size", 0),
                     "file_type": f.get("file_type", ""),
                     "content_hash": f.get("content_hash", ""),
@@ -184,6 +193,8 @@ def export_kb_to_zip(
                 for f in done_files
             ],
         }
+        from src.knowledge.pack_metadata import export_metadata
+        manifest['derived_metadata'] = export_metadata(kb_id, done_files)
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
         # 2. documents/
@@ -195,9 +206,8 @@ def export_kb_to_zip(
             })
             abs_path = Path(f["absolute_path"])
             if not abs_path.exists():
-                logger.warning(f"导出时文件不存在，跳过: {abs_path}")
-                continue
-            arcname = f"documents/{f['relative_path']}"
+                raise ValueError(f"导出时原文件消失: {abs_path}")
+            arcname = f"documents/{portable_path(f['relative_path'])}"
             zf.write(abs_path, arcname=arcname)
 
         # 3. vectors/chunks.jsonl - 流式写入（避免大 KB 撑爆内存）
@@ -244,6 +254,8 @@ def export_kb_to_zip(
             logger.exception(f"导出向量失败: {e}")
             raise
 
+    with zipfile.ZipFile(output_path) as check:
+        inspect_pack(check, '', manifest)
     progress and progress("done", {"output": str(output_path)})
     logger.info(f"exported KB {kb_id} to {output_path}")
     return output_path
@@ -272,6 +284,7 @@ def precheck_import(zip_path: Path) -> dict[str, Any]:
     with zipfile.ZipFile(zip_path, "r") as zf:
         prefix = _detect_zip_prefix(zf)  # 失败时抛 ValueError
         manifest = json.loads(zf.read(prefix + "manifest.json"))
+        _, _, actual_chunks = inspect_pack(zf, prefix, manifest)
     auto_normalized = bool(prefix)
 
     src_model = manifest["kb"].get("embedding_model")
@@ -311,8 +324,8 @@ def precheck_import(zip_path: Path) -> dict[str, Any]:
         "target_embedding_model": tgt_model,
         "target_embedding_dim": tgt_dim,
         "compatible": compatible,
-        "document_count": stats.get("document_count", 0),
-        "total_chunks": stats.get("total_chunks", 0),
+        "document_count": len(manifest['files']),
+        "total_chunks": actual_chunks,
         "is_name_duplicate": is_name_duplicate,
         "suggested_name": suggested_name,
         "auto_normalized": auto_normalized,
@@ -349,6 +362,7 @@ def import_kb_from_zip(
         prefix = _detect_zip_prefix(zf)  # 失败时抛 ValueError
         manifest = json.loads(zf.read(prefix + "manifest.json"))
         manifest_name = manifest["kb"]["name"]
+        archive_names, _, _ = inspect_pack(zf, prefix, manifest)
         kb_description = manifest["kb"].get("description", "")
 
         # 名称处理：用户传了 new_name 用之；未传且重名时自动加后缀
@@ -397,18 +411,16 @@ def import_kb_from_zip(
                 # P2-19: 流式读 zip（避免大文件爆内存）：zf.open 返回文件句柄，
                 # shutil.copyfileobj 64KB chunk 流式写到 target
                 try:
-                    src_fp = zf.open(arcname)
+                    src_fp = zf.open(archive_names[arcname])
                 except KeyError:
-                    logger.warning(f"pack 里缺少文件: {arcname}")
-                    continue
+                    raise ValueError(f"知识库包缺少原文档: {arcname}")
                 # ZIP Slip 防护：rel_path resolve 后必须仍在 kb_feed_subdir 内
                 from src.core.security import ensure_within_path, SecurityError
                 try:
                     target = ensure_within_path(Path(rel_path), kb_feed_subdir)
                 except SecurityError as e:
-                    logger.warning(f"跳过恶意路径 {rel_path}: {e}")
                     src_fp.close()
-                    continue
+                    raise
                 # 新 relative_path 加 kb_id 前缀，避免 ON CONFLICT(relative_path) 覆盖其他 KB 的同名文件
                 new_rel_path = f"{new_kb_id}/{rel_path}"
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -443,6 +455,9 @@ def import_kb_from_zip(
                 # 重建：用当前 embedding 模型重新 embed 文档
                 _rebuild_vectors_from_documents(new_kb_id, new_collection_name, manifest, progress)
 
+            from src.knowledge.pack_metadata import restore_metadata
+            restore_metadata(manifest, new_kb_id, file_id_map)
+
         except Exception as e:
             logger.exception(f"导入失败，开始清理: {e}")
             try:
@@ -452,6 +467,11 @@ def import_kb_from_zip(
             raise
 
     progress and progress("done", {"kb_id": new_kb_id})
+    from src.knowledge import index_tasks
+    try:
+        index_tasks.start(new_kb_id)
+    except Exception:
+        logger.exception("知识库已导入，阅读索引补建任务启动失败，可在文档索引中手动重试")
     logger.info(f"imported KB: {new_kb_id} ({kb_name})")
     return new_kb_id
 
@@ -471,10 +491,7 @@ def _import_vectors_from_pack(
     zip_prefix: ZIP 内 manifest.json 所在的目录前缀（兼容嵌套 ZIP）
     """
     # 建立 relative_path → 新 file_id 映射，以及 chunk_id → relative_path 映射
-    chunk_id_to_rel: dict[str, str] = {}
-    for f_info in new_kb_id_to_files:
-        for cid in f_info.get("chunk_ids", []):
-            chunk_id_to_rel[cid] = f_info["relative_path"]
+    _, chunk_id_to_rel, _ = inspect_pack(zf, zip_prefix, {'kb': {}, 'files': new_kb_id_to_files})
     # file_id → chunk_ids 累加
     file_chunks: dict[int, list[str]] = {}
     for rel_path, fid in file_id_map.items():
@@ -498,15 +515,13 @@ def _import_vectors_from_pack(
             # BM25 IDs are global: importing the same pack into a private KB must
             # not overwrite the original owner's index records.
             import hashlib
-            meta['source_path'] = f"{new_kb_id}/{meta.get('source_path', rel or original_id)}"
-            if meta.get('content_hash') and isinstance(meta.get('chunk_index'), int):
-                cid = vector_store.make_chunk_id(meta['source_path'], str(meta['content_hash']), meta['chunk_index'])
-            else:
-                cid = hashlib.sha256(f'{new_kb_id}:{original_id}'.encode()).hexdigest()
+            meta['source_path'] = f"{new_kb_id}/{rel}"
+            cid = hashlib.sha256(f'{new_kb_id}:{original_id}'.encode()).hexdigest()
             meta.pop('file_id', None)
             if rel and rel in file_id_map:
                 meta["file_id"] = file_id_map[rel]
-                file_chunks[file_id_map[rel]].append(cid)
+                if meta.get('chunk_type') != 'summary':
+                    file_chunks[file_id_map[rel]].append(cid)
             batch.append({
                 "id": cid,
                 "text": chunk["text"],
@@ -515,19 +530,13 @@ def _import_vectors_from_pack(
             })
             if len(batch) >= batch_size:
                 vector_store.upsert_chunks(batch, collection_name=collection_name)
-                try:
-                    bm25_index.add_chunks(batch)
-                except Exception as e:
-                    logger.warning(f"BM25 索引更新失败: {e}")
+                bm25_index.add_chunks(batch)
                 total += len(batch)
                 progress and progress("importing_vectors", {"current": total})
                 batch = []
         if batch:
             vector_store.upsert_chunks(batch, collection_name=collection_name)
-            try:
-                bm25_index.add_chunks(batch)
-            except Exception as e:
-                logger.warning(f"BM25 索引更新失败: {e}")
+            bm25_index.add_chunks(batch)
             total += len(batch)
             progress and progress("importing_vectors", {"current": total})
 
@@ -593,6 +602,12 @@ def cleanup_partial_import(kb_id: str, collection_name: str) -> None:
         all_chunk_ids = []
 
     # 2. 删 document_meta + concept_relations + kb_concepts + knowledge_files
+    from src.qa import lexical_store
+    try:
+        with lexical_store.connection() as conn:
+            all_chunk_ids.extend(row[0] for row in conn.execute('SELECT id FROM chunks WHERE kb=?', (kb_id,)))
+    except Exception:
+        logger.exception("读取导入失败知识库的关键词索引失败")
     try:
         with metadata_db.get_cursor() as cur:
             cur.execute("DELETE FROM document_meta WHERE kb_id=?", (kb_id,))

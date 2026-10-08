@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from contextlib import aclosing
 import threading
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 
@@ -201,8 +202,14 @@ class _LocalEmbedding:
                 return True
             was_cached = self._cache_size > 0 and model_name in self._cache
             logger.info(f"切换 embedding 模型: {self.model_name} → {model_name} ({'缓存命中' if was_cached else '首次加载'})")
-            self.model_name = model_name
-            self._load()
+            with self._lock:
+                old_name, old_model, old_dim = self.model_name, self._model, self._dimensions
+                try:
+                    self.model_name = model_name
+                    self._load()
+                except Exception:
+                    self.model_name, self._model, self._dimensions = old_name, old_model, old_dim
+                    raise
             return True
         finally:
             self._load_lock.release()
@@ -402,8 +409,13 @@ class LLMClient:
     def _save_local_model_to_config(self, model_name: str) -> None:
         """写回用户目录 config.yaml 的 llm.embedding.local_model 字段。"""
         import yaml
-        from src.core.config import USER_CONFIG_PATH
+        from src.core.config import USER_CONFIG_PATH, USER_CONFIG_LOCAL_PATH
         config_path = USER_CONFIG_PATH
+        # Persist into the effective layer if a deployment override owns this key.
+        if USER_CONFIG_LOCAL_PATH.exists():
+            local = yaml.safe_load(USER_CONFIG_LOCAL_PATH.read_text(encoding="utf-8")) or {}
+            if "local_model" in local.get("llm", {}).get("embedding", {}):
+                config_path = USER_CONFIG_LOCAL_PATH
         if not config_path.exists():
             return
         with open(config_path, encoding="utf-8") as f:
@@ -411,8 +423,15 @@ class LLMClient:
         emb = raw.get("llm", {}).get("embedding", {})
         emb["local_model"] = model_name
         raw.setdefault("llm", {})["embedding"] = emb
-        with open(config_path, "w", encoding="utf-8") as f:
-            yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+        import os
+        import tempfile
+        fd, temporary = tempfile.mkstemp(dir=config_path.parent, prefix=".embedding-", suffix=".yaml")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False)
+            os.replace(temporary, config_path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
     def get_embedding_status(self) -> dict[str, Any]:
         """返回当前 embedding 状态。
@@ -514,9 +533,13 @@ class LLMClient:
                     p = self._providers[name]
                     if not p.usable:
                         continue
-                    answer = p.chat(messages, **kwargs)
                     used_provider = name
-                    used_model = getattr(p, "model_name", None)
+                    used_model = getattr(p, "chat_model", None)
+                    answer = p.chat(messages, **kwargs)
+                    if not answer or not answer.strip():
+                        raise LLMError("模型返回空文本")
+                    used_model = getattr(answer, "model", None) or used_model
+                    usage = getattr(answer, "usage", {})
                     # 成功 → 记日志
                     _log_call(
                         provider=name,
@@ -527,6 +550,8 @@ class LLMClient:
                         system_prompt=system_prompt,
                         duration_ms=int((_time.time() - start) * 1000),
                         success=True,
+                        token_input=usage.get('input_tokens'),
+                        token_output=usage.get('output_tokens'),
                         **(log_meta or {}),
                     )
                     return answer, name
@@ -598,7 +623,7 @@ class LLMClient:
                         async for token in stream:
                             if first:
                                 used_provider = name
-                                used_model = getattr(p, "model_name", None)
+                                used_model = getattr(p, "chat_model", None)
                             collected_tokens.append(token)
                             yield token, (name if first else "")
                             first = False

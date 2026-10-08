@@ -1,4 +1,5 @@
 import { ManagementDialog } from '@/components/management-dialog'
+import { createUuid } from '@/lib/uuid'
 import { MessageNavigation } from '@/components/message-navigation'
 import { useChatScroll } from '@/hooks/use-chat-scroll'
 import { kbLabel } from '@/lib/kb-label'
@@ -149,7 +150,7 @@ export function ChatPage() {
     mode: RetrievalMode,
   ) {
     const providerId = providersData?.current_provider
-    const turnId = crypto.randomUUID()
+    const turnId = createUuid()
     const turn: ChatTurn = {
       id: turnId,
       question,

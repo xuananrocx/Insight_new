@@ -525,9 +525,8 @@ def test_importing_same_pack_preserves_private_index_ids(env, monkeypatch, tmp_p
     assert recorded[1]["metadata"]["kb_id"] == right
     assert recorded[0]["metadata"]["file_id"] != recorded[1]["metadata"]["file_id"]
     for item in recorded:
-        assert item["id"] == vector_store.make_chunk_id(
-            item["metadata"]["source_path"], "hash", 0
-        )
+        import hashlib
+        assert item["id"] == hashlib.sha256(f"{item['metadata']['kb_id']}:original".encode()).hexdigest()
 
 
 def test_personal_preferences_api_and_context_owner_boundary(env, monkeypatch):

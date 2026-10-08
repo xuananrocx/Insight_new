@@ -91,6 +91,8 @@ def log_call(
     session_id: str | None = None,
     turn_id: str | None = None,
     kb_id: str | None = None,
+    token_input: int | None = None,
+    token_output: int | None = None,
 ) -> None:
     """记录一次 AI 调用（异步，不阻塞）。
 
@@ -121,6 +123,8 @@ def log_call(
             "duration_ms": duration_ms,
             "success": success,
             "error_message": error_message,
+            "token_input": token_input,
+            "token_output": token_output,
         }
         if _should_log_field("response"):
             log_data["response_text"] = response_text

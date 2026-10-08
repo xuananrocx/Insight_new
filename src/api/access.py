@@ -56,6 +56,7 @@ class AuthenticationMiddleware:
         provider_token = a.selected_provider.set(None)
         kb_token = a.active_kb.set(None)
         snapshot_token = a.provider_snapshot.set(None)
+        binding_token = a.provider_binding_error.set(None)
 
         async def secure_send(message):
             if message["type"] == "http.response.start":
@@ -81,6 +82,7 @@ class AuthenticationMiddleware:
             a.selected_provider.reset(provider_token)
             a.active_kb.reset(kb_token)
             a.provider_snapshot.reset(snapshot_token)
+            a.provider_binding_error.reset(binding_token)
 
 
 async def authorize(request: Request):
