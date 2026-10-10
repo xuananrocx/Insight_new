@@ -16,7 +16,8 @@ def test_mode_survives_update_export_import(mode):
     imported = None
     metadata_db.create_session(sid, "模式测试", 1000, 1000, retrieval_mode=mode)
     try:
-        assert routes_qa._resolve_mode(routes_qa.AskRequest(question="q", session_id=sid)) == mode
+        # dbcf1cb 检索模式精简：未指定 mode 的旧 deep 会话提问按 basic 执行
+        assert routes_qa._resolve_mode(routes_qa.AskRequest(question="q", session_id=sid)) == ("basic" if mode == "deep" else mode)
         assert routes_qa._resolve_mode(routes_qa.AskRequest(question="q", session_id=sid, mode="basic")) == "basic"
         routes_sessions.add_turn(sid, routes_sessions.AddTurnRequest(
             id="t1", question="q", answer="a", created_at=1000, mode=mode,
