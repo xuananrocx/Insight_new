@@ -18,7 +18,8 @@ from src.api.routes_sessions import _trim_sources
 @pytest.fixture
 def knowledge(monkeypatch):
     monkeypatch.setattr(accounts, 'enabled', False)
-    monkeypatch.setattr(settings, '_config', {'qa': {'deep_ai': {'semantic_verification_enabled': False}}})
+    # 保留 paths 段：_paths_cache 冷启动（单文件跑）时 get_path 仍需从 _config 解析
+    monkeypatch.setattr(settings, '_config', {'paths': dict(settings._config.get('paths', {})), 'qa': {'deep_ai': {'semantic_verification_enabled': False}}})
     files = [dict(id=1, relative_path='adt/install.md', content_hash='v1', status='done',
                   file_type='md', chunk_ids_json='["a", "b"]')]
     chunks = {
