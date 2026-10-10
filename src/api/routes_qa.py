@@ -380,11 +380,11 @@ class SummarizeTitleResponse(BaseModel):
 
 @router.post("/summarize-title", response_model=SummarizeTitleResponse)
 def summarize_title_endpoint(req: SummarizeTitleRequest) -> SummarizeTitleResponse:
-    """根据问答对生成 4-8 字会话标题。失败时回退到问题前 16 字。"""
+    """根据问答对生成简短会话标题。失败时回退到问题前 16 字。"""
     prompt = (
-        "请把下面的问答对总结成一个 4-8 个字的中文短标题，要求：\n"
-        "1. 概括问题主题，不要包含「问答」「对话」这类词\n"
-        "2. 不要标点符号结尾\n"
+        "请把下面的问答对总结成一个简短的中文标题，要求：\n"
+        "1. 概括问题主题和关键对象，长度通常 10-20 字，简洁自然即可\n"
+        "2. 不要包含「问答」「对话」这类词，不要标点符号结尾\n"
         "3. 直接输出标题，不要解释\n\n"
         f"问题：{req.question}\n"
         f"回答（前 500 字）：{req.answer[:500]}\n\n"
@@ -396,7 +396,7 @@ def summarize_title_endpoint(req: SummarizeTitleRequest) -> SummarizeTitleRespon
         title, _ = client.chat(
             [{"role": "user", "content": prompt}],
             temperature=chat_cfg.get("temperature", 0.2),
-            max_tokens=30,
+            max_tokens=1024,
             scene="title",
             log_meta={"session_id": req.session_id},
         )
@@ -406,4 +406,4 @@ def summarize_title_endpoint(req: SummarizeTitleRequest) -> SummarizeTitleRespon
     title = title.strip().strip("\"'""''「」【】").replace("\n", " ")
     if not title:
         title = req.question[:16]
-    return SummarizeTitleResponse(title=title[:30])
+    return SummarizeTitleResponse(title=title[:80])
