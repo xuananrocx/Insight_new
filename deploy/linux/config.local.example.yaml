@@ -1,0 +1,10 @@
+llm:
+  embedding:
+    local_model: BAAI/bge-large-zh-v1.5
+    device: cpu
+qa:
+  rerank:
+    model_name: /models/reranker-torch
+    backend: torch
+paths:
+  feed_folder: /data/feeds

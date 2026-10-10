@@ -1,0 +1,68 @@
+services:
+  app:
+    image: ${APP_IMAGE:?Set APP_IMAGE}
+    pull_policy: never
+    restart: unless-stopped
+    user: ${APP_UID:?Set APP_UID}:${APP_GID:?Set APP_GID}
+    init: true
+    environment:
+      AMD_DATA_DIR: /data
+      HF_HOME: /models/huggingface
+      HF_HUB_OFFLINE: '1'
+      TRANSFORMERS_OFFLINE: '1'
+      TIKTOKEN_CACHE_DIR: /models/tiktoken
+      OMP_NUM_THREADS: ${MODEL_THREADS:-2}
+      MKL_NUM_THREADS: ${MODEL_THREADS:-2}
+      OPENBLAS_NUM_THREADS: ${MODEL_THREADS:-2}
+      TOKENIZERS_PARALLELISM: 'false'
+      ANONYMIZED_TELEMETRY: 'False'
+    command: [python, -m, uvicorn, src.api.main:app, --host, 0.0.0.0, --port, '8888', --workers, '1', --proxy-headers, --forwarded-allow-ips, '${WEB_IP:?Set WEB_IP}']
+    volumes:
+      - ${DATA_DIR:?Set DATA_DIR}:/data
+      - ${MODELS_DIR:?Set MODELS_DIR}:/models:ro
+    mem_limit: ${APP_MEMORY:-6g}
+    memswap_limit: ${APP_MEMORY_SWAP:-6g}
+    cpus: ${APP_CPUS:-3}
+    pids_limit: 512
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8888/health', timeout=5)"]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+      start_period: 60s
+    networks: [insight]
+    logging:
+      driver: json-file
+      options: {max-size: 20m, max-file: '3'}
+  web:
+    image: ${WEB_IMAGE:?Set WEB_IMAGE}
+    pull_policy: never
+    restart: unless-stopped
+    user: ${APP_UID}:${APP_GID}
+    entrypoint: [nginx]
+    command: [-e, stderr, -g, 'daemon off;']
+    read_only: true
+    tmpfs: ['/tmp:size=64m,mode=1777']
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - '${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8088}:8088'
+    depends_on:
+      app: {condition: service_healthy}
+    mem_limit: 128m
+    pids_limit: 64
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks:
+      insight:
+        ipv4_address: ${WEB_IP}
+    logging:
+      driver: json-file
+      options: {max-size: 20m, max-file: '3'}
+networks:
+  insight:
+    ipam:
+      config:
+        - subnet: ${NETWORK_SUBNET:?Choose a non-overlapping subnet}

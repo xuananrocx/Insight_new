@@ -8,11 +8,17 @@
 
 ; APPVERSION 由 makensis -DAPPVERSION=... 传入，确保与代码版本一致
 !ifndef APPVERSION
-  !define APPVERSION "0.0.0"
+  !error "Pass the canonical APPVERSION explicitly"
+!endif
+!ifndef APPDIST
+  !define APPDIST "dist\Insight"
+!endif
+!ifndef OUTFILE
+  !define OUTFILE "Insight-Windows.exe"
 !endif
 
 Name "Insight ${APPVERSION}"
-OutFile "Insight-Windows.exe"
+OutFile "${OUTFILE}"
 Unicode true
 InstallDir "$PROGRAMFILES64\Insight"
 InstallDirRegKey HKLM "Software\Insight" "InstallDir"
@@ -40,7 +46,7 @@ Section "Install" SecInstall
 
   SetOutPath "$INSTDIR"
   ; 递归拷贝 onedir 产物（Insight.exe + _internal/ 等全部依赖）
-  File /r "dist\Insight\*.*"
+  File /r "${APPDIST}\*.*"
 
   ; 注册到「控制面板 → 程序与功能」（可卸载）
   WriteRegStr HKLM "Software\Insight" "InstallDir" "$INSTDIR"

@@ -1,0 +1,16 @@
+{
+  "project": "insight",
+  "app_uid": 1000,
+  "app_gid": 1000,
+  "data_dir": "/srv/insight/data",
+  "models_dir": "/srv/insight/models",
+  "backup_dir": "/srv/insight/backups",
+  "bind_address": "0.0.0.0",
+  "http_port": 8088,
+  "network_subnet": "REPLACE_WITH_VERIFIED_FREE_SUBNET",
+  "web_ip": "REPLACE_WITH_ADDRESS_IN_SUBNET",
+  "app_memory": "6g",
+  "app_memory_swap": "6g",
+  "app_cpus": 3,
+  "model_threads": 2
+}

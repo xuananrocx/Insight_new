@@ -10,6 +10,7 @@
 """
 import os
 import sys
+import plistlib
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 block_cipher = None
@@ -122,6 +123,8 @@ _common_exe_kwargs = dict(
 )
 
 if sys.platform == 'darwin':
+    with open(os.path.join(_project_root, 'build', 'Info.plist'), 'rb') as plist_file:
+        bundle_metadata = plistlib.load(plist_file)
     # macOS：onedir 模式 + .app 结构
     # EXE 只含入口脚本，不含 binaries/datas（这些放到 COLLECT 里）
     exe = EXE(
@@ -149,7 +152,7 @@ if sys.platform == 'darwin':
         name='Insight.app',
         icon=None,
         bundle_identifier='com.insight.app',
-        info_plist=os.path.join(_project_root, 'build', 'Info.plist'),
+        info_plist=bundle_metadata,
     )
 else:
     # Windows：onedir 模式（生成 dist/Insight/ 文件夹，再用 NSIS 打成安装包）

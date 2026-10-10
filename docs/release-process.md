@@ -75,4 +75,13 @@
 - .gitattributes 已生效，规范化没有改变 Git 中的源码内容；规则单独提交。
 - src/__init__.py 的 __version__ 是权威版本；前端构建读取它，package.json 和 Info.plist 作为受检查的镜像字段。
 - 构建前运行 `python scripts/check_release.py`，只检查、不自动改版本。
-- 第 3、4、5 阶段尚待实施；历史工作流尚未完成发布约束改造，暂勿触发旧标签发布流程。
+- 第 3 阶段实现见 `deploy/linux/README.md`，本地验证见 `deploy/linux/VALIDATION.md`。
+
+## 第 4 阶段：可选择平台的候选构建
+
+- 操作说明见 [按平台构建候选包](selective-build.md)。手动选择 Windows/macOS/Linux，绑定完整提交 SHA；统一脚本拒绝脏工作区和可变镜像标签。
+- 删除独立 Windows 自动发布流程；主流程不再响应标签推送、不创建 Release、不覆盖附件。PR 仅运行构建工具检查。
+- 产物记录版本、完整提交、依赖、镜像和 SHA256；汇总明确区分未选择、失败与成功，验收状态保持待验收。
+- 已通过本地 8 项构建工具测试、版本/换行检查、Python lint、Git 差异检查和 actionlint 工作流检查。macOS ARM64 runner 标签已对照官方 runner-images 清单核实。
+- 尚未实际运行新版 GitHub 三平台打包。Linux 托管构建需要先提供固定镜像和模型下载材料，详见操作说明；当前源码修改也尚未提交推送。
+- 第 5 阶段仍需选定固定提交并实际构建、安装验收及演练升级/回退，最后确认发布与部署；不能把本阶段的工具检查当成安装包验收。

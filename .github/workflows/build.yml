@@ -1,174 +1,166 @@
-name: Build Insight
-
-# 触发：手动 + 推 v* tag（如 v0.1.1）+ PR 到 main
+name: Build selected platforms
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
-  pull_request:
-    branches: [ main ]
-
+    inputs:
+      source_sha:
+        description: Full 40-character source commit SHA
+        required: true
+        type: string
+      windows:
+        description: Windows x64 installer
+        type: boolean
+        default: false
+      macos:
+        description: macOS ARM64 disk image
+        type: boolean
+        default: false
+      linux:
+        description: Linux AMD64 deployment bundle
+        type: boolean
+        default: false
+      linux_package:
+        description: Linux bundle kind
+        type: choice
+        options: [upgrade, full]
+        default: upgrade
+permissions:
+  contents: read
 jobs:
-  build-macos:
-    name: Build (macOS arm64)
-    runs-on: macos-latest
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+      sha: ${{ steps.select.outputs.sha }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-          cache: 'pip'
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 11
-
-      - name: Install frontend deps
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        working-directory: frontend
-        run: pnpm run build
-
-      - name: Install Python deps
+      - id: select
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          WINDOWS: ${{ inputs.windows }}
+          MACOS: ${{ inputs.macos }}
+          LINUX: ${{ inputs.linux }}
+          INSIGHT_RUNTIME_IMAGE: ${{ vars.INSIGHT_RUNTIME_IMAGE }}
+          INSIGHT_WEB_IMAGE: ${{ vars.INSIGHT_WEB_IMAGE }}
+          INSIGHT_MODELS_URL: ${{ secrets.INSIGHT_MODELS_URL }}
+          INSIGHT_MODELS_SHA256: ${{ vars.INSIGHT_MODELS_SHA256 }}
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Read version
-        id: ver
-        shell: bash
-        run: |
-          v=$(python -c "from src import __version__; print(__version__)")
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-          echo "Detected version: $v"
-
-      - name: Build app (PyInstaller)
-        run: pyinstaller build/insight.spec --noconfirm
-
-      - name: Package macOS .dmg
-        run: |
-          V="${{ steps.ver.outputs.version }}"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $V" dist/Insight.app/Contents/Info.plist
-          /usr/libexec/PlistBuddy -c "Delete :CFBundleVersion" dist/Insight.app/Contents/Info.plist 2>/dev/null || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1" dist/Insight.app/Contents/Info.plist
-          codesign --force --deep --sign - dist/Insight.app
-          rm -rf dmg-staging && mkdir dmg-staging
-          ditto dist/Insight.app dmg-staging/Insight.app
-          ln -s /Applications dmg-staging/Applications
-          hdiutil create -volname "Insight" -srcfolder dmg-staging -ov -format UDZO Insight-macOS.dmg
-          ls -lh Insight-macOS.dmg
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+          python3 - <<'PY'
+          import json, os, re
+          env = os.environ
+          sha = env['SOURCE_SHA']
+          if not re.fullmatch('[0-9a-f]{40}', sha):
+              raise SystemExit('Provide a full lowercase commit SHA')
+          runners = {'windows': 'windows-2022', 'macos': 'macos-15', 'linux': 'ubuntu-24.04'}
+          selected = [{'platform': p, 'runner': r} for p, r in runners.items() if env[p.upper()] == 'true']
+          if not selected:
+              raise SystemExit('Select at least one platform')
+          if env['LINUX'] == 'true':
+              for key in ('INSIGHT_RUNTIME_IMAGE', 'INSIGHT_WEB_IMAGE'):
+                  if not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', env[key]):
+                      raise SystemExit('Configure a digest-pinned registry image: ' + key)
+              if not env['INSIGHT_MODELS_URL'].startswith('https://') or not re.fullmatch('[0-9a-f]{64}', env['INSIGHT_MODELS_SHA256']):
+                  raise SystemExit('Configure HTTPS model archive secret and SHA256 variable')
+          with open(env['GITHUB_OUTPUT'], 'a') as f:
+              f.write('matrix=' + json.dumps({'include': selected}) + '\nsha=' + sha + '\n')
+          PY
+      - uses: actions/checkout@v4
         with:
-          name: Insight-macOS.dmg
-          path: Insight-macOS.dmg
-          retention-days: 30
-
-  build-windows:
-    name: Build (Windows x64)
-    runs-on: windows-latest
-    continue-on-error: true   # Windows NSIS 不稳定，失败不阻塞 macOS 发布
+          ref: ${{ inputs.source_sha }}
+          persist-credentials: false
+      - run: python3 scripts/check_release.py
+  build:
+    needs: prepare
     env:
-      PYTHONUTF8: '1'   # 强制 UTF-8，防止 spec 里非 ASCII 字符在 Windows cp1252 控制台触发 UnicodeEncodeError
+      PYTHONUTF8: '1'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: 'pip'
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '22'
-
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v4
         with:
-          version: 11
-
-      - name: Install frontend deps
-        working-directory: frontend
-        run: pnpm install --frozen-lockfile
-
-      - name: Build frontend
-        working-directory: frontend
-        run: pnpm run build
-
-      - name: Install Python deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller
-
-      - name: Read version
-        id: ver
-        shell: bash
-        run: |
-          v=$(python -c "from src import __version__; print(__version__)")
-          echo "version=$v" >> "$GITHUB_OUTPUT"
-
-      - name: Build app (PyInstaller)
-        run: pyinstaller build/insight.spec --noconfirm
-
+          version: '11'
+      - name: Install desktop build dependencies
+        if: matrix.platform != 'linux'
+        run: python -m pip install -r requirements.txt pyinstaller==6.16.0 numpy==1.26.4 transformers==4.46.3 posthog==3.25.0
       - name: Install NSIS
-        shell: bash
+        if: matrix.platform == 'windows'
+        shell: pwsh
         run: |
-          curl -L -o nsis-setup.exe "https://sourceforge.net/projects/nsis/files/NSIS%203/3.10/nsis-3.10-setup.exe/download"
-          "./nsis-setup.exe" //S //D=C:\\NSIS
-          ls -la C:\\NSIS\\makensis.exe
-          echo "C:\\NSIS" >> "$GITHUB_PATH"
-
-      - name: Package Windows installer
+          choco install nsis --version=3.10 -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "${env:ProgramFiles(x86)}\NSIS" >> $env:GITHUB_PATH
+      - name: Build candidate
         shell: bash
-        run: |
-          "C:\\NSIS\\makensis.exe" -DAPPVERSION="${{ steps.ver.outputs.version }}" build/insight.nsi
-          ls -lh Insight-Windows.exe
-
-      - name: Upload artifact
-        if: always()
-        uses: actions/upload-artifact@v4
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+          LINUX_PACKAGE: ${{ inputs.linux_package }}
+          INSIGHT_RUNTIME_IMAGE: ${{ vars.INSIGHT_RUNTIME_IMAGE }}
+          INSIGHT_WEB_IMAGE: ${{ vars.INSIGHT_WEB_IMAGE }}
+          INSIGHT_MODELS_URL: ${{ secrets.INSIGHT_MODELS_URL }}
+          INSIGHT_MODELS_SHA256: ${{ vars.INSIGHT_MODELS_SHA256 }}
+        run: python scripts/release_build.py --platform "$TARGET_PLATFORM" --revision "$SOURCE_SHA" --linux-package "$LINUX_PACKAGE" --work "$RUNNER_TEMP/insight-work" --output "$RUNNER_TEMP/insight-output"
+      - uses: actions/upload-artifact@v4
         with:
-          name: Insight-Windows.exe
-          path: Insight-Windows.exe
+          name: candidate-${{ matrix.platform }}-${{ needs.prepare.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/insight-output/
+          if-no-files-found: error
+          compression-level: 0
           retention-days: 30
-
-  # 发布 job：只等 macOS 成功就发布（Windows continue-on-error，失败也不阻塞）
-  release:
-    name: Publish Release
-    needs: build-macos
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
+      - name: Record platform result
+        if: always()
+        shell: bash
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+          BUILD_RESULT: ${{ job.status }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+          env = os.environ
+          folder = pathlib.Path(env['RUNNER_TEMP']) / 'platform-result'
+          folder.mkdir(exist_ok=True)
+          (folder / (env['TARGET_PLATFORM'] + '.json')).write_text(json.dumps(dict(platform=env['TARGET_PLATFORM'], revision=env['SOURCE_SHA'], result=env['BUILD_RESULT'])), encoding='utf-8')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: result-${{ matrix.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/platform-result/
+          if-no-files-found: error
+  summary:
+    if: always() && needs.prepare.result == 'success'
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
     steps:
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@v4
         with:
-          name: Insight-macOS.dmg
-          path: release-assets
-
-      - name: Publish to Release
-        uses: softprops/action-gh-release@v2
+          ref: ${{ needs.prepare.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
-          files: |
-            release-assets/Insight-macOS.dmg
-          draft: false
-          generate_release_notes: true
+          pattern: result-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/platform-results
+      - name: Summarize selected platforms
+        env:
+          SELECTED_MATRIX: ${{ needs.prepare.outputs.matrix }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: python3 scripts/release_summary.py --results "$RUNNER_TEMP/platform-results" --output "$RUNNER_TEMP/release-summary.json"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: release-summary-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-summary.json
+          if-no-files-found: error

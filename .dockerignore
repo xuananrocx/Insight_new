@@ -1,0 +1,13 @@
+**
+!src/
+!src/**
+!config.yaml
+!requirements.txt
+!frontend/
+!frontend/dist/
+!frontend/dist/**
+!deploy/
+!deploy/linux/
+!deploy/linux/Dockerfile
+**/__pycache__/
+**/*.pyc
