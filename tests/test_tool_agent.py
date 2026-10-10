@@ -733,7 +733,7 @@ async def test_all_five_tools_through_agent_and_log_failure_is_nonfatal(knowledg
     events = [e async for e in tool_agent.ask_stream('q', [], 'kb')]
     assert events[-1]['type'] == 'done' and model.closed
     assert events[-1]['data']['outcome'] == 'success'
-    counts = [e['data']['count'] for e in events if e['type'] == 'stage' and e['data']['stage'] == 'knowledge_tool']
+    counts = [e['data']['count'] for e in events if e['type'] == 'stage' and e['data']['stage'] == 'knowledge_tool' and e['data'].get('status') != 'running']
     assert counts == [1, 1, 1, 2, 1]
     assert len(model.returned) == 5 and model.returned[0][1]['documents'] == 1
 

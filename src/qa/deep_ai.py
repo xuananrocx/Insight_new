@@ -382,6 +382,11 @@ async def ask_stream(
         emit({"type": "stage", "data": data})
 
     trace.on_stage_complete(stage_complete)
+
+    def stage_start(data):
+        emit({"type": "stage", "data": data})
+
+    trace.on_stage_start(stage_start)
     meta = {"session_id": session_id, "turn_id": turn_id, "kb_id": kb_scope}
 
     async def produce():

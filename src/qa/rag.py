@@ -976,6 +976,8 @@ async def ask_stream(
             logging.getLogger(__name__).debug(f"SSE stage 投递失败: {e}")
 
     trace.on_stage_complete(_on_stage)
+    # 阶段开始时发 status="running" 瞬时事件，供前端高亮进行中的步骤；不进最终 trace
+    trace.on_stage_start(_on_stage)
 
     # 用户断开 SSE 时设置 cancel_event，让 _run_pipeline 在 stage 间检查并提前终止
     import threading

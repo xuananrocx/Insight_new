@@ -4,6 +4,7 @@ import type { QaTraceCandidate, QaTraceStage } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export const STATUS_STYLE: Record<string, string> = {
+  running: 'bg-primary/80 animate-pulse',
   ok: 'bg-success/80',
   partial: 'bg-warning/80',
   skipped: 'bg-muted-foreground/40',

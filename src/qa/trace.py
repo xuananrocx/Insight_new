@@ -17,6 +17,7 @@ class TraceCollector:
     def __init__(self) -> None:
         self.stages: list[dict[str, Any]] = []
         self._listeners: list[Callable[[dict[str, Any]], None]] = []
+        self._start_listeners: list[Callable[[dict[str, Any]], None]] = []
         self.cancel_check: Callable[[], None] = lambda: None
 
     def stage(self, name: str, label: str) -> _StageCtx:
@@ -33,6 +34,14 @@ class TraceCollector:
         """
         self._listeners.append(cb)
 
+    def on_stage_start(self, cb: Callable[[dict[str, Any]], None]) -> None:
+        """Register a callback fired when each stage starts.
+
+        Emits a transient ``status: "running"`` marker (not stored in
+        ``stages``) so the frontend can highlight the in-flight step.
+        """
+        self._start_listeners.append(cb)
+
 
 class _StageCtx:
     def __init__(self, col: TraceCollector, name: str, label: str) -> None:
@@ -45,6 +54,14 @@ class _StageCtx:
     def __enter__(self) -> _StageCtx:
         self._col.cancel_check()
         self._t0 = time.perf_counter()
+        start_payload = {"stage": self._name, "label": self._label, "status": "running"}
+        for cb in self._col._start_listeners:
+            try:
+                cb(start_payload)
+            except Exception as e:
+                # 监听器是 side channel，不应影响主流程；只 debug 记录
+                import logging
+                logging.getLogger(__name__).debug(f"trace start listener 抛错: {e}", exc_info=True)
         return self
 
     def __exit__(self, *exc_info) -> bool:

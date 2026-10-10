@@ -116,6 +116,10 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
         trace.append(data)
         queue.put_nowait({"type": "stage", "data": data})
 
+    def stage_running(name, label):
+        # 阶段开始的瞬时标记：只投递 SSE 供前端高亮进行中步骤，不写入最终 trace
+        queue.put_nowait({"type": "stage", "data": {"stage": name, "label": label, "status": "running"}})
+
     async def bounded(awaitable, limit, *, tools_phase=False):
         remaining = deadline - time.monotonic() - (reserve if tools_phase else 0)
         timeout = min(limit, remaining)
@@ -168,6 +172,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     reason = "达到本次查阅预算，依据已读资料回答并说明缺口"
                     break
                 started = time.monotonic()
+                stage_running("agent_round", f"第 {round_no + 1} 轮资料查阅")
                 model.deadline = min(deadline - reserve, time.monotonic() + 180)
                 try:
                     round_emitted = False
@@ -226,6 +231,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 results = []
                 progress = False
                 for call in turn.calls:
+                    call_label = '整理问题要点' if call.name == evidence_state.REVIEW_TOOL['name'] else conversation_context.HISTORY_LABELS.get(call.name, LABELS.get(call.name, "校验工具请求"))
                     started = time.monotonic()
                     await bounded(asyncio.to_thread(kb.check), total)
                     if called >= max_calls or time.monotonic() >= deadline - reserve:
@@ -233,6 +239,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     else:
                         called += 1
                         started = time.monotonic()
+                        stage_running("knowledge_tool", call_label)
                         call_stopped = threading.Event()
                         def check_call(stop_event=call_stopped):
                             check_cancel()
@@ -266,7 +273,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                         finally:
                             call_stopped.set()
                         repeated = repeated + 1 if result.get("cached") else 0
-                        stage("knowledge_tool", '整理问题要点' if call.name == evidence_state.REVIEW_TOOL['name'] else conversation_context.HISTORY_LABELS.get(call.name, LABELS.get(call.name, "校验工具请求")), started,
+                        stage("knowledge_tool", call_label, started,
                               status="partial" if result.get("error") else "ok", count=result_count(result),
                               notes=result.get("message") or ("复用本次已读结果" if result.get("cached") else result.get("note") or "已完成"))
                     delta = progress_tracker.observe(result)

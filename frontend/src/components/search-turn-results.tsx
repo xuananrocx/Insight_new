@@ -5,6 +5,7 @@ import type { ChatTurn } from '@/hooks/use-chat-sessions'
 import { Button } from '@/components/ui/button'
 import { SearchResultsList } from '@/components/search-results-list'
 import { ThinkingPanel } from '@/components/thinking-panel'
+import { mergeStage } from '@/lib/trace-stages'
 import { useLocalStorage } from '@/hooks/use-local-storage'
 
 type ExpansionRun = {
@@ -45,7 +46,7 @@ export function SearchTurnResults({ turn, sessionId, kbScope, topK, canExpand, o
     patch({ controller, startedAt, stages: [], status: 'streaming', message: undefined })
     await api.qa.askStream(turn.question, undefined, {
       onWarmup: data => patch({ message: data.msg }),
-      onStage: stage => patch({ stages: [...(useExpansionRuns.getState().runs[key]?.stages ?? []), stage] }),
+      onStage: stage => patch({ stages: mergeStage(useExpansionRuns.getState().runs[key]?.stages ?? [], stage) }),
       onDone: data => {
         if (!data.expansion) {
           patch({ status: 'error', message: '未收到已保存的扩展结果，请刷新后重试。' })

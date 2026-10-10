@@ -24,6 +24,7 @@ import {
 } from 'lucide-react'
 
 import { AutosizeTextarea } from '@/components/autosize-textarea'
+import { mergeStage, stripRunningStages } from '@/lib/trace-stages'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { StatsCards } from '@/components/stats-cards'
@@ -182,9 +183,10 @@ export function ChatPage() {
             )
           },
           onStage: (stage) => {
-            accumulatedStages.push(stage)
+            // running 是阶段开始的瞬时标记，只进面板展示，不进兜底 trace
+            if (stage.status !== 'running') accumulatedStages.push(stage)
             ctx.updateTurn(sessionId, turnId, (t) =>
-              patchThinking(t, (th) => ({ ...th, stages: [...th.stages, stage] })),
+              patchThinking(t, (th) => ({ ...th, stages: mergeStage(th.stages, stage) })),
             )
           },
           onSources: (sources) => {
@@ -213,6 +215,7 @@ export function ChatPage() {
             ctx.updateTurn(sessionId, turnId, (t) => ({
               ...patchThinking(t, (th) => ({
                 ...th,
+                stages: stripRunningStages(th.stages),
                 status: data.outcome === 'partial' || data.verification === 'partial' ? 'partial' : 'done',
                 elapsedMs: Date.now() - th.startedAt,
               })),
@@ -251,7 +254,7 @@ export function ChatPage() {
               stage: 'answer_result', label: '回答未完成', status: 'error', notes: message,
             }]
             ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...patchThinking(t, (th) => ({ ...th, status: 'error', elapsedMs: Date.now() - th.startedAt })),
+              ...patchThinking(t, (th) => ({ ...th, stages: stripRunningStages(th.stages), status: 'error', elapsedMs: Date.now() - th.startedAt })),
               answer, trace, sources: accumulatedSources, error: message,
             }))
             void ctx.persistTurn(sessionId, turnId, { answer, trace, sources: accumulatedSources, error: message })
@@ -267,6 +270,7 @@ export function ChatPage() {
             ctx.updateTurn(sessionId, turnId, (t) => ({
               ...patchThinking(t, (th) => ({
                 ...th,
+                stages: stripRunningStages(th.stages),
                 partialAnswer: accumulated,
                 status: 'cancelled',
                 elapsedMs: Date.now() - th.startedAt,
