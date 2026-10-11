@@ -312,21 +312,11 @@ export function useChatSessions() {
     [qc],
   )
 
-  // 更新会话的 kb_scope（同时清空后端旧 turns，避免旧 KB 的回答污染新 KB）
+  // 仅为空会话更新知识库；已有问答的会话由后端拒绝换库。
   const updateSessionKb = useCallback(
     async (id: string, kbScope: string | null) => {
       await api.sessions.update(id, { kb_scope: kbScope ?? undefined })
-      // 同步清空后端 turns（旧 KB 的回答对新 KB 没意义）
-      try {
-        await api.sessions.clearAllTurns(id)
-      } catch (e) {
-        console.warn('clearAllTurns failed:', e)
-      }
-      // 同步清空前端状态
-      setTurnsState({ sessionId: id, turns: [] })
-      // P1-14: removeQueries 比 invalidate 更彻底（清空 cache，强制 detailQuery refetch
-      // 时 initializedFor.current 重置，避免 stale turnsState）
-      qc.removeQueries({ queryKey: ['session', id] })
+      qc.setQueryData<SessionDetail>(['session', id], old => old ? { ...old, kb_scope: kbScope } : old)
       qc.invalidateQueries({ queryKey: ['sessions'] })
     },
     [qc],

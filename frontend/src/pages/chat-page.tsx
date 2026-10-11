@@ -127,6 +127,8 @@ export function ChatPage() {
     staleTime: 60_000,
   })
   const currentKbId = session?.kb_scope || selectedKbForNewSession
+  const currentKb = kbListQuery.data?.find(kb => kb.id === currentKbId)
+  const currentKbLabel = kbLabel(currentKb) || (currentKbId ? '知识库不可用' : '请选择知识库')
   const canAskKb = !!currentKbId && !!kbListQuery.data?.some(kb => kb.id === currentKbId)
 
   // 初始化 selectedKbForNewSession：配置的默认 KB > is_default 字段
@@ -376,12 +378,10 @@ export function ChatPage() {
               </p>
               {/* 空状态下显示当前选择的 KB */}
               <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Library className="h-3 w-3" />
-                <span className="font-medium">知识库：</span>
-                <span className="text-accent-foreground">
-                  {kbLabel(kbListQuery.data?.find(kb => kb.id === selectedKbForNewSession)) ||
-                   kbListQuery.data?.find(kb => kb.is_default)?.name ||
-                   '默认'}
+                <Library className="h-3 w-3 shrink-0" />
+                <span className="shrink-0 font-medium">知识库：</span>
+                <span className="max-w-[min(48vw,24rem)] truncate text-[#e6c200] dark:text-[#ffe45c]" title={currentKbLabel}>
+                  {currentKbLabel}
                 </span>
                 <button
                   type="button"
@@ -482,12 +482,20 @@ export function ChatPage() {
                   <button
                     key={kb.id}
                     type="button"
-                    onClick={() => {
-                      setSelectedKbForNewSession(kb.id)
-                      setShowKbSwitch(false)
+                    disabled={switchingKb || isStreaming(ctx.activeId)}
+                    onClick={async () => {
+                      if (kb.id === currentKbId) { setShowKbSwitch(false); return }
+                      setSwitchingKb(true)
+                      try {
+                        if (session) await ctx.updateSessionKb(session.id, kb.id)
+                        setSelectedKbForNewSession(kb.id)
+                        setShowKbSwitch(false)
+                      } catch (error) {
+                        toast.error(error instanceof Error ? error.message : '切换失败，请重试')
+                      } finally { setSwitchingKb(false) }
                     }}
                     className={`w-full text-left p-3 rounded-md border transition-colors ${
-                      selectedKbForNewSession === kb.id
+                      currentKbId === kb.id
                         ? 'border-primary bg-accent/30'
                         : 'hover:bg-accent/30'
                     }`}
@@ -536,14 +544,16 @@ export function ChatPage() {
             <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Library className="h-3 w-3" />
               <span className="font-medium">知识库：</span>
-              <span className="text-accent-foreground">
-                {kbLabel(kbListQuery.data?.find(kb => kb.id === session?.kb_scope)) || session?.kb_scope || '默认'}
+              <span className="max-w-[min(48vw,24rem)] truncate text-accent-foreground" title={currentKbLabel}>
+                {currentKbLabel}
               </span>
               <button
                 type="button"
                 onClick={() => setShowKbSwitch(true)}
                 className="ml-1 rounded hover:bg-accent/30 px-1 py-0.5 transition-colors"
-                title="切换知识库"
+                disabled={isStreaming(ctx.activeId)}
+                title={isStreaming(ctx.activeId) ? '请先完成或停止生成' : '换库新建会话，当前记录保留'}
+                aria-label="换库新建会话"
               >
                 <ChevronRight className="h-3 w-3" />
               </button>
@@ -656,7 +666,7 @@ export function ChatPage() {
             </h2>
             <p className="text-sm text-muted-foreground mb-4">
               {session
-                ? '切换知识库将清空当前会话的问答历史（会话本身保留）'
+                ? '选择其它知识库将新建会话，当前记录保留'
                 : '选择用于新对话的知识库'}
             </p>
 
@@ -666,6 +676,8 @@ export function ChatPage() {
                   key={kb.id}
                   type="button"
                   onClick={() => {
+                    if (kb.id === currentKbId) { setShowKbSwitch(false); return }
+                    if (isStreaming(ctx.activeId)) return
                     if (session) {
                       // 会话状态：设置待切换的 KB，弹出确认框
                       setPendingKbScope(kb.id)
@@ -707,10 +719,10 @@ export function ChatPage() {
 
       {/* KB 切换确认弹窗 */}
       {pendingKbScope && (
-        <ManagementDialog title="确认切换知识库" onClose={() => setPendingKbScope(null)} busy={switchingKb} className="max-w-lg">
+        <ManagementDialog title="换库新建会话" onClose={() => setPendingKbScope(null)} busy={switchingKb} className="max-w-lg">
 
             <p className="text-sm text-muted-foreground mb-4">
-              切换知识库将清空当前会话的问答历史，会话本身会保留。继续？
+              将在「{kbLabel(kbListQuery.data?.find(kb => kb.id === pendingKbScope))}」中新建会话。当前会话、问答历史及输入草稿都会保留。
             </p>
 
             <div className="flex justify-end gap-2">
@@ -720,22 +732,21 @@ export function ChatPage() {
               <Button
                 disabled={switchingKb}
                 onClick={async () => {
-                  if (ctx.activeId && pendingKbScope) {
+                  if (ctx.activeId && pendingKbScope && !isStreaming(ctx.activeId)) {
                     setSwitchingKb(true)
                     try {
-                      // 1. 先 abort 进行中的流（避免僵尸 turn 写回新 KB）
-                      handleStop(ctx.activeId)
-                      // 2. 切 KB + 清后端 turns + 清前端 turns
-                      await ctx.updateSessionKb(ctx.activeId, pendingKbScope)
-                      ctx.clearTurns()
+                      await ctx.createSession(pendingKbScope, countMode)
+                      setSelectedKbForNewSession(pendingKbScope)
                       setPendingKbScope(null)
+                    } catch (error) {
+                      toast.error(error instanceof Error ? error.message : '新建失败，当前会话已保留')
                     } finally {
                       setSwitchingKb(false)
                     }
                   }
                 }}
               >
-                {switchingKb ? '切换中…' : '确认切换'}
+                {switchingKb ? '创建中…' : '新建会话'}
               </Button>
             </div>
           </ManagementDialog>

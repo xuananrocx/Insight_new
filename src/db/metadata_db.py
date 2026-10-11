@@ -1763,6 +1763,13 @@ def update_session(
     params.append(session_id)
     with get_cursor() as cur:
         cur.execute("BEGIN IMMEDIATE")
+        if not isinstance(kb_scope, _Unset):
+            row = cur.execute("SELECT kb_scope FROM sessions WHERE id=?", (session_id,)).fetchone()
+            if row and row['kb_scope'] != kb_scope and cur.execute(
+                "SELECT 1 FROM turns WHERE session_id=? LIMIT 1", (session_id,)
+            ).fetchone():
+                from fastapi import HTTPException
+                raise HTTPException(status_code=409, detail="已有问答的会话不能切换知识库，请新建会话；原记录会保留")
         if not isinstance(group_id, _Unset):
             from src.db.session_groups import require_group
             require_group(cur, group_id)
