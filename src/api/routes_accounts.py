@@ -106,15 +106,13 @@ def change_password(req: PasswordChange, response: Response):
 @router.get("/members")
 def member_directory():
     # Names only, for sharing; no password/session/provider/account detail.
-    return a.rows(
-        "SELECT id,username FROM auth_users WHERE disabled=0 ORDER BY username"
-    )
+    return perm.visible_members()
 
 
 @router.get("/kbs/{kb_id}/members")
 def kb_members(kb_id: str):
     perm.manage_resource("kb", kb_id)
-    users = a.rows("SELECT id,username FROM auth_users ORDER BY username")
+    users = perm.visible_members()
     return [
         {
             **u,
@@ -325,7 +323,7 @@ def provider_members(pid: str):
     perm.manage_resource("api", pid)
     return [
         u
-        for u in a.rows("SELECT id,username FROM auth_users")
+        for u in perm.visible_members()
         if "use" in perm.resource("api", pid, u["id"])["actions"]
     ]
 

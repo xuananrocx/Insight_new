@@ -30,9 +30,15 @@ def catalog():
 
 
 def role_payload(r):
+    scope_roles, scope_users = p.parse_member_scope(r["member_scope"])
     return {
         **r,
         "permissions": json.loads(r["permissions"]),
+        "member_scope": (
+            {"roles": sorted(scope_roles), "users": sorted(scope_users)}
+            if scope_roles or scope_users
+            else None
+        ),
         "users_count": a.rows(
             "SELECT COUNT(*) n FROM permission_user_roles WHERE role_id=?", (r["id"],)
         )[0]["n"],
@@ -42,7 +48,7 @@ def role_payload(r):
 @router.get("/roles/directory")
 def role_directory():
     a.user()
-    return a.rows("SELECT id,name,enabled FROM permission_roles ORDER BY name")
+    return p.visible_role_directory()
 
 
 @router.get("/admin/roles")
@@ -64,12 +70,37 @@ def role_members(rid: str):
     )
 
 
+class ScopeInput(BaseModel):
+    roles: list[str] = Field(default_factory=list, max_length=100)
+    users: list[str] = Field(default_factory=list, max_length=500)
+
+
 class RoleInput(BaseModel):
     name: str = Field(min_length=1, max_length=60)
     description: str = Field("", max_length=500)
     permissions: list[str] = Field(default_factory=list, max_length=100)
     enabled: bool = True
+    member_scope: ScopeInput | None = None
     expected_revision: int | None = None
+
+
+def scope_json(req):
+    """None keeps the stored value (create starts empty); empty object clears."""
+    if req.member_scope is None:
+        return None
+    ids = set(req.member_scope.roles)
+    if "super" in ids:
+        raise HTTPException(400, "超级管理员角色不可加入成员可见范围")
+    for rid in ids:
+        if not a.rows("SELECT 1 FROM permission_roles WHERE id=?", (rid,)):
+            raise HTTPException(400, "成员可见范围包含不存在的角色")
+    uids = set(req.member_scope.users)
+    for uid in uids:
+        if not a.rows("SELECT 1 FROM auth_users WHERE id=?", (uid,)):
+            raise HTTPException(400, "成员可见范围包含不存在的用户")
+    if not ids and not uids:
+        return ""
+    return json.dumps({"roles": sorted(ids), "users": sorted(uids)})
 
 
 def role_change(rid, req):
@@ -143,6 +174,7 @@ def preview_role(rid: str, req: RoleInput):
 
 @router.post("/admin/roles", status_code=201)
 def create_role(req: RoleInput):
+    scope = scope_json(req)
     rid = uuid.uuid4().hex
     try:
         with a.db.get_cursor() as cur:
@@ -150,13 +182,14 @@ def create_role(req: RoleInput):
             p.check_revision(cur, req.expected_revision)
             role_change(None, req)
             cur.execute(
-                "INSERT INTO permission_roles(id,name,description,permissions,enabled) VALUES (?,?,?,?,?)",
+                "INSERT INTO permission_roles(id,name,description,permissions,enabled,member_scope) VALUES (?,?,?,?,?,?)",
                 (
                     rid,
                     req.name.strip(),
                     req.description,
                     json.dumps(sorted(set(req.permissions))),
                     int(req.enabled),
+                    scope or "",
                 ),
             )
             p.bump(cur)
@@ -169,18 +202,20 @@ def create_role(req: RoleInput):
 
 @router.put("/admin/roles/{rid}")
 def update_role(rid: str, req: RoleInput):
+    scope = scope_json(req)
     try:
         with a.db.get_cursor() as cur:
             cur.execute("BEGIN IMMEDIATE")
             p.check_revision(cur, req.expected_revision)
             old = role_change(rid, req)
             cur.execute(
-                "UPDATE permission_roles SET name=?,description=?,permissions=?,enabled=? WHERE id=?",
+                "UPDATE permission_roles SET name=?,description=?,permissions=?,enabled=?,member_scope=? WHERE id=?",
                 (
                     req.name.strip(),
                     req.description,
                     json.dumps(sorted(set(req.permissions))),
                     int(req.enabled),
+                    scope if scope is not None else old["member_scope"],
                     rid,
                 ),
             )
@@ -196,6 +231,9 @@ def update_role(rid: str, req: RoleInput):
                 "before": json.loads(old["permissions"]),
                 "after": req.permissions,
                 "enabled": req.enabled,
+                "member_scope": (
+                    req.member_scope.model_dump() if req.member_scope else None
+                ),
             },
             ensure_ascii=False,
         ),

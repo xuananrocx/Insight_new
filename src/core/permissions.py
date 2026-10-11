@@ -72,7 +72,8 @@ def init():
         cur.executescript("""
         CREATE TABLE IF NOT EXISTS permission_roles (
           id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '',
-          permissions TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, protected INTEGER NOT NULL DEFAULT 0);
+          permissions TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, protected INTEGER NOT NULL DEFAULT 0,
+          member_scope TEXT NOT NULL DEFAULT '');
         CREATE TABLE IF NOT EXISTS permission_user_roles (
           user_id TEXT NOT NULL REFERENCES auth_users(id) ON DELETE CASCADE,
           role_id TEXT NOT NULL REFERENCES permission_roles(id), PRIMARY KEY(user_id,role_id));
@@ -127,6 +128,15 @@ def init():
                                 (json.dumps([*caps, "ai_logs.detail"]), role["id"]))
             cur.execute("INSERT INTO permission_seed VALUES (3)")
             bump(cur)
+        cur.execute("SELECT 1 FROM permission_seed WHERE id=4")
+        if not cur.fetchone():
+            if "member_scope" not in {
+                row[1] for row in cur.execute("PRAGMA table_info(permission_roles)")
+            }:
+                cur.execute(
+                    "ALTER TABLE permission_roles ADD COLUMN member_scope TEXT NOT NULL DEFAULT ''"
+                )
+            cur.execute("INSERT OR IGNORE INTO permission_seed VALUES (4)")
         cur.execute(
             "UPDATE permission_roles SET permissions=?,enabled=1,protected=1 WHERE id='super'",
             (json.dumps(list(CATALOG)),),
@@ -178,6 +188,99 @@ def roles(uid):
 def is_super(uid=None):
     uid = uid or a.user()["id"]
     return any(r["id"] == "super" and r["enabled"] for r in roles(uid))
+
+
+def parse_member_scope(raw):
+    """Column value -> ({role ids}, {user ids}); dangling refs drop silently."""
+    try:
+        data = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        return set(), set()
+    if not isinstance(data, dict):
+        return set(), set()
+    return (
+        {x for x in data.get("roles", []) if isinstance(x, str)},
+        {x for x in data.get("users", []) if isinstance(x, str)},
+    )
+
+
+def member_visibility(uid=None):
+    """Member-directory scope: None = unrestricted (super), else (role ids, user ids).
+
+    Visible members = members of the user's enabled roles, plus roles/users granted
+    by those roles' member_scope. One level only (non-transitive); super-role
+    members stay hidden from non-super viewers (enforced in visible_members).
+    """
+    uid = uid or a.user()["id"]
+    if is_super(uid):
+        return None
+    mine = [r for r in roles(uid) if r["enabled"]]
+    extra_roles, extra_users = set(), set()
+    for r in mine:
+        er, eu = parse_member_scope(
+            r["member_scope"] if "member_scope" in r.keys() else ""
+        )
+        extra_roles |= er
+        extra_users |= eu
+    if extra_roles:
+        marks = ",".join("?" * len(extra_roles))
+        extra_roles = {
+            x["id"]
+            for x in a.rows(
+                f"SELECT id FROM permission_roles WHERE enabled=1 AND id IN ({marks})",
+                tuple(extra_roles),
+            )
+        }
+    return ({r["id"] for r in mine} | extra_roles, extra_users)
+
+
+def visible_members(uid=None):
+    """Directory rows (id, username) the viewer may list, never the viewer self;
+    super sees all other enabled users."""
+    uid = uid or a.user()["id"]
+    scope = member_visibility(uid)
+    if scope is None:
+        return a.rows(
+            "SELECT id,username FROM auth_users WHERE disabled=0 AND id!=? ORDER BY username",
+            (uid,),
+        )
+    role_ids, user_ids = scope
+    rows = []
+    if role_ids:
+        marks = ",".join("?" * len(role_ids))
+        rows = a.rows(
+            f"SELECT DISTINCT u.id,u.username FROM auth_users u "
+            f"JOIN permission_user_roles ur ON ur.user_id=u.id "
+            f"WHERE u.disabled=0 AND ur.role_id IN ({marks}) AND u.id!=? "
+            f"AND u.id NOT IN (SELECT user_id FROM permission_user_roles WHERE role_id='super') "
+            f"ORDER BY u.username",
+            (*role_ids, uid),
+        )
+    if user_ids:
+        seen = {u["id"] for u in rows}
+        marks = ",".join("?" * len(user_ids))
+        extra = a.rows(
+            f"SELECT id,username FROM auth_users WHERE disabled=0 AND id IN ({marks}) AND id!=? "
+            f"AND id NOT IN (SELECT user_id FROM permission_user_roles WHERE role_id='super') "
+            f"ORDER BY username",
+            (*user_ids, uid),
+        )
+        rows += [u for u in extra if u["id"] not in seen]
+        rows.sort(key=lambda u: u["username"])
+    return rows
+
+
+def visible_role_directory(uid=None):
+    """Role directory rows: super sees all; others see own enabled roles plus
+    enabled referenced roles, never the super role."""
+    uid = uid or a.user()["id"]
+    rows = a.rows("SELECT id,name,enabled FROM permission_roles ORDER BY name")
+    if is_super(uid):
+        return rows
+    own = {r["id"] for r in roles(uid) if r["enabled"]}
+    scope, _ = member_visibility(uid)
+    allowed = (own | scope) - {"super"}
+    return [r for r in rows if r["id"] in allowed]
 
 
 def effective(uid=None):
