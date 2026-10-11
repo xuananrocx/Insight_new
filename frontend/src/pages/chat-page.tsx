@@ -2,7 +2,7 @@ import { ManagementDialog } from '@/components/management-dialog'
 import { createUuid } from '@/lib/uuid'
 import { MessageNavigation } from '@/components/message-navigation'
 import { useChatScroll } from '@/hooks/use-chat-scroll'
-import { kbLabel } from '@/lib/kb-label'
+import { kbLabel, kbMetaSuffix } from '@/lib/kb-label'
 import { SessionRename } from '@/components/session-rename'
 import { useDeepAiOptions } from '@/hooks/use-deep-ai-options'
 import { useEffect, useId, useState } from 'react'
@@ -20,13 +20,13 @@ import {
   MessageSquarePlus,
   Copy,
   Check,
-  ChevronRight,
 } from 'lucide-react'
 
 import { AutosizeTextarea } from '@/components/autosize-textarea'
 import { mergeStage, stripRunningStages } from '@/lib/trace-stages'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { StatsCards } from '@/components/stats-cards'
 import { MarkdownContent } from '@/components/markdown-content'
 import { ThinkingPanel } from '@/components/thinking-panel'
@@ -38,7 +38,7 @@ import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { useLocalStorage } from '@/hooks/use-local-storage'
 import { useApiRetryCount } from '@/hooks/use-api-retry-count'
 import { type ChatTurn, type ThinkingState } from '@/hooks/use-chat-sessions'
-import { api, type ChatMessage, type RetrievalMode, type QaSource, type QaTraceStage } from '@/lib/api'
+import { api, type ChatMessage, type RetrievalMode, type QaSource, type QaTraceStage, type KB } from '@/lib/api'
 import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
 
 // thinking 重建守卫：流式期间若 turnsState / detail cache 被 refetch 重置导致 thinking 丢失，
@@ -47,6 +47,65 @@ function patchThinking(t: ChatTurn, patch: (th: ThinkingState) => ThinkingState)
   const base: ThinkingState =
     t.thinking ?? { stages: [], partialAnswer: '', status: 'streaming', startedAt: Date.now() }
   return { ...t, thinking: patch(base) }
+}
+
+// 知识库选择器：warn=新提问界面（警示琥珀胶囊，提醒发问前核对），calm=会话中（纯文本，同原样式）
+function KbPicker({
+  kbs,
+  value,
+  label,
+  onPick,
+  variant,
+  disabled,
+  title,
+}: {
+  kbs: KB[] | undefined
+  value: string | null
+  label: string
+  onPick: (kbId: string) => void
+  variant: 'warn' | 'calm'
+  disabled?: boolean
+  title?: string
+}) {
+  const triggerCls =
+    variant === 'warn'
+      ? 'rounded-full border-warning/50 bg-warning/15 px-2.5 font-semibold text-warning-foreground hover:border-warning/80 focus-visible:ring-warning/50 [&_svg]:text-warning-foreground/70'
+      : 'rounded border-0 bg-transparent px-0.5 font-medium text-accent-foreground hover:bg-accent/30 [&_svg]:text-muted-foreground'
+  const currentKb = kbs?.find(kb => kb.id === value)
+  return (
+    <Select value={value ?? undefined} onValueChange={onPick} disabled={disabled}>
+      <SelectTrigger
+        aria-label='选择知识库'
+        title={title}
+        className={`w-auto max-w-[min(48vw,20rem)] gap-1 py-0.5 text-[11px] ${triggerCls}`}
+      >
+        <SelectValue placeholder='请选择知识库'>
+          {currentKb ? (
+            <>
+              {currentKb.name}
+              <span className='opacity-60'>{kbMetaSuffix(currentKb)}</span>
+            </>
+          ) : (
+            label
+          )}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {kbs?.map(kb => (
+          <SelectItem key={kb.id} value={kb.id}>
+            <div className='flex flex-col gap-0.5 py-0.5'>
+              <span>
+                {kb.name}
+                <span className='opacity-60'>{kbMetaSuffix(kb)}</span>
+                {kb.is_default && <span className='ml-1 text-[10px] text-muted-foreground'>（默认）</span>}
+              </span>
+              <span className='text-[10px] text-muted-foreground'>{kb.document_count || 0} 个文档</span>
+            </div>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
 }
 
 export function ChatPage() {
@@ -73,7 +132,6 @@ export function ChatPage() {
   const setTopK = (value: number) => setModeCounts(previous => ({ ...previous, [countMode]: value }))
 
   const [showStats, setShowStats] = useLocalStorage('amd-ui-show-stats', true)
-  const [showKbSwitch, setShowKbSwitch] = useState(false)
   const [searchParams] = useSearchParams()
 
   // 从 URL ?session=xxx 自动选中会话（KB 详情页等场景跳转用）
@@ -361,6 +419,23 @@ export function ChatPage() {
   const title = session ? session.title : '新对话'
   const turns = session?.turns ?? []
 
+  // 知识库选择：无会话=影响下一问；空会话=即时切换；有记录=走确认框新建会话
+  const pickKb = (kbId: string) => {
+    if (kbId === currentKbId || isStreaming(ctx.activeId)) return
+    if (!session) {
+      setSelectedKbForNewSession(kbId)
+      return
+    }
+    if (turns.length === 0) {
+      setSwitchingKb(true)
+      ctx.updateSessionKb(session.id, kbId)
+        .catch((error) => toast.error(error instanceof Error ? error.message : '切换失败，请重试'))
+        .finally(() => setSwitchingKb(false))
+      return
+    }
+    setPendingKbScope(kbId)
+  }
+
   const { viewportRef, contentRef, showJump, scrollToBottom, jumpToTurn } = useChatScroll(ctx.activeId, turns.length > 0)
 
   // 空状态：保持原布局（标题 + 看板 + 输入框 + 示例问题）
@@ -376,21 +451,19 @@ export function ChatPage() {
               <p className="mt-1 text-[13px] text-muted-foreground">
                 基于 RAG 的智能问答 · 让 AI 基于知识库回答
               </p>
-              {/* 空状态下显示当前选择的 KB */}
+              {/* 空状态下显示当前选择的 KB：警示琥珀胶囊，提醒发问前核对 */}
               <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <Library className="h-3 w-3 shrink-0" />
                 <span className="shrink-0 font-medium">知识库：</span>
-                <span className="max-w-[min(48vw,24rem)] truncate text-[#e6c200] dark:text-[#ffe45c]" title={currentKbLabel}>
-                  {currentKbLabel}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setShowKbSwitch(true)}
-                  className="ml-1 rounded hover:bg-accent/30 px-1 py-0.5 transition-colors"
-                  title="选择知识库"
-                >
-                  <ChevronRight className="h-3 w-3" />
-                </button>
+                <KbPicker
+                  kbs={kbListQuery.data}
+                  value={currentKbId}
+                  label={currentKbLabel}
+                  onPick={pickKb}
+                  variant="warn"
+                  disabled={switchingKb || isStreaming(ctx.activeId)}
+                  title="新对话将使用此知识库，发问前请核对"
+                />
               </div>
             </div>
             <Button
@@ -468,59 +541,6 @@ export function ChatPage() {
             </Card>
           </form>
         </div>
-
-        {/* KB 选择弹窗（空状态和会话状态共用） */}
-        {showKbSwitch && (
-          <ManagementDialog title="选择知识库" onClose={() => setShowKbSwitch(false)} busy={false} className="max-w-lg">
-
-              <p className="text-sm text-muted-foreground mb-4">
-                选择用于新对话的知识库
-              </p>
-
-              <div className="space-y-2 mb-6 max-h-[300px] overflow-y-auto">
-                {kbListQuery.data?.map((kb) => (
-                  <button
-                    key={kb.id}
-                    type="button"
-                    disabled={switchingKb || isStreaming(ctx.activeId)}
-                    onClick={async () => {
-                      if (kb.id === currentKbId) { setShowKbSwitch(false); return }
-                      setSwitchingKb(true)
-                      try {
-                        if (session) await ctx.updateSessionKb(session.id, kb.id)
-                        setSelectedKbForNewSession(kb.id)
-                        setShowKbSwitch(false)
-                      } catch (error) {
-                        toast.error(error instanceof Error ? error.message : '切换失败，请重试')
-                      } finally { setSwitchingKb(false) }
-                    }}
-                    className={`w-full text-left p-3 rounded-md border transition-colors ${
-                      currentKbId === kb.id
-                        ? 'border-primary bg-accent/30'
-                        : 'hover:bg-accent/30'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Library className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-medium">{kbLabel(kb)}</span>
-                      {kb.is_default && (
-                        <span className="text-xs text-muted-foreground">（默认）</span>
-                      )}
-                    </div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {kb.document_count || 0} 个文档
-                    </div>
-                  </button>
-                ))}
-              </div>
-
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setShowKbSwitch(false)}>
-                  取消
-                </Button>
-              </div>
-            </ManagementDialog>
-        )}
       </>
     )
   }
@@ -544,19 +564,15 @@ export function ChatPage() {
             <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
               <Library className="h-3 w-3" />
               <span className="font-medium">知识库：</span>
-              <span className="max-w-[min(48vw,24rem)] truncate text-accent-foreground" title={currentKbLabel}>
-                {currentKbLabel}
-              </span>
-              <button
-                type="button"
-                onClick={() => setShowKbSwitch(true)}
-                className="ml-1 rounded hover:bg-accent/30 px-1 py-0.5 transition-colors"
-                disabled={isStreaming(ctx.activeId)}
-                title={isStreaming(ctx.activeId) ? '请先完成或停止生成' : '换库新建会话，当前记录保留'}
-                aria-label="换库新建会话"
-              >
-                <ChevronRight className="h-3 w-3" />
-              </button>
+              <KbPicker
+                kbs={kbListQuery.data}
+                value={currentKbId}
+                label={currentKbLabel}
+                onPick={pickKb}
+                variant="calm"
+                disabled={switchingKb || isStreaming(ctx.activeId)}
+                title={isStreaming(ctx.activeId) ? '请先完成或停止生成' : '换库将新建会话，原会话不动'}
+              />
             </div>
           </div>
           <Button
@@ -658,71 +674,12 @@ export function ChatPage() {
         </div>
       </div>
 
-      {/* KB 切换弹窗（组件级别，空状态和会话状态共用） */}
-      {showKbSwitch && (
-        <ManagementDialog title="选择知识库" onClose={() => setShowKbSwitch(false)} busy={false} className="max-w-lg">
-            <h2 className="text-lg font-semibold mb-2">
-              {session ? '切换知识库' : '选择知识库'}
-            </h2>
-            <p className="text-sm text-muted-foreground mb-4">
-              {session
-                ? '选择其它知识库将新建会话，当前记录保留'
-                : '选择用于新对话的知识库'}
-            </p>
-
-            <div className="space-y-2 mb-6 max-h-[300px] overflow-y-auto">
-              {kbListQuery.data?.map((kb) => (
-                <button
-                  key={kb.id}
-                  type="button"
-                  onClick={() => {
-                    if (kb.id === currentKbId) { setShowKbSwitch(false); return }
-                    if (isStreaming(ctx.activeId)) return
-                    if (session) {
-                      // 会话状态：设置待切换的 KB，弹出确认框
-                      setPendingKbScope(kb.id)
-                      setShowKbSwitch(false)
-                    } else {
-                      // 空状态：直接设置选择的 KB
-                      setSelectedKbForNewSession(kb.id)
-                      setShowKbSwitch(false)
-                    }
-                  }}
-                  className={`w-full text-left p-3 rounded-md border transition-colors ${
-                    (session?.kb_scope === kb.id) ||
-                    (!session && selectedKbForNewSession === kb.id)
-                      ? 'border-primary bg-accent/30'
-                      : 'hover:bg-accent/30'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <Library className="h-4 w-4 text-muted-foreground" />
-                    <span className="font-medium">{kbLabel(kb)}</span>
-                    {kb.is_default && (
-                      <span className="text-xs text-muted-foreground">（默认）</span>
-                    )}
-                  </div>
-                  <div className="mt-1 text-xs text-muted-foreground">
-                    {kb.document_count || 0} 个文档
-                  </div>
-                </button>
-              ))}
-            </div>
-
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setShowKbSwitch(false)}>
-                取消
-              </Button>
-            </div>
-          </ManagementDialog>
-      )}
-
-      {/* KB 切换确认弹窗 */}
+      {/* KB 切换确认弹窗：有问答记录的会话换库时新建会话 */}
       {pendingKbScope && (
         <ManagementDialog title="换库新建会话" onClose={() => setPendingKbScope(null)} busy={switchingKb} className="max-w-lg">
 
             <p className="text-sm text-muted-foreground mb-4">
-              将在「{kbLabel(kbListQuery.data?.find(kb => kb.id === pendingKbScope))}」中新建会话。当前会话、问答历史及输入草稿都会保留。
+              新会话从空白开始，使用「{kbLabel(kbListQuery.data?.find(kb => kb.id === pendingKbScope))}」。原会话不迁移、不继承。
             </p>
 
             <div className="flex justify-end gap-2">

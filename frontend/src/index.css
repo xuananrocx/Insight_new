@@ -31,6 +31,8 @@
 
     --success: 152 60% 40%;
     --warning: 35 92% 50%;
+    /* 警示色上的文字：浅色主题压深保证小字号可读 */
+    --warning-foreground: 35 88% 30%;
 
     --border: 214 32% 91%;
     --input: 214 32% 91%;
@@ -71,6 +73,7 @@
 
     --success: 152 60% 50%;
     --warning: 35 92% 60%;
+    --warning-foreground: 36 95% 70%;
 
     --border: 222 30% 18%;
     --input: 222 30% 18%;
@@ -107,6 +110,7 @@
 
     --success: 152 60% 50%;
     --warning: 35 92% 60%;
+    --warning-foreground: 36 95% 70%;
 
     --border: 220 13% 17%;
     --input: 220 13% 17%;
@@ -150,6 +154,7 @@
 
     --success: 152 60% 48%;
     --warning: 35 92% 52%;
+    --warning-foreground: 36 95% 72%;
 
     --border: 220 8% 24%;
     --input: 0 0% 100% / 0.15;

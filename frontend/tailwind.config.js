@@ -54,7 +54,7 @@ export default {
         },
         warning: {
           DEFAULT: 'hsl(var(--warning))',
-          foreground: '0 0% 100%',
+          foreground: 'hsl(var(--warning-foreground))',
         },
         brand: {
           DEFAULT: '#5e6ad2',
