@@ -108,6 +108,9 @@ def init_auth() -> None:
         CREATE TABLE IF NOT EXISTS auth_audit (
           id INTEGER PRIMARY KEY, actor TEXT, action TEXT NOT NULL, target TEXT, created_at INTEGER NOT NULL);
         """)
+        cols = {r[1] for r in cur.execute("PRAGMA table_info(auth_users)")}
+        if "default_kb_id" not in cols:
+            cur.execute("ALTER TABLE auth_users ADD COLUMN default_kb_id TEXT")
     if not rows("SELECT id FROM auth_users LIMIT 1"):
         secret_file("setup-token.txt", lambda: secrets.token_urlsafe(32).encode())
     cipher()
@@ -139,6 +142,14 @@ def admin() -> dict:
     if not permissions.is_super(current["id"]):
         raise HTTPException(403, "需要超级管理员权限")
     return current
+
+
+def set_default_kb(kb_id: str | None) -> None:
+    """设置当前账号的个人默认知识库（仅本人）。"""
+    execute(
+        "UPDATE auth_users SET default_kb_id=? WHERE id=?",
+        (kb_id, user()["id"]),
+    )
 
 
 def public_user(u: dict) -> dict:

@@ -612,58 +612,100 @@ def update_ai_summary_config(req: AISummaryConfig) -> AISummaryConfig:
 # ===== UI 默认知识库 =====
 
 class DefaultKbInfo(BaseModel):
-    kb_id: str | None  # null/空 = 用 is_default 字段
+    kb_id: str | None  # 当前账号生效的默认 KB
     name: str | None  # 解析后的 KB 名（方便前端直接显示）
-    source: str  # "config" 显式配置 / "is_default" 用默认字段
+    source: str  # personal 个人 / system 系统 / builtin 内置 / first 可见第一个
+    fallback_reason: str | None  # personal_unavailable / system_unavailable / both_unavailable
+    personal_kb_id: str | None = None  # 个人层原始配置（可能已失效）
+    system_kb_id: str | None = None  # 系统层原始配置（可能已失效）
 
 
 class UpdateDefaultKbRequest(BaseModel):
-    kb_id: str | None  # null = 回退到 is_default 字段
+    kb_id: str | None  # null = 清空该层配置
 
 
-def _resolve_default_kb() -> tuple[str | None, str | None, str]:
-    """解析当前默认 KB。
+def _resolve_default_kb() -> tuple[str | None, str | None, str, str | None]:
+    """解析当前账号生效的默认知识库。
 
-    优先级：
-    1. config.ui.default_kb_id 非空且对应 KB 存在 → 用它
-    2. kbs 表里 is_default=1 的 KB → 用它
-    3. 都没有 → null
+    优先级（每层都要求当前账号可见，失效层静默降级并记录原因）：
+    1. 个人默认 auth_users.default_kb_id
+    2. 系统默认 config.ui.default_kb_id
+    3. 内置库（is_default=1）→ 4. 可见列表第一个
     """
+    from src.core import accounts
+
     metadata_db.init_db()
-    configured = (settings.config.get("ui") or {}).get("default_kb_id")
-    if configured:
-        kb = metadata_db.get_kb(configured)
-        if kb:
-            return configured, kb["name"], "config"
-        # 配置失效（KB 被删了）：fall through 到 is_default
-    # fallback: 找 is_default=1
-    for kb in metadata_db.list_kbs():
-        if kb.get("is_default"):
-            return kb["id"], kb["name"], "is_default"
-    return None, None, "is_default"
+    visible = metadata_db.list_kbs()  # 已按账号可见域过滤，is_default 优先排序
+    by_id = {kb["id"]: kb for kb in visible}
+    personal = accounts.user().get("default_kb_id")
+    system = (settings.config.get("ui") or {}).get("default_kb_id")
+    if personal and personal in by_id:
+        return personal, by_id[personal]["name"], "personal", None
+    if system and system in by_id:
+        reason = "personal_unavailable" if personal else None
+        return system, by_id[system]["name"], "system", reason
+    reason = None
+    if personal and system:
+        reason = "both_unavailable"
+    elif personal:
+        reason = "personal_unavailable"
+    elif system:
+        reason = "system_unavailable"
+    if visible:
+        kb = visible[0]
+        source = "builtin" if kb.get("is_default") else "first"
+        return kb["id"], kb["name"], source, reason
+    return None, None, "first", reason
 
 
 @router.get("/default_kb", response_model=DefaultKbInfo)
 def get_default_kb() -> DefaultKbInfo:
-    """读取当前默认知识库。"""
+    """读取当前账号生效的默认知识库（含各层原始配置值）。"""
     from src.core import accounts
-    available = accounts.db.list_kbs()
-    kb = available[0] if available else None
-    return DefaultKbInfo(kb_id=kb['id'] if kb else None, name=kb['name'] if kb else None, source='account')
+
+    kb_id, name, source, reason = _resolve_default_kb()
+    return DefaultKbInfo(
+        kb_id=kb_id,
+        name=name,
+        source=source,
+        fallback_reason=reason,
+        personal_kb_id=accounts.user().get("default_kb_id"),
+        system_kb_id=(settings.config.get("ui") or {}).get("default_kb_id"),
+    )
 
 
 @router.put("/default_kb", response_model=DefaultKbInfo)
 def update_default_kb(req: UpdateDefaultKbRequest) -> DefaultKbInfo:
-    """配置默认知识库（写入 config.yaml）。
+    """设置当前账号的个人默认知识库。
 
-    kb_id=null 清空配置，回退到 is_default 字段。
-    kb_id 必须是已存在的 KB。
+    kb_id=null 清除个人配置，回退到系统默认。
+    kb_id 必须存在且当前账号对其有使用权限。
+    """
+    from src.core import accounts
+
+    metadata_db.init_db()
+    kb_id = req.kb_id.strip() if req.kb_id else None
+    if kb_id:
+        if not metadata_db.get_kb(kb_id):
+            raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
+        if kb_id not in accounts.visible_kb_ids():
+            raise HTTPException(status_code=403, detail="没有此知识库的使用权限")
+    accounts.set_default_kb(kb_id)
+    logger.info(f"个人默认知识库已更新: kb_id={kb_id}")
+    return get_default_kb()
+
+
+@router.put("/default_kb/system", response_model=DefaultKbInfo)
+def update_default_kb_system(req: UpdateDefaultKbRequest) -> DefaultKbInfo:
+    """配置系统级默认知识库（写入 config.yaml）。
+
+    未设置个人默认（或个人默认失效）的用户使用此配置。
+    kb_id=null 清空配置；kb_id 必须是已存在的 KB。
     """
     metadata_db.init_db()
     kb_id = req.kb_id.strip() if req.kb_id else None
     if kb_id:
-        kb = metadata_db.get_kb(kb_id)
-        if not kb:
+        if not metadata_db.get_kb(kb_id):
             raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
     from src.core.config import USER_CONFIG_PATH
     config_path = USER_CONFIG_PATH
@@ -673,6 +715,5 @@ def update_default_kb(req: UpdateDefaultKbRequest) -> DefaultKbInfo:
     # 同步内存
     settings.config.setdefault("ui", {})["default_kb_id"] = kb_id
     _secure_write_yaml(config_path, raw)
-    resolved_id, name, source = _resolve_default_kb()
-    logger.info(f"默认知识库配置已更新: kb_id={resolved_id} (source={source})")
-    return DefaultKbInfo(kb_id=resolved_id, name=name, source=source)
+    logger.info(f"系统默认知识库配置已更新: kb_id={kb_id}")
+    return get_default_kb()

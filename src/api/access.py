@@ -249,7 +249,8 @@ async def authorize(request: Request):
             return
         if "/llm_providers/" in path:
             raise HTTPException(410, "请使用账号设置中的个人 API / 团队 API 管理")
-        if path.endswith("/default_kb") and method == "GET":
+        if path.endswith("/default_kb"):
+            # GET 解析 + PUT 个人层：登录即可；系统层 /default_kb/system 走下方 system.edit
             return
         if path.endswith("/log_level") and method in SAFE and p.has("logs.view"):
             return

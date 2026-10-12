@@ -273,14 +273,14 @@ function DefaultKbCard() {
   const [pendingId, setPendingId] = useState<string>('')
 
   const updateMutation = useMutation({
-    mutationFn: (kbId: string | null) => api.defaultKb.update(kbId),
+    mutationFn: (kbId: string | null) => api.defaultKb.setSystem(kbId),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['settings', 'default_kb'] })
       qc.invalidateQueries({ queryKey: ['kbs'] })
       toast.success(
-        data.source === 'config'
-          ? `默认知识库已设为：${data.name}`
-          : '已恢复为使用内置默认知识库',
+        data.system_kb_id
+          ? '系统默认知识库已保存'
+          : '已清除系统默认，用户将回退到内置默认',
       )
       setPendingId('')
     },
@@ -290,32 +290,30 @@ function DefaultKbCard() {
     },
   })
 
-  const currentValue = defaultKb.data?.kb_id ?? ''
+  const currentValue = defaultKb.data?.system_kb_id ?? ''
   const selected = pendingId || currentValue
+  const configuredGone =
+    !!currentValue && !(kbList.data ?? []).some((kb) => kb.id === currentValue)
 
   return (
     <Card className="mb-4 p-5">
       <div className="mb-3 flex items-center gap-2">
         <Library className="h-4 w-4 text-muted-foreground" />
-        <span className="text-[14px] font-medium">默认知识库</span>
-        {defaultKb.data?.source === 'is_default' ? (
-          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            使用内置默认
-          </span>
+        <span className="text-[14px] font-medium">系统默认知识库</span>
+        {currentValue ? (
+          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">已配置</span>
         ) : (
-          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">
-            已自定义
-          </span>
+          <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">未配置</span>
         )}
       </div>
       <p className="mb-3 text-[12px] text-muted-foreground">
-        提问页和文档管理页会默认选中此知识库。留空则使用「内置知识库」。
+        作为未设置个人默认知识库的用户的默认选择；用户可在个人设置中选择自己的默认知识库，优先于本配置。留空则使用内置知识库。
       </p>
       <div className="flex items-center gap-2">
         <Select
-          value={selected || 'builtin'}
+          value={selected || 'none'}
           onValueChange={(v) => {
-            const id = v === 'builtin' ? '' : v
+            const id = v === 'none' ? '' : v
             setPendingId(id)
             updateMutation.mutate(id || null)
           }}
@@ -325,7 +323,7 @@ function DefaultKbCard() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="builtin">使用内置默认（is_default）</SelectItem>
+            <SelectItem value="none">不配置（使用内置默认）</SelectItem>
             {(kbList.data ?? []).map((kb) => (
               <SelectItem key={kb.id} value={kb.id}>
                 {kbLabel(kb)}
@@ -338,6 +336,11 @@ function DefaultKbCard() {
           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
         ) : null}
       </div>
+      {configuredGone ? (
+        <p className="mt-2 text-[11px] text-warning">
+          当前配置的知识库已不存在或不可见，用户会回退到内置默认，建议重新选择。
+        </p>
+      ) : null}
     </Card>
   )
 }

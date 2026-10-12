@@ -81,6 +81,15 @@ export type KnowledgeFilesResponse = {
   count: number
 }
 
+export type DefaultKbInfo = {
+  kb_id: string | null
+  name: string | null
+  source: 'personal' | 'system' | 'builtin' | 'first'
+  fallback_reason: 'personal_unavailable' | 'system_unavailable' | 'both_unavailable' | null
+  personal_kb_id: string | null
+  system_kb_id: string | null
+}
+
 export type KB = {
   owner_id?: string | null
   owner_username?: string | null
@@ -1308,18 +1317,14 @@ export const api = {
   },
 
   defaultKb: {
-    get: () =>
-      request<{
-        kb_id: string | null
-        name: string | null
-        source: 'config' | 'is_default'
-      }>('/settings/default_kb'),
-    update: (kbId: string | null) =>
-      request<{
-        kb_id: string | null
-        name: string | null
-        source: 'config' | 'is_default'
-      }>('/settings/default_kb', {
+    get: () => request<DefaultKbInfo>('/settings/default_kb'),
+    setPersonal: (kbId: string | null) =>
+      request<DefaultKbInfo>('/settings/default_kb', {
+        method: 'PUT',
+        body: JSON.stringify({ kb_id: kbId }),
+      }),
+    setSystem: (kbId: string | null) =>
+      request<DefaultKbInfo>('/settings/default_kb/system', {
         method: 'PUT',
         body: JSON.stringify({ kb_id: kbId }),
       }),

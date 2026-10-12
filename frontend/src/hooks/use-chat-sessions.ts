@@ -92,11 +92,11 @@ export function useChatSessions() {
     refetchOnWindowFocus: false,
   })
 
-  // KB 列表（用于获取默认 KB）
-  const kbListQuery = useQuery({
-    queryKey: ['kbs'],
-    queryFn: api.kb.list,
-    refetchOnWindowFocus: false,
+  // 默认 KB（个人 > 系统 > 内置，后端统一解析）
+  const defaultKbQuery = useQuery({
+    queryKey: ['settings', 'default_kb'],
+    queryFn: api.defaultKb.get,
+    staleTime: 60_000,
   })
 
   // 当前会话详情（含 turns）
@@ -209,11 +209,10 @@ export function useChatSessions() {
     const id = genId('s')
     const now = Date.now()
 
-    // 获取 KB：优先使用传入的 kbId，否则使用默认 KB
+    // 获取 KB：优先使用传入的 kbId，否则使用后端解析的默认 KB
     let kb_scope = kbId
     if (!kb_scope) {
-      const defaultKb = kbListQuery.data?.find(kb => kb.is_default)
-      kb_scope = defaultKb?.id || undefined
+      kb_scope = defaultKbQuery.data?.kb_id || undefined
     }
 
     await createMutation.mutateAsync({ id, title: '新会话', created_at: now, kb_scope, retrieval_mode: mode ?? 'deep_ai', group_id: newGroupId })
@@ -232,7 +231,7 @@ export function useChatSessions() {
     qc.setQueryData(['session', id], optimistic)
     setActiveId(id)
     return id
-  }, [createMutation, qc, kbListQuery.data, newGroupId])
+  }, [createMutation, qc, defaultKbQuery.data, newGroupId])
 
   // 切换会话不中断后台生成中的流（token 继续写入该会话的 query cache，切回即见）
   const selectSession = useCallback((id: string) => {

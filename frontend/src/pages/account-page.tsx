@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { SettingsLayout } from '@/components/settings-layout'
 import { AppearanceSettingsCard, SidebarSettingsCard } from '@/components/personal-appearance-settings'
 import { PersonalPreferencesCard } from '@/components/personal-preferences-card'
+import { PersonalDefaultKbCard } from '@/components/personal-default-kb-card'
 import { DeepAiOptionsFields } from '@/components/deep-ai-options'
 import { OptionSelect } from '@/components/ui/select'
 import { useState, type FormEvent } from 'react'
@@ -98,6 +99,9 @@ export function AccountPage() {
     </> },
     { id: 'display', label: '会话显示', description: '思考过程、引用与上下文', content: <>
     <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>显示上下文使用情况（可展开）</span><Toggle label="显示上下文使用情况" checked={showContext} onChange={setShowContext} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div></Card>
+    </> },
+    { id: 'kb', label: '知识库', description: '提问与文档页的默认选择', content: <>
+    <PersonalDefaultKbCard />
     </> },
     { id: 'providers', label: 'API 与连接', description: 'API 选择、配置与重试', content: <>
     <ProviderSettings />
