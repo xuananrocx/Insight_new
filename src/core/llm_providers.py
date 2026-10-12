@@ -222,8 +222,9 @@ class OpenAIProvider(BaseLLMProvider):
         """流式生成，逐 token yield。stream 启动失败时降级为同步一次性返回。"""
         if not self.chat_model:
             raise LLMError(f"provider {self.name} 未配置 chat_model")
+        status = kwargs.pop("status", None)
         if self._api_style == "responses":
-            async with aclosing(self._chat_stream_responses(messages, **kwargs)) as stream:
+            async with aclosing(self._chat_stream_responses(messages, status=status, **kwargs)) as stream:
                 async for token in stream:
                     yield token
             return
@@ -242,7 +243,10 @@ class OpenAIProvider(BaseLLMProvider):
             async for chunk in stream:
                 if not chunk.choices:
                     continue
-                delta = chunk.choices[0].delta
+                choice = chunk.choices[0]
+                if status is not None and choice.finish_reason:
+                    status["stop_reason"] = choice.finish_reason
+                delta = choice.delta
                 if delta and delta.content:
                     yield delta.content
         except Exception as e:
@@ -253,7 +257,7 @@ class OpenAIProvider(BaseLLMProvider):
             except Exception:
                 pass
 
-    async def _chat_stream_responses(self, messages: list[dict], **kwargs: Any) -> AsyncGenerator[str, None]:
+    async def _chat_stream_responses(self, messages: list[dict], *, status: dict | None = None, **kwargs: Any) -> AsyncGenerator[str, None]:
         """Responses API 流式：response.output_text.delta 事件携带增量文本。"""
         try:
             stream = await self.async_client.responses.create(
@@ -269,6 +273,8 @@ class OpenAIProvider(BaseLLMProvider):
             async for event in stream:
                 if event.type == "response.output_text.delta" and event.delta:
                     yield event.delta
+                if status is not None and event.type in ("response.completed", "response.incomplete"):
+                    status["stop_reason"] = "completed" if event.type == "response.completed" else "incomplete"
         except Exception as e:
             raise LLMError(f"provider {self.name} chat_stream 中途失败: {e}") from e
         finally:
@@ -488,6 +494,7 @@ class AnthropicProvider(BaseLLMProvider):
         # 提取参数
         max_tokens = kwargs.pop("max_tokens", 1024)
         temperature = kwargs.pop("temperature", None)
+        status = kwargs.pop("status", None)
         if "system" in kwargs:
             system_text = kwargs.pop("system")
 
@@ -506,6 +513,12 @@ class AnthropicProvider(BaseLLMProvider):
             async with self.async_client.messages.stream(**stream_kwargs) as stream:
                 async for text in stream.text_stream:
                     yield text
+                if status is not None:
+                    try:
+                        final = await stream.get_final_message()
+                        status["stop_reason"] = getattr(final, "stop_reason", None)
+                    except Exception:
+                        logger.debug(f"provider {self.name} 获取流式 stop_reason 失败", exc_info=True)
         except Exception as e:
             raise LLMError(f"provider {self.name} chat_stream failed: {e}") from e
 
@@ -702,7 +715,8 @@ class AnthropicArchProvider(BaseLLMProvider):
             if not text.strip():
                 raise LLMError(f"模型返回空文本（stop_reason={reason}）")
             if reason == 'max_tokens':
-                raise LLMError(f"模型输出达到 max_tokens={max_tokens} 上限，响应不完整")
+                # Truncation is a verdict, not a provider failure: keep the text.
+                logger.warning("provider %s 输出达到 max_tokens=%s 上限，返回截断文本", self.name, max_tokens)
             return ChatText(text, usage=data.get('usage'), stop_reason=reason, model=data.get('model', self.chat_model))
         except Exception as e:
             raise LLMError(f"provider {self.name} chat 失败: {e}") from e
@@ -715,6 +729,7 @@ class AnthropicArchProvider(BaseLLMProvider):
             raise LLMError(f"provider {self.name} 未配置 chat_model")
         max_tokens = kwargs.pop("max_tokens", 1024)
         temperature = kwargs.pop("temperature", None)
+        status = kwargs.pop("status", None)
 
         payload = self._build_payload(messages, max_tokens, temperature, **kwargs)
         payload["stream"] = True
@@ -752,6 +767,10 @@ class AnthropicArchProvider(BaseLLMProvider):
                             text = delta.get("text", "")
                             if text:
                                 yield text
+                    elif event_type == "message_delta":
+                        stop = chunk.get("delta", {}).get("stop_reason")
+                        if stop and status is not None:
+                            status["stop_reason"] = stop
         except Exception as e:
             logger.warning(f"provider {self.name} stream 失败，交由统一重试策略处理: {e}")
             raise LLMError(f"provider {self.name} stream failed: {e}") from e

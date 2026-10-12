@@ -37,6 +37,7 @@ class ToolTurn:
     text: str
     calls: list[ToolCall]
     usage: dict
+    truncated: bool = False
 
 
 class ToolChat:
@@ -55,6 +56,7 @@ class ToolChat:
         self.on_retry = lambda **kwargs: None
         self.attempt = 1
         self._request_timeout = None
+        self.final_truncated = False
 
     def _diagnostic(self, scene):
         diagnostic = CallDiagnostics(self.provider, self.style, scene, self.meta)
@@ -117,10 +119,12 @@ class ToolChat:
     def _decode(self, data: dict) -> ToolTurn:
         if data.get("error"):
             raise ToolProtocolError("模型返回错误，未完成工具调用。请检查 API 配置或使用 AI 增强。")
-        calls, text = [], ""
+        calls, text, truncated = [], "", False
         if self.style == "chat":
             choice = data["choices"][0]
-            if choice.get("finish_reason") not in ("stop", "tool_calls"):
+            finish = choice.get("finish_reason")
+            truncated = finish == "length"
+            if finish not in ("stop", "tool_calls", "length"):
                 raise ToolProtocolError("模型响应不完整，工具尚未执行。请调整模型输出限制。")
             msg = choice["message"]
             for c in msg.get("tool_calls") or []:
@@ -129,7 +133,8 @@ class ToolChat:
             # Preserve reasoning_content for providers which require it on subsequent turns.
             self.messages.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls", "reasoning_content")})
         elif self.style == "responses":
-            if data.get("status") != "completed":
+            truncated = data.get("status") == "incomplete"
+            if data.get("status") not in ("completed", "incomplete"):
                 raise ToolProtocolError("模型响应不完整，工具尚未执行。")
             output = data.get("output", [])
             for item in output:
@@ -140,7 +145,9 @@ class ToolChat:
             # Includes encrypted reasoning items needed for stateless reasoning models.
             self.messages.extend(output)
         else:
-            if data.get("stop_reason") not in ("end_turn", "tool_use", "stop_sequence"):
+            reason = data.get("stop_reason")
+            truncated = reason == "max_tokens"
+            if reason not in ("end_turn", "tool_use", "stop_sequence", "max_tokens"):
                 raise ToolProtocolError("模型响应不完整，工具尚未执行。")
             blocks = data.get("content", [])
             for b in blocks:
@@ -148,10 +155,12 @@ class ToolChat:
                     calls.append(ToolCall(b["id"], b["name"], b["input"]))
                 elif b["type"] == "text":
                     text += b["text"]
-            self.messages.append({"role": "assistant", "content": blocks})
+            if blocks:
+                # 空内容轮次（仅思考后 end_turn）不写入会话：部分网关拒绝空 content 数组
+                self.messages.append({"role": "assistant", "content": blocks})
         if len({c.id for c in calls}) != len(calls) or any(not c.id for c in calls):
             raise ToolProtocolError("模型返回重复或缺失的工具调用编号。")
-        return ToolTurn(text, calls, data.get("usage") or {})
+        return ToolTurn(text, calls, data.get("usage") or {}, truncated=truncated)
 
     def _log(self, scene, started, response=None, error=None):
         # Reasoning blocks remain protocol state only, never a displayed thinking trace.
@@ -171,7 +180,7 @@ class ToolChat:
     async def turn(self, tools, *, force=False, max_tokens=4096):
         for attempt in range(self.retry_count + 1):
             self.attempt = attempt + 1
-            self.attempt_deadline = min(self.deadline, time.monotonic() + 45)
+            self.attempt_deadline = min(self.deadline, time.monotonic() + getattr(self, "turn_attempt_seconds", 45))
             try:
                 async with asyncio.timeout(max(0, self.attempt_deadline - time.monotonic())) as request_timeout:
                     self._request_timeout = request_timeout
@@ -211,7 +220,7 @@ class ToolChat:
         from src.core.tool_stream import Assembly
         for attempt in range(self.retry_count + 1):
             self.attempt = attempt + 1
-            self.attempt_deadline = min(self.deadline, time.monotonic() + 180)
+            self.attempt_deadline = min(self.deadline, time.monotonic() + getattr(self, "round_attempt_seconds", 180))
             emitted = False
             started = time.monotonic()
             diagnostic = self._diagnostic('deep_ai_tools')
@@ -290,6 +299,8 @@ class ToolChat:
         started, parts, complete = time.monotonic(), [], False
         scene = getattr(self, 'answer_scene', 'deep_ai_answer')
         diagnostic = self._diagnostic(scene)
+        truncated = False
+        self.final_truncated = False
         try:
             await asyncio.to_thread(self.check_access)
             diagnostic.data["phase"] = "构造请求"
@@ -314,24 +325,38 @@ class ToolChat:
                     token = ""
                     if self.style == "chat":
                         for choice in event.get("choices", []):
-                            if choice.get("finish_reason") == "stop":
+                            finish = choice.get("finish_reason")
+                            if finish == "stop":
                                 complete = True
+                            elif finish == "length":
+                                # Output capped by max_tokens: a verdict, not a network error.
+                                complete = truncated = True
                             token += choice.get("delta", {}).get("content") or ""
                     elif self.style == "responses":
                         if event.get("type") == "response.output_text.delta":
                             token = event.get("delta", "")
                         if event.get("type") == "response.completed":
                             complete = True
+                        if event.get("type") == "response.incomplete":
+                            complete = truncated = True
                     else:
                         if event.get("type") == "content_block_delta" and event.get("delta", {}).get("type") == "text_delta":
                             token = event["delta"]["text"]
-                        if event.get("type") == "message_delta" and event.get("delta", {}).get("stop_reason") in ("end_turn", "stop_sequence"):
+                        stop = event.get("delta", {}).get("stop_reason") if event.get("type") == "message_delta" else None
+                        if stop in ("end_turn", "stop_sequence"):
                             complete = True
+                        elif stop == "max_tokens":
+                            complete = truncated = True
                     if token:
                         parts.append(token)
                         yield token
             if not complete:
                 raise httpx.RemoteProtocolError("模型输出未完整结束。")
+            self.final_truncated = truncated
+            if truncated and not parts:
+                raise ToolProtocolError(
+                    f"模型输出达到输出上限（max_tokens={max_tokens}）且没有可见回答内容，"
+                    "推理可能已耗尽全部额度。请联系管理员在系统设置的 AI 生成配置中调大输出上限后重试。")
             await asyncio.to_thread(self.check_access)
             self._log(scene, started, "".join(parts))
             diagnostic.success()

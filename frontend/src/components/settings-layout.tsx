@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 
 type SettingsSection = {
@@ -17,7 +18,10 @@ export function SettingsLayout({ title, description, sections, readOnly = false,
   children?: ReactNode
 }) {
   const prefix = useId()
-  const [active, setActive] = useState(sections[0].id)
+  const [searchParams] = useSearchParams()
+  const requested = searchParams.get('section')
+  const initial = sections.some(s => s.id === requested) ? requested! : sections[0].id
+  const [active, setActive] = useState(initial)
   const rootRef = useRef<HTMLDivElement>(null)
   const navRef = useRef<HTMLElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
@@ -81,6 +85,15 @@ export function SettingsLayout({ title, description, sections, readOnly = false,
       behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
     })
   }
+
+  // Deep link (?section=xxx)：渲染完成后滚到指定分区
+  useEffect(() => {
+    if (initial === sections[0].id) return
+    const frame = requestAnimationFrame(() => jumpTo(initial))
+    return () => cancelAnimationFrame(frame)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   return (
     <div ref={rootRef} className="mx-auto grid h-full min-h-0 w-full max-w-6xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">
       <aside className="flex min-h-0 min-w-0 flex-col gap-4 border-b p-4 lg:gap-6 lg:border-b-0 lg:border-r lg:px-5 lg:py-8">

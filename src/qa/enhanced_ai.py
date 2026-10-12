@@ -36,9 +36,24 @@ def config():
     return settings.config.get('qa', {}).get('enhanced_ai', {}) or {}
 
 
+def _configured_max_tokens():
+    # ai_generation（统一配置卡）优先，旧键仅作回退。
+    qa = settings.config.get('qa', {}) or {}
+    for source in (qa.get('ai_generation') or {}, config()):
+        if 'max_tokens' in source:
+            try:
+                return int(source['max_tokens'])
+            except (ValueError, TypeError):
+                break
+    return 4096
+
+
 def chat_options():
     legacy = settings.config.get('qa', {}).get('chat_options', {}) or {}
-    return {**legacy, 'max_tokens': int(config().get('max_tokens', 4096))}
+    window = conversation_context.config()['context_window_tokens']
+    # 输出上限是封顶不是预留，但不能超出窗口：输出与输入至多对半分。
+    effective = min(max(256, _configured_max_tokens()), max(1024, window // 2))
+    return {**legacy, 'max_tokens': effective}
 
 
 def clip(text, tokens):

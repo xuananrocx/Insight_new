@@ -98,7 +98,15 @@ class RetryBudget:
 
     @classmethod
     def for_scene(cls, scene, count=None):
-        seconds, default = (20, 1) if scene == "test" else (30, 2) if scene == "title" else (90, 10) if scene == "conversation_summary" else (180, 10) if scene == "qa_chat" else (300, 3)
+        if scene == "qa_chat":
+            # 增强 AI 作答预算走统一配置卡；默认放宽到 600 秒。
+            from src.core.config import settings
+            try:
+                seconds = max(30, int((settings.config.get("qa", {}).get("ai_generation") or {}).get("timeout_seconds", 600)))
+            except (ValueError, TypeError):
+                seconds = 600
+            return cls(min(10, max(0, 10 if count is None else int(count))), time.monotonic() + seconds)
+        seconds, default = (20, 1) if scene == "test" else (30, 2) if scene == "title" else (90, 10) if scene == "conversation_summary" else (300, 3)
         return cls(min(10, max(0, default if count is None else int(count))), time.monotonic() + seconds)
 
 

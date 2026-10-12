@@ -101,6 +101,20 @@ async def test_stream_failure_does_not_mix_two_provider_answers(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_truncated_stream_appends_mark_without_error(monkeypatch):
+    # provider 回填 stop_reason=max_tokens：文本照常送达，末尾追加截断标记而不是报错
+    async def truncated_stream(messages, *, status=None, **kwargs):
+        yield "部分回答"
+        status["stop_reason"] = "max_tokens"
+    client = object.__new__(llm_client.LLMClient)
+    client._chat_chain = ["only"]
+    client._providers = {"only": SimpleNamespace(usable=True, chat_stream=truncated_stream)}
+    monkeypatch.setattr(ai_call_logger, "log_call", lambda **kwargs: None)
+    values = [v async for v in client.chat_stream([])]
+    assert values == [("部分回答", "only"), ("", llm_client.STREAM_TRUNCATED_MARK)]
+
+
+@pytest.mark.asyncio
 async def test_deep_mode_sse_serialization(monkeypatch):
     async def stream(**kwargs):
         assert kwargs["mode"] == "deep_ai"

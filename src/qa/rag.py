@@ -1110,6 +1110,7 @@ async def ask_stream(
         logger.debug(f"rebuild check 失败（非致命）: {_e}")
 
     try:
+        truncated = False
         with trace.stage("generation", "生成回答") as s:
             first = True
             async for token, provider_name in client.chat_stream(
@@ -1124,13 +1125,19 @@ async def ask_stream(
                     "kb_id": kb_scope,
                 },
             ):
+                if provider_name == llm_client.STREAM_TRUNCATED_MARK:
+                    truncated = True
+                    continue
                 if first:
                     if provider_name:
                         used_provider = provider_name
                     first = False
                 full_answer_parts.append(token)
                 yield {"type": "token", "data": {"text": token}}
-            s.set(count=1, status="ok", notes=f"provider={used_provider}")
+            if truncated:
+                s.set(count=1, status="partial", notes=f"provider={used_provider}；模型输出达到上限，回答已截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限")
+            else:
+                s.set(count=1, status="ok", notes=f"provider={used_provider}")
     except Exception as e:
         logger.exception("ask_stream 生成阶段失败")
         # 已经有 token 输出了就保留部分答案
@@ -1142,17 +1149,19 @@ async def ask_stream(
         return
 
     full_answer = "".join(full_answer_parts)
-    yield {
-        "type": "done",
-        "data": {
-            "answer": full_answer,
-            "trace": trace.to_list(),
-            "sources": sources,
-            "used_provider": used_provider,
-            "used_chunks": len(hits),
-            "mode": "ai",
-        },
+    done_data = {
+        "answer": full_answer,
+        "trace": trace.to_list(),
+        "sources": sources,
+        "used_provider": used_provider,
+        "used_chunks": len(hits),
+        "mode": "ai",
     }
+    if truncated:
+        done_data["outcome"] = "partial"
+        done_data["reason"] = "模型输出达到输出上限，回答已截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限"
+        done_data["answer"] = full_answer + "\n\n> 本次回答因输出上限被截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限后重试。"
+    yield {"type": "done", "data": done_data}
 
 
 def add_approved_qa(question: str, answer: str, metadata: dict | None = None) -> None:

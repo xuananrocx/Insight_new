@@ -186,7 +186,15 @@ ingest:
     segment_chars: 30000
 qa:
   top_k: 5
+  # AI 生成配置（系统级，设置页「AI 运行配置」卡片写入此处）：深度 AI 与增强 AI 统一生效。
+  # max_tokens 是单次模型调用的输出 token 上限（推理模型的思考过程计入）；
+  # 达到上限的回答会标记为「部分完成」，不再静默截断或反复重试。
+  ai_generation:
+    max_tokens: 81920
+    timeout_seconds: 600   # 作答阶段时长预算（秒）
+    context_chars: 48000   # 深度 AI 单次查阅的原文总字符预算
   # 独立增强 AI 配置，不影响 deep_ai 或共享工具的默认行为。
+  # max_tokens 仅作为 ai_generation 缺省时的回退值，实际生效以 ai_generation 为准。
   enhanced_ai:
     max_tokens: 4096
     evidence_tokens: 12000
@@ -200,14 +208,15 @@ qa:
     rerank_batch_size: 4
     rerank_seconds: 20
   # 独立的深度 AI 流程；已有用户配置缺少此节时使用同样的代码默认值。
+  # max_tokens / context_chars 仅作为 ai_generation 缺省时的回退值。
   deep_ai:
     max_rounds: 10  # null 表示不限轮数
     top_k: 8
     context_chars: 20000
     max_tokens: 4096
-    step_timeout_seconds: 20
-    generation_timeout_seconds: 60
-    verification_timeout_seconds: 45
+    step_timeout_seconds: 20          # 已废弃：仅旧 deep_ai.py 实现读取，现行 agent 不消费
+    generation_timeout_seconds: 60    # 已废弃：仅旧 deep_ai.py 实现读取；作答时长现由 ai_generation.timeout_seconds 控制
+    verification_timeout_seconds: 45  # 已废弃：仅旧 deep_ai.py 实现读取，现行 agent 不做独立核验阶段
     total_timeout_seconds: 360
     time_limit_enabled: false
   similarity_threshold: 0.3
@@ -220,5 +229,5 @@ qa:
     retrieve_multiplier: 4
   chat_options:
     temperature: 0.2
-    max_tokens: 1500
+    max_tokens: 1500  # 已废弃：增强 AI 的输出上限实际由 ai_generation/enhanced_ai.max_tokens 决定，此处不生效
   system_prompt: ''

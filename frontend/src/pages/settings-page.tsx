@@ -15,6 +15,7 @@ import {
   Save,
   Library,
   Timer,
+  SlidersHorizontal,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -119,6 +120,133 @@ function LLMTimeoutsCard() {
         </Button>
       </div>
     </Card>
+  )
+}
+
+
+function AiGenerationConfigCard() {
+  const qc = useQueryClient()
+  const { data } = useQuery({
+    queryKey: ['settings', 'ai_generation'],
+    queryFn: api.aiGeneration.get,
+  })
+  const [draft, setDraft] = useState<{
+    maxTokens: number
+    timeoutSeconds: number
+    contextChars: number
+  } | null>(null)
+  const [confirmLargeTokens, setConfirmLargeTokens] = useState(false)
+  // 服务端数据加载前不渲染表单；用户编辑后以 draft 为准
+  const form = draft ?? (data
+    ? { maxTokens: data.max_tokens, timeoutSeconds: data.timeout_seconds, contextChars: data.context_chars ?? 48000 }
+    : null)
+
+  const saveMutation = useMutation({
+    mutationFn: (values: { maxTokens: number; timeoutSeconds: number; contextChars: number }) =>
+      api.aiGeneration.update({
+        max_tokens: values.maxTokens,
+        timeout_seconds: values.timeoutSeconds,
+        context_chars: values.contextChars,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['settings', 'ai_generation'] })
+      toast.success('AI 生成配置已保存')
+    },
+    onError: (e: Error) => toast.error(`保存失败：${e.message}`),
+  })
+
+  if (form === null) return null
+
+  const save = () => {
+    if (form.maxTokens > 1_000_000) {
+      setConfirmLargeTokens(true)
+      return
+    }
+    saveMutation.mutate(form)
+  }
+
+  return (
+    <>
+    <Card className="mb-4 p-5">
+      <div className="mb-2 flex items-center gap-2">
+        <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
+        <span className="text-[14px] font-medium">AI 生成配置</span>
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+          深度 AI 与增强 AI 通用
+        </span>
+      </div>
+      <p className="mb-4 text-[12px] text-muted-foreground">
+        输出上限是单次模型调用的 token 上限，推理模型的思考过程也计入其中；达到上限的回答会被标记为部分完成，不再静默截断或反复重试。
+      </p>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <div>
+          <label className="mb-1.5 block text-[13px] font-medium">输出上限（tokens）</label>
+          <input
+            type="number"
+            min={256}
+            value={form.maxTokens}
+            onChange={(e) => setDraft({ ...form, maxTokens: Number(e.target.value) })}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            不设上限，建议 32768-131072
+          </p>
+        </div>
+        <div>
+          <label className="mb-1.5 block text-[13px] font-medium">生成时长（秒）</label>
+          <input
+            type="number"
+            min={30}
+            value={form.timeoutSeconds}
+            onChange={(e) => setDraft({ ...form, timeoutSeconds: Number(e.target.value) })}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
+          />
+          <p className="mt-1 text-[11px] text-muted-foreground">作答阶段的最长生成时间，建议 300-1800 秒</p>
+        </div>
+      </div>
+      <div className="mt-4 border-t pt-3">
+        <div className="mb-2 text-[12px] font-medium text-muted-foreground">深度 AI 专项</div>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className="mb-1.5 block text-[13px] font-medium">查阅上下文（字符）</label>
+            <input
+              type="number"
+              min={2000}
+              value={form.contextChars}
+              onChange={(e) => setDraft({ ...form, contextChars: Number(e.target.value) })}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              单次提问可读取的原文总字符预算，建议 20000-80000
+            </p>
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 flex justify-end">
+        <Button size="sm" className="h-8 gap-1.5" disabled={saveMutation.isPending} onClick={save}>
+          {saveMutation.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Save className="h-3.5 w-3.5" />
+          )}
+          保存
+        </Button>
+      </div>
+    </Card>
+    {confirmLargeTokens ? (
+      <ConfirmDialog
+        title="输出上限较大"
+        message={`输出上限已设为 ${form.maxTokens.toLocaleString()} tokens，可能超出模型实际支持范围，超出后所有 AI 请求都会被拒绝。确认使用这个值吗？`}
+        confirmText="仍然保存"
+        loading={saveMutation.isPending}
+        onCancel={() => setConfirmLargeTokens(false)}
+        onConfirm={() => {
+          setConfirmLargeTokens(false)
+          saveMutation.mutate(form)
+        }}
+      />
+    ) : null}
+    </>
   )
 }
 
@@ -460,7 +588,7 @@ export function SettingsPage() {
 
       </> },
       { id: 'documents', label: '文档处理', description: '导入时的摘要与概念提取', content: <AiSummaryConfigCard /> },
-      { id: 'ai', label: 'AI 运行配置', description: '系统提示词与请求超时', content: <><LLMTimeoutsCard /><SystemPromptCard /></> },
+      { id: 'ai', label: 'AI 运行配置', description: '生成参数、系统提示词与请求超时', content: <><AiGenerationConfigCard /><LLMTimeoutsCard /><SystemPromptCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>
       {confirmDisable ? (

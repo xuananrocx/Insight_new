@@ -81,13 +81,21 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
     stopped = threading.Event()
     trace, parts = [], []
     state = {"provider": "", "verification": "sources_validated", "outcome": "success", "reason": ""}
-    cfg = settings.config.get("qa", {}).get("deep_ai") or {}
+    qa_cfg = settings.config.get("qa", {}) or {}
+    cfg = qa_cfg.get("deep_ai") or {}
+    gen = qa_cfg.get("ai_generation") or {}
 
-    def number(key, default, minimum, maximum):
-        try:
-            return min(maximum, max(minimum, int(cfg.get(key, default))))
-        except (ValueError, TypeError):
-            return default
+    def number(key, default, minimum, maximum=None):
+        # ai_generation (unified card) wins; legacy per-AI keys stay as fallback.
+        for source in (gen, cfg):
+            if key in source:
+                try:
+                    value = int(source[key])
+                except (ValueError, TypeError):
+                    return default
+                value = max(minimum, value)
+                return min(maximum, value) if maximum is not None else value
+        return default
 
     options = deep_ai_options or DeepAiOptions(
         max_rounds=cfg.get('max_rounds', 10),
@@ -100,7 +108,9 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
     rounds = options.max_rounds
     # No hidden twelve-call cap. Allow several tools per model round.
     max_calls = rounds * 4 if rounds is not None else float('inf')
-    tokens = number("max_tokens", 4096, 512, 8192)
+    tokens = number("max_tokens", 81920, 256)
+    answer_seconds = number("timeout_seconds", 600, 30)
+    round_seconds = max(180, answer_seconds)
     deadline = time.monotonic() + total
     reserve = min(60, total / 3) if math.isfinite(total) else 0
     meta = {"session_id": session_id, "turn_id": turn_id, "kb_id": kb_scope}
@@ -109,7 +119,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
         if stopped.is_set():
             raise PipelineCancelled("请求已取消")
 
-    kb = KnowledgeTools(kb_scope, check_cancel, max_chars=number("context_chars", 48000, 8000, 80000), top_k=top_k, question=question)
+    kb = KnowledgeTools(kb_scope, check_cancel, max_chars=number("context_chars", 48000, 2000, 200000), top_k=top_k, question=question)
 
     def stage(name, label, started=None, **kwargs):
         data = {"stage": name, "label": label, "duration_ms": round((time.monotonic() - started) * 1000) if started else 0, **kwargs}
@@ -145,11 +155,14 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             model = await bounded(asyncio.to_thread(create_tool_chat, system, messages, meta=meta), 15, tools_phase=True)
             model.retry_count = min(10, max(0, int(api_retry_count)))
             model.deadline = deadline - reserve
+            # 单次 API 尝试的时长上限随作答预算放宽（推理模型思考期也在 attempt 内）
+            model.round_attempt_seconds = round_seconds
+            model.turn_attempt_seconds = round_seconds
             model.on_retry = lambda **info: stage("api_retry", "API 请求重试", status="partial",
                 notes=f"{info['reason']}，{info['delay']:g} 秒后进行第 {info['attempt']}/{info['maximum']} 次重试")
             state["provider"] = model.name
             called, repeated, stalled, directory_run, round_no = 0, 0, 0, 0, 0
-            stage('agent_limits', '深度 AI 查阅配置', notes=f"查阅轮数：{rounds if rounds is not None else '不限'}；总时长：{str(options.total_timeout_seconds) + ' 秒' if options.time_limit_enabled else '不限'}；保留单次 API 超时及无进展保护")
+            stage('agent_limits', '深度 AI 查阅配置', notes=f"查阅轮数：{rounds if rounds is not None else '不限'}；总时长：{str(options.total_timeout_seconds) + ' 秒' if options.time_limit_enabled else '不限'}；单轮/作答时长：{answer_seconds} 秒；输出上限：{tokens} tokens；保留单次 API 超时及无进展保护")
             logger.info('深度 AI 预算 session=%s turn=%s rounds=%s total_seconds=%s max_calls=%s', session_id, turn_id, rounds, total, max_calls)
             progress_tracker = evidence_state.Progress()
             review = evidence_state.Review()
@@ -161,25 +174,28 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 input_estimate = conversation_context.estimate(system + json.dumps(
                     [getattr(model, 'messages', messages), tools], ensure_ascii=False))
                 window = conversation_context.config()['context_window_tokens']
-                if called and input_estimate + tokens + 18000 >= window:
+                # 巨大的输出上限不能按全额预留：只要还给作答留出合理空间就继续查阅
+                if called and input_estimate + min(tokens, 8192) + 4096 >= window:
                     stop_reason = 'context_capacity'
                     reason = '接近模型上下文容量，停止补查并使用已读资料回答'
                     logger.info('深度 AI 上下文停止 session=%s turn=%s input_estimate=%s window=%s',
                                 session_id, turn_id, input_estimate, window)
                     break
+                # anthropic 协议要求 input + max_tokens <= 窗口：按剩余空间钳制本次输出上限
+                round_tokens = min(tokens, max(1024, window - input_estimate - 2048))
                 if called >= max_calls or time.monotonic() >= deadline - reserve or kb.used_chars >= kb.max_chars:
                     stop_reason = 'tool_calls' if called >= max_calls else 'time_limit' if time.monotonic() >= deadline - reserve else 'evidence_capacity'
                     reason = "达到本次查阅预算，依据已读资料回答并说明缺口"
                     break
                 started = time.monotonic()
                 stage_running("agent_round", f"第 {round_no + 1} 轮资料查阅")
-                model.deadline = min(deadline - reserve, time.monotonic() + 180)
+                model.deadline = min(deadline - reserve, time.monotonic() + round_seconds)
                 try:
                     round_emitted = False
                     if hasattr(model, 'stream_turn'):
                         live_citations = CitationFilter(len(kb.hits))
                         turn = None
-                        async for kind, value in model.stream_turn(tools,max_tokens=tokens):
+                        async for kind, value in model.stream_turn(tools,max_tokens=round_tokens):
                             check_cancel()
                             if kind == 'turn':
                                 turn = value
@@ -198,12 +214,14 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                         if turn is None:
                             raise ToolProtocolError('模型没有完整结束本轮响应')
                         if not turn.calls:
-                            answer_streamed = True
+                            # 模型结束查阅但一个字都没流出（如仅思考后 end_turn）：
+                            # 不能当作已作答，仍需走作答阶段给模型一次正式作答机会
+                            answer_streamed = round_emitted
                         elif round_emitted:
                             parts.append('\n\n')
                             queue.put_nowait({'type':'token','data':{'text':'\n\n'}})
                     else:
-                        turn = await bounded(model.turn(tools, force=False, max_tokens=tokens), 180, tools_phase=True)
+                        turn = await bounded(model.turn(tools, force=False, max_tokens=round_tokens), round_seconds, tools_phase=True)
                 except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError, RetryDeferredError) as exc:
                     if round_emitted:
                         answer_streamed = True
@@ -224,6 +242,22 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     logger.warning('深度 AI 查阅中断 session=%s turn=%s reason=%s', session_id, turn_id, failure_reason)
                     stop_reason = 'model_error'
                     stage("agent_lookup_incomplete", "部分资料补查未完成", status="partial", notes=reason)
+                    break
+                if getattr(turn, "truncated", False):
+                    # Output-cap verdict: retrying with the same cap fails the same way.
+                    stop_reason = "output_limit"
+                    # 输出上限是系统级配置（仅管理员可改），提示用户找管理员调整
+                    guidance = "，请联系管理员在系统设置的 AI 生成配置中调大输出上限"
+                    if turn.calls:
+                        reason = "模型输出达到输出上限，本轮工具调用未执行" + guidance
+                        state.update(outcome="partial", verification="partial", reason=reason)
+                        logger.warning("深度 AI 轮次输出截断 session=%s turn=%s round=%s calls=%s",
+                                       session_id, turn_id, round_no + 1, [c.name for c in turn.calls])
+                    else:
+                        reason = "模型输出达到输出上限" + guidance
+                        answer_streamed = True
+                        state.update(outcome="partial", reason=reason)
+                    stage("agent_output_limit", "输出达到上限", status="partial", notes=reason)
                     break
                 stage("agent_round", f"第 {round_no + 1} 轮资料查阅", started, count=len(turn.calls), notes="模型已选择下一步工具" if turn.calls else "模型结束查阅，准备按现有证据回答")
                 if not turn.calls:
@@ -327,13 +361,15 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             native_messages = getattr(model, 'messages', None)
             native_cost = conversation_context.estimate(answer_system + json.dumps(
                 [native_messages, tools], ensure_ascii=False) + instruction)
-            native = answer_streamed or (native_messages is not None and stop_reason != 'model_error' and native_cost + tokens + 3000 <= window)
+            native = answer_streamed or (native_messages is not None and stop_reason != 'model_error' and native_cost + 3000 + 1024 <= window)
             model.system = answer_system
             final_tools = tools if native else []
             omitted = []
             if native:
                 allowed = list(range(1, len(sources) + 1))
                 context_mode = 'native'
+                # anthropic 协议要求 input + max_tokens <= 窗口，按剩余空间钳制作答输出上限
+                answer_tokens = min(tokens, max(1024, window - native_cost - 3000))
             else:
                 # Never clip individual protocol items. Fall back only for a broken
                 # exchange or capacity pressure, preserving explicit observations.
@@ -349,8 +385,10 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                         observations.append(content)
                 handoff = '\n'.join(observations)[-6000:]
                 base_cost = conversation_context.estimate(answer_system + json.dumps(messages, ensure_ascii=False) + instruction + handoff)
+                # 压缩作答模式本身就是为窄窗口准备：作答输出至多预留 16k
+                answer_tokens = min(tokens, 16384)
                 packet = evidence_state.answer_payload(kb.hits, review, history_reads,
-                    window - tokens - base_cost - 3000, conversation_context.estimate)
+                    window - answer_tokens - base_cost - 3000, conversation_context.estimate)
                 allowed = [entry['citation'] for entry in packet['evidence']]
                 allowed.extend(alias['citation'] for entry in packet['evidence'] for alias in entry['same_text_citations'])
                 omitted = packet['omitted_citations']
@@ -369,7 +407,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                   notes='沿用完整查阅上下文和已有分析' if native else '因容量或查阅异常压缩资料，并保留已有分析')
             if omitted:
                 state.update(outcome='partial', reason='作答上下文容量不足，部分已读原文未纳入本次回答')
-            model.deadline = min(deadline, time.monotonic() + 180)
+            model.deadline = min(deadline, time.monotonic() + answer_seconds)
             logger.info('深度 AI 作答策略 session=%s turn=%s streaming=true post_verification=false strategy=%s prompt_version=%s context_mode=%s', session_id, turn_id, strategy, ai_policy.VERSION, context_mode)
             if requested_fields:
                 logger.info('深度 AI 作答字段覆盖 session=%s turn=%s matched=%s missing=%s', session_id, turn_id, sorted(observed_fields), missing_fields)
@@ -393,7 +431,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     last_flush = time.monotonic()
 
             async def generate():
-                async for token in model.final_stream(final_tools, instruction, max_tokens=tokens):
+                async for token in model.final_stream(final_tools, instruction, max_tokens=answer_tokens):
                     check_cancel()
                     pending.append(token)
                     if len(pending) >= 32 or time.monotonic() - last_flush >= .1:
@@ -406,6 +444,11 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             try:
                 if not answer_streamed:
                     await bounded(generate(), max(1, model.deadline - time.monotonic()))
+                    if getattr(model, "final_truncated", False):
+                        state.update(outcome="partial", reason="模型输出达到输出上限，回答已截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限")
+                        notice = "\n\n> 本次回答因输出上限被截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限后重试。"
+                        parts.append(notice)
+                        queue.put_nowait({"type": "token", "data": {"text": notice}})
             except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError, RetryDeferredError) as exc:
                 logger.warning("Agent answer incomplete: %s", type(exc).__name__)
                 await asyncio.wait_for(flush(), 5)
@@ -415,7 +458,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 state["verification"] = "partial"
                 state["outcome"] = "partial"
                 state["reason"] = "回答生成超时，已保留部分内容" if isinstance(exc, (TimeoutError, httpx.TimeoutException)) else "回答生成中断，已保留可用内容"
-                if isinstance(exc, RetryDeferredError):
+                if isinstance(exc, (RetryDeferredError, ToolProtocolError)):
                     state["reason"] = str(exc)
                 if not parts:
                     for i, source in enumerate(sources[:4], 1):
@@ -424,7 +467,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             # Allow only bounded final validation after the generation budget expires.
             await asyncio.wait_for(asyncio.to_thread(kb.validate_versions), 5)
             if not "".join(parts).strip():
-                parts.append("本次模型未生成回答，请重试或使用 AI 增强。")
+                parts.append("本次模型未生成回答，请重试或使用增强 AI；若反复出现，请联系管理员在系统设置中调整 AI 生成配置（如调大输出上限）。")
                 state.update(outcome="partial", verification="partial", reason="模型未生成回答")
             stage("citation_validation", "检查引用与文档版本", count=len(sources), status="partial" if citations.removed else "ok",
                   notes="已移除未实际读取的引用编号" if citations.removed else "引用编号有效，文档版本未变化；不代表已逐句核实模型结论")

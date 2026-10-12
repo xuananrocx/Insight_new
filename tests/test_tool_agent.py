@@ -387,7 +387,8 @@ async def test_total_timer_can_be_disabled_without_disabling_call_deadlines(know
         'time_limit_enabled': enabled, 'total_timeout_seconds': 360})]
     assert events[-1]['type'] == 'done'
     assert len(model.returned) == expected_calls
-    assert model.deadline <= clock[0] + 180
+    # 单轮时长预算随统一作答预算（默认 600 秒）放宽；关闭总时限也不能没有单轮上限
+    assert model.deadline <= clock[0] + 600
 
 
 @pytest.mark.asyncio
@@ -613,17 +614,149 @@ async def test_agent_preserves_prior_analysis_and_review_state(knowledge, monkey
 
 
 @pytest.mark.asyncio
-async def test_truncated_tool_arguments_never_execute(knowledge):
-    provider = OpenAIProvider('test', {'base_url': 'https://example.test/v1', 'chat_model': 'test'}, 'secret')
-    body = wire_response('chat')
-    body['choices'][0]['finish_reason'] = 'length'
-    model = ToolChat(provider, 's', [], transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+@pytest.mark.parametrize('style', ['chat', 'responses', 'anthropic'])
+async def test_output_limit_finish_decodes_as_truncated_turn(knowledge, style):
+    # length/incomplete/max_tokens 是「输出上限」判定：turn 正常返回并带 truncated 标记，不再按协议错误重试
+    cls = {'chat': OpenAIProvider, 'responses': OpenAIProvider, 'anthropic': AnthropicProvider}[style]
+    base = 'https://example.test' if style == 'chat' else 'https://example.test/v1' + ('/responses' if style == 'responses' else '')
+    provider = cls('test', {'base_url': base, 'chat_model': 'test'}, 'secret')
+    body = wire_response(style)
+    if style == 'chat':
+        body['choices'][0]['finish_reason'] = 'length'
+    elif style == 'responses':
+        body['status'] = 'incomplete'
+    else:
+        body['stop_reason'] = 'max_tokens'
+    requests = []
+    def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json=body)
+    model = ToolChat(provider, 's', [], transport=httpx.MockTransport(handler))
     try:
-        with pytest.raises(ToolProtocolError):
-            await model.turn(kt.TOOLS)
-        assert not model.messages
+        turn = await model.turn(kt.TOOLS, force=True)
+        assert turn.truncated and [c.id for c in turn.calls] == ['call1']
+        assert len(requests) == 1  # 判定结果不重试
     finally:
         await model.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('style', ['chat', 'responses', 'anthropic', 'arch'])
+async def test_final_stream_output_limit_keeps_partial_answer(knowledge, style):
+    # 作答阶段达到输出上限：保留已流出文本、置 final_truncated，不触发网络错误重试
+    cls = {'chat': OpenAIProvider, 'responses': OpenAIProvider, 'anthropic': AnthropicProvider, 'arch': AnthropicArchProvider}[style]
+    base = 'https://example.test' if style == 'chat' else 'https://example.test/v1' + ('/responses' if style == 'responses' else '')
+    provider = cls('test', {'base_url': base, 'chat_model': 'test'}, 'secret')
+    calls = []
+    def handler(request):
+        calls.append(request)
+        if style == 'chat':
+            events = [{'choices': [{'delta': {'content': '部分回答'}, 'finish_reason': None}]},
+                      {'choices': [{'delta': {}, 'finish_reason': 'length'}]}]
+        elif style == 'responses':
+            events = [{'type': 'response.output_text.delta', 'delta': '部分回答'},
+                      {'type': 'response.incomplete'}]
+        else:
+            events = [{'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': '部分回答'}},
+                      {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens'}}]
+        return httpx.Response(200, text=''.join('data: ' + json.dumps(e) + '\n\n' for e in events))
+    model = ToolChat(provider, 'system', [{'role': 'user', 'content': 'q'}], transport=httpx.MockTransport(handler))
+    try:
+        text = ''.join([t async for t in model.final_stream(kt.TOOLS, 'answer now')])
+        assert text == '部分回答' and model.final_truncated
+        assert len(calls) == 1
+    finally:
+        await model.close()
+
+
+@pytest.mark.asyncio
+async def test_final_stream_truncated_without_visible_output_raises_hint(knowledge):
+    # 推理耗尽全部输出额度且无可见回答：给出调大上限的明确指引，而不是网络错误重试
+    provider = OpenAIProvider('test', {'base_url': 'https://example.test', 'chat_model': 'test'}, 'secret')
+    requests = []
+    def handler(request):
+        requests.append(request)
+        events = [{'choices': [{'delta': {'reasoning_content': '思考'}, 'finish_reason': None}]},
+                  {'choices': [{'delta': {}, 'finish_reason': 'length'}]}]
+        return httpx.Response(200, text=''.join('data: ' + json.dumps(e) + '\n\n' for e in events))
+    model = ToolChat(provider, 's', [{'role': 'user', 'content': 'q'}], transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(ToolProtocolError, match='调大输出上限'):
+            ''.join([t async for t in model.final_stream(kt.TOOLS, 'answer')])
+        assert len(requests) == 1
+    finally:
+        await model.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_output_limit_round_does_not_execute_truncated_calls(knowledge, monkeypatch):
+    model = Model([[ToolCall('1', 'search_knowledge', {'query': 'ADT 安装失败'})], []])
+    original = model.turn
+    async def turn(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        result.truncated = True
+        return result
+    model.turn = turn
+    monkeypatch.setattr(tool_agent, 'create_tool_chat', lambda *a, **k: model)
+    events = [e async for e in tool_agent.ask_stream('排障', [], 'kb')]
+    assert events[-1]['type'] == 'done'
+    data = events[-1]['data']
+    assert data['outcome'] == 'partial' and '输出上限' in data['reason']
+    assert not model.returned  # 截断轮次的工具调用不执行
+    assert any(e['type'] == 'stage' and e['data']['stage'] == 'agent_output_limit' for e in events)
+
+
+@pytest.mark.asyncio
+async def test_agent_final_truncation_marks_partial_and_appends_notice(knowledge, monkeypatch):
+    model = Model([[ToolCall('1', 'search_knowledge', {'query': 'ADT 安装失败'})], []])
+    async def final(*args, **kwargs):
+        yield '完整正文'
+        model.final_truncated = True
+    model.final_stream = final
+    monkeypatch.setattr(tool_agent, 'create_tool_chat', lambda *a, **k: model)
+    events = [e async for e in tool_agent.ask_stream('排障', [], 'kb')]
+    assert events[-1]['type'] == 'done'
+    data = events[-1]['data']
+    assert data['outcome'] == 'partial' and '截断' in data['reason']
+    assert '调大输出上限' in data['answer']
+
+
+@pytest.mark.asyncio
+async def test_agent_reads_unified_generation_config(knowledge, monkeypatch):
+    settings._config['qa']['ai_generation'] = {'max_tokens': 81920, 'timeout_seconds': 900}
+    model = Model([[ToolCall('1', 'search_knowledge', {'query': 'ADT 安装失败'})], []])
+    monkeypatch.setattr(tool_agent, 'create_tool_chat', lambda *a, **k: model)
+    events = [e async for e in tool_agent.ask_stream('排障', [], 'kb')]
+    limits = next(e['data'] for e in events if e['type'] == 'stage' and e['data']['stage'] == 'agent_limits')
+    assert '81920 tokens' in limits['notes'] and '900 秒' in limits['notes']
+
+
+@pytest.mark.asyncio
+async def test_anthropic_empty_round_not_appended_to_conversation(knowledge):
+    provider = AnthropicProvider('test', {'base_url': 'https://example.test/v1', 'chat_model': 'test'}, 'secret')
+    body = {'stop_reason': 'end_turn', 'content': []}
+    model = ToolChat(provider, 's', [{'role': 'user', 'content': 'q'}],
+                     transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)))
+    try:
+        turn = await model.turn(kt.TOOLS)
+        assert not turn.calls and not turn.truncated
+        assert len(model.messages) == 1  # 空 content 轮次不写入会话，部分网关会拒绝空数组
+    finally:
+        await model.close()
+
+
+@pytest.mark.asyncio
+async def test_agent_empty_answer_falls_back_to_admin_hint(knowledge, monkeypatch):
+    model = Model([[ToolCall('1', 'search_knowledge', {'query': 'ADT 安装失败'})], []])
+    async def final(*args, **kwargs):
+        yield '   '  # 纯空白：视为没有可见回答
+    model.final_stream = final
+    monkeypatch.setattr(tool_agent, 'create_tool_chat', lambda *a, **k: model)
+    events = [e async for e in tool_agent.ask_stream('排障', [], 'kb')]
+    assert events[-1]['type'] == 'done'
+    data = events[-1]['data']
+    assert data['outcome'] == 'partial' and data['reason'] == '模型未生成回答'
+    assert '增强 AI' in data['answer'] and '联系管理员' in data['answer']
 
 
 @pytest.mark.asyncio

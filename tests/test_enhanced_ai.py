@@ -59,6 +59,37 @@ def test_oversize_question_fails_explicitly():
         ai.assemble('大问题' * 20000, [], [], '', 'balanced', '', TraceCollector())
 
 
+def test_chat_options_prefers_ai_generation_and_clamps_to_half_window():
+    settings._config['qa']['ai_generation'] = {'max_tokens': 60000}
+    assert ai.chat_options()['max_tokens'] == 8192  # 窗口 16384：输出至多对半分
+    settings._config['qa']['ai_generation'] = {'max_tokens': 4096}
+    settings._config['qa']['enhanced_ai'] = {'max_tokens': 2048}
+    assert ai.chat_options()['max_tokens'] == 4096  # ai_generation 优先于旧键
+    del settings._config['qa']['ai_generation']
+    assert ai.chat_options()['max_tokens'] == 2048  # 旧键回退
+
+
+@pytest.mark.asyncio
+async def test_truncation_mark_reports_partial_done(isolated, monkeypatch):
+    from src.core import llm_client
+
+    def prepare(*args, **kwargs):
+        return [{'role': 'system', 'content': 's'}, {'role': 'user', 'content': 'q'}], [], 'embed'
+
+    async def chat_stream(messages, **kwargs):
+        yield '部分回答', 'only'
+        yield '', llm_client.STREAM_TRUNCATED_MARK
+
+    monkeypatch.setattr(ai, 'prepare', prepare)
+    monkeypatch.setattr(llm_client, 'get_client',
+                        lambda: SimpleNamespace(chat_stream=chat_stream, is_embedding_warm=lambda: True))
+    events = [e async for e in rag.ask_stream('q', mode='ai')]
+    assert events[-1]['type'] == 'done'
+    data = events[-1]['data']
+    assert data['outcome'] == 'partial' and '输出上限' in data['reason'] and '联系管理员' in data['reason']
+    assert data['answer'].startswith('部分回答') and '联系管理员' in data['answer']
+
+
 def test_relevance_keeps_configuration_ahead_of_unrelated_sources():
     hits = [{'id': 'noise', 'text': 'AMA 银行间版本历史', 'title': 'AMA'},
             {'id': 'config', 'text': 'test_tool 使用配置示例 ```json SecurityCode Subscribe', 'title': '配置说明'},

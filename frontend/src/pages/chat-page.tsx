@@ -16,6 +16,7 @@ import {
   Library,
   Loader2,
   AlertCircle,
+  AlertTriangle,
   BarChart3,
   MessageSquarePlus,
   Copy,
@@ -415,6 +416,22 @@ export function ChatPage() {
     })
   }
 
+  // 部分完成/失败回答的一键重试：用原问题与原模式重新发起一轮
+  function retryTurn(turn: ChatTurn) {
+    const sid = ctx.activeId
+    if (!sid || isStreaming(sid)) return
+    const requested = turn.mode ?? 'basic'
+    const mode: RetrievalMode = requested === 'deep' ? 'basic' : requested
+    if (['ai', 'deep_ai'].includes(mode) && !activeProvider) {
+      toast.error('请先在设置中添加并选择个人 API，或选择管理员授权的团队 API。')
+      return
+    }
+    scrollToBottom()
+    void handleAsk(turn.question, sid, undefined, mode).catch((error: unknown) => {
+      toast.error(`发送失败：${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
+
   // 标题展示：没活动会话时显示"新对话"
   const title = session ? session.title : '新对话'
   const turns = session?.turns ?? []
@@ -603,6 +620,7 @@ export function ChatPage() {
                     canExpand={canAskKb && !streamingTurnId}
                     onSaved={expansion => ctx.updateTurn(turnSessionId!, turn.id, t => ({ ...t, expansion }))} />}
                   onStop={streamingTurnId === turn.id ? () => handleStop(turnSessionId ?? undefined) : undefined}
+                  onRetry={!streamingTurnId ? () => retryTurn(turn) : undefined}
                 />
               )
             })}
@@ -712,7 +730,7 @@ export function ChatPage() {
   )
 }
 
-function TurnCard({ turn, onStop, searchResults }: { turn: ChatTurn; onStop?: () => void; searchResults: React.ReactNode }) {
+function TurnCard({ turn, onStop, onRetry, searchResults }: { turn: ChatTurn; onStop?: () => void; onRetry?: () => void; searchResults: React.ReactNode }) {
   const [copied, setCopied] = useState(false)
   const [showThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
   const [showCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
@@ -724,7 +742,10 @@ function TurnCard({ turn, onStop, searchResults }: { turn: ChatTurn; onStop?: ()
   const isSearchMode = turn.mode === 'basic' || turn.mode === 'deep'
   const stages = !isStreaming && turn.trace?.length ? turn.trace : turn.thinking?.stages ?? []
   const resultStage = stages.findLast(stage => stage.stage === 'answer_result')
-  const restoredStatus = resultStage?.status === 'partial' ? 'partial' : resultStage?.status === 'cancelled' ? 'cancelled' : turn.error ? 'error' : 'done'
+  const generationStage = stages.findLast(stage => stage.stage === 'generation')
+  const restoredStatus = resultStage?.status === 'partial' || generationStage?.status === 'partial'
+    ? 'partial'
+    : resultStage?.status === 'cancelled' ? 'cancelled' : turn.error ? 'error' : 'done'
   const thinking: ThinkingState = {
     ...turn.thinking,
     stages,
@@ -753,7 +774,27 @@ function TurnCard({ turn, onStop, searchResults }: { turn: ChatTurn; onStop?: ()
               {turn.error}
             </div>
           ) : null}
-          {!isStreaming && !turn.error && resultStage?.status === 'partial' && <p className="mb-2 text-xs text-muted-foreground">部分完成 · {resultStage.notes || '回答未完整生成'}</p>}
+          {!isStreaming && !turn.error && thinking.status === 'partial' && (() => {
+            const note = resultStage?.notes || generationStage?.notes || ''
+            const reason = note.replace(/^provider=\S+；?/, '').trim() || '回答未完整生成'
+            return (
+              <div className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-[12px] text-warning">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1">部分完成 · {reason}，已保留可用部分，请结合引用原文核对。</span>
+                {onRetry && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-6 shrink-0 border-warning/40 bg-transparent px-2 text-[11px] text-warning hover:bg-warning/15 hover:text-warning"
+                    onClick={onRetry}
+                  >
+                    重试本次提问
+                  </Button>
+                )}
+              </div>
+            )
+          })()}
           {!isStreaming && !turn.error && isSearchMode ? (
             searchResults
           ) : null}

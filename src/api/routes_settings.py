@@ -362,6 +362,47 @@ def update_llm_timeouts(req: LLMTimeoutsInfo) -> LLMTimeoutsInfo:
     return get_llm_timeouts()
 
 
+# ===== AI 生成配置（输出上限 / 生成时长 / 深度 AI 上下文，深度与增强 AI 统一卡）=====
+
+
+class AiGenerationConfig(BaseModel):
+    max_tokens: int  # 单次模型调用的输出 token 上限（推理模型含思考部分）
+    timeout_seconds: int  # 作答阶段时长预算（秒）
+    context_chars: int | None = None  # 深度 AI 单次查阅的原文字符预算；None = 未单独配置
+
+
+@router.get("/ai_generation", response_model=AiGenerationConfig)
+def get_ai_generation() -> AiGenerationConfig:
+    gen = settings.config.get("qa", {}).get("ai_generation") or {}
+    deep = settings.config.get("qa", {}).get("deep_ai") or {}
+    return AiGenerationConfig(
+        max_tokens=int(gen.get("max_tokens", deep.get("max_tokens", 81920))),
+        timeout_seconds=int(gen.get("timeout_seconds", 600)),
+        context_chars=int(gen.get("context_chars", deep.get("context_chars", 48000))),
+    )
+
+
+@router.put("/ai_generation", response_model=AiGenerationConfig)
+def update_ai_generation(req: AiGenerationConfig) -> AiGenerationConfig:
+    if not 256 <= req.max_tokens <= 10_000_000:
+        raise HTTPException(status_code=400, detail="max_tokens 需在 256 至 10,000,000 之间")
+    if not 30 <= req.timeout_seconds <= 86400:
+        raise HTTPException(status_code=400, detail="timeout_seconds 需在 30 至 86400 秒之间")
+    if req.context_chars is not None and not 2000 <= req.context_chars <= 1_000_000:
+        raise HTTPException(status_code=400, detail="context_chars 需在 2,000 至 1,000,000 之间")
+    values = {"max_tokens": req.max_tokens, "timeout_seconds": req.timeout_seconds}
+    if req.context_chars is not None:
+        values["context_chars"] = req.context_chars
+    from src.core.config import USER_CONFIG_PATH
+    with open(USER_CONFIG_PATH, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    raw.setdefault("qa", {})["ai_generation"] = values
+    settings.config.setdefault("qa", {})["ai_generation"] = dict(values)
+    _secure_write_yaml(USER_CONFIG_PATH, raw)
+    logger.info(f"AI 生成配置已更新: {values}")
+    return get_ai_generation()
+
+
 @router.post("/llm_providers/test_config")
 def test_provider_config(req: TestProviderConfigRequest) -> dict[str, Any]:
     """测试 provider 配置是否可用（不保存配置）。"""

@@ -1292,6 +1292,21 @@ export const api = {
       }),
   },
 
+  aiGeneration: {
+    get: () =>
+      request<{ max_tokens: number; timeout_seconds: number; context_chars: number | null }>(
+        '/settings/ai_generation',
+      ),
+    update: (config: { max_tokens: number; timeout_seconds: number; context_chars: number }) =>
+      request<{ max_tokens: number; timeout_seconds: number; context_chars: number }>(
+        '/settings/ai_generation',
+        {
+          method: 'PUT',
+          body: JSON.stringify(config),
+        },
+      ),
+  },
+
   defaultKb: {
     get: () =>
       request<{

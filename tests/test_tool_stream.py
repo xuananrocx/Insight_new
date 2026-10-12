@@ -43,6 +43,33 @@ async def test_agent_streams_one_answer_without_second_synthesis(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_empty_final_round_still_runs_answer_phase(monkeypatch):
+    monkeypatch.setattr(accounts,'enabled',False)
+    monkeypatch.setattr(settings,'_config',{})
+    monkeypatch.setattr(kt.KnowledgeTools,'overview',lambda self:{'documents':0})
+    monkeypatch.setattr(kt.KnowledgeTools,'sources',lambda self:[])
+    monkeypatch.setattr(kt.KnowledgeTools,'validate_versions',lambda self:None)
+    monkeypatch.setattr(tool_agent.ai_call_logger,'log_call',lambda **kw:None)
+    requests=[]
+    def handler(request):
+        payload=json.loads(request.content)
+        requests.append(payload)
+        if len(requests)==1:
+            return sse([{'choices':[{'delta':{'tool_calls':[{'index':0,'id':'call1','function':{'name':'get_kb_overview','arguments':'{}'}}]},'finish_reason':'tool_calls'}]}])
+        if len(requests)==2:
+            # 模型结束查阅但一个字都没流出：不能当作已作答
+            return sse([{'choices':[{'delta':{},'finish_reason':'stop'}]}])
+        return sse([{'choices':[{'delta':{'content':'正式回答。'},'finish_reason':None}]},
+                    {'choices':[{'delta':{},'finish_reason':'stop'}]}])
+    provider=OpenAIProvider('test',{'base_url':'https://example.test','chat_model':'test'},'secret')
+    monkeypatch.setattr(tool_agent,'create_tool_chat',lambda system,messages,**kw:ToolChat(provider,system,messages,transport=httpx.MockTransport(handler)))
+    events=[e async for e in tool_agent.ask_stream('继续解释',[],'kb')]
+    assert len(requests)==3
+    assert events[-1]['type']=='done'
+    assert events[-1]['data']['answer']=='正式回答。'
+
+
+@pytest.mark.asyncio
 async def test_partial_stream_is_not_retried_after_text(monkeypatch):
     calls=[]
     monkeypatch.setattr(tool_agent.ai_call_logger,'log_call',lambda **kw:None)
@@ -80,3 +107,25 @@ def test_anthropic_signed_thinking_and_partial_json():
     assert not assembly.text
     assert assembly.wire()['content'][0]['signature']=='signed'
     assert assembly.wire()['content'][1]['input']=={}
+
+
+def test_response_incomplete_finishes_assembly_as_truncation():
+    assembly=Assembly('responses')
+    assert assembly.feed({'type':'response.output_text.delta','delta':'部分'})=='部分'
+    assert not assembly.feed({'type':'response.incomplete','response':{'status':'incomplete','output':[]}})
+    wire=assembly.wire()
+    assert wire['status']=='incomplete'
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_length_finish_yields_truncated_turn(monkeypatch):
+    monkeypatch.setattr(tool_agent.ai_call_logger,'log_call',lambda **kw:None)
+    def handler(request):
+        return sse([{'choices':[{'delta':{'tool_calls':[{'index':0,'id':'call1','function':{'name':'get_kb_overview','arguments':'{}'}}]},'finish_reason':'length'}]}])
+    provider=OpenAIProvider('test',{'base_url':'https://example.test','chat_model':'test'},'secret')
+    model=ToolChat(provider,'s',[],transport=httpx.MockTransport(handler))
+    try:
+        async for kind,value in model.stream_turn([]):
+            assert kind=='turn' and value.truncated and value.calls[0].id=='call1'
+    finally:
+        await model.close()

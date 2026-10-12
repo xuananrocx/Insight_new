@@ -149,15 +149,20 @@ def test_precheck_reports_derived_metadata(monkeypatch, tmp_path, derived, expec
     assert result['derived_metadata'] == expected
 
 
-@pytest.mark.parametrize('content,reason,ok', [([{'type':'text','text':'a'},{'type':'text','text':'b'}],'end_turn',True), ([], 'end_turn',False), ([{'type':'text','text':'half'}], 'max_tokens',False)])
-def test_arch_response_completeness(monkeypatch, content, reason, ok):
+@pytest.mark.parametrize('content,reason,ok,expected', [
+    ([{'type':'text','text':'a'},{'type':'text','text':'b'}], 'end_turn', True, 'ab'),
+    ([], 'end_turn', False, None),
+    # max_tokens 是输出上限判定：返回截断文本与 stop_reason，不再抛 LLMError
+    ([{'type':'text','text':'half'}], 'max_tokens', True, 'half'),
+])
+def test_arch_response_completeness(monkeypatch, content, reason, ok, expected):
     from src.core.llm_providers import AnthropicArchProvider, LLMError
     provider = AnthropicArchProvider('test', {'base_url':'https://example.test', 'chat_model':'test-model'}, 'dummy')
     response = SimpleNamespace(status_code=200, json=lambda: {'content':content,'stop_reason':reason,'usage':{'input_tokens':3,'output_tokens':2}})
     monkeypatch.setattr(type(provider), 'sync_client', property(lambda self: SimpleNamespace(post=lambda *a, **k: response)))
     if ok:
         result = provider.chat([{'role':'user','content':'hi'}])
-        assert result == 'ab' and result.usage['output_tokens'] == 2
+        assert result == expected and result.usage['output_tokens'] == 2 and result.stop_reason == reason
     else:
         with pytest.raises(LLMError):
             provider.chat([{'role':'user','content':'hi'}])

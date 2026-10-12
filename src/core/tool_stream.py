@@ -15,8 +15,13 @@ class Assembly:
         self.response=None
 
     def feed(self,event):
-        if event.get('error') or event.get('type') in ('error','response.failed','response.incomplete'):
+        if event.get('error') or event.get('type') in ('error','response.failed'):
             raise ToolProtocolError('模型流式响应失败或未完整结束')
+        if event.get('type')=='response.incomplete':
+            # Truncation verdict, not a protocol failure; finish so wire() can decode it.
+            self.response=event.get('response')
+            self.finish='incomplete'
+            return ''
         token=''
         if self.style=='chat':
             for choice in event.get('choices',[]):

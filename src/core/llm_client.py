@@ -27,6 +27,10 @@ from src.core.llm_providers import (
 
 logger = logging.getLogger(__name__)
 
+# chat_stream 结束时若模型输出被 max_tokens/length/incomplete 截断，
+# 在流末尾追加 (""， STREAM_TRUNCATED_MARK)；消费方据此标记 outcome=partial。
+STREAM_TRUNCATED_MARK = "__stream_truncated__"
+
 
 class NoAvailableProviderError(LLMError):
     """所有 provider 都不可用。"""
@@ -611,6 +615,7 @@ class LLMClient:
         used_provider: str | None = None
         used_model: str | None = None
         collected_tokens: list[str] = []  # 收集所有 token 流结束后记日志
+        status: dict[str, Any] = {}  # provider 回填 stop_reason，用于识别输出截断
 
         try:
             for name in self._chat_chain:
@@ -618,8 +623,9 @@ class LLMClient:
                     p = self._providers[name]
                     if not p.usable:
                         continue
+                    status.pop("stop_reason", None)
                     first = True
-                    async with aclosing(p.chat_stream(messages, **kwargs)) as stream:
+                    async with aclosing(p.chat_stream(messages, status=status, **kwargs)) as stream:
                         async for token in stream:
                             if first:
                                 used_provider = name
@@ -640,6 +646,9 @@ class LLMClient:
                         success=True,
                         **(log_meta or {}),
                     )
+                    if status.get("stop_reason") in ("max_tokens", "length", "incomplete"):
+                        # 截断是判定结果而不是错误：文本已完整送达，仅追加截断标记。
+                        yield "", STREAM_TRUNCATED_MARK
                     return
                 except LLMError as e:
                     last_err = e
