@@ -329,6 +329,14 @@ def precheck_import(zip_path: Path) -> dict[str, Any]:
         "is_name_duplicate": is_name_duplicate,
         "suggested_name": suggested_name,
         "auto_normalized": auto_normalized,
+        "derived_metadata": {
+            "documents": len((manifest.get("derived_metadata") or {}).get("documents") or []),
+            "concepts": len((manifest.get("derived_metadata") or {}).get("concepts") or []),
+            "relations": len((manifest.get("derived_metadata") or {}).get("relations") or []),
+            "global_summary": bool(
+                ((manifest.get("derived_metadata") or {}).get("global_summary") or {}).get("summary")
+            ),
+        },
     }
 
 

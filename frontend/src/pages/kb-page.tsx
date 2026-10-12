@@ -11,8 +11,8 @@ import {
   api,
   type KB,
   type KbImportPrecheck,
-  type KbImportProgressData,
 } from '@/lib/api'
+import { useKbImportStore } from '@/stores/kb-import'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Plus,
@@ -26,15 +26,35 @@ import {
   Upload,
   Loader2,
   AlertTriangle,
-  X,
   ChevronRight,
   RefreshCw,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 
+function derivedMetadataHint(d: KbImportPrecheck['derived_metadata'] | undefined) {
+  if (!d) return null
+  const missing: string[] = []
+  if (!d.global_summary) missing.push('全局概览')
+  if (!d.concepts) missing.push('核心概念与关联图')
+  if (!d.documents) missing.push('文档摘要')
+  if (!missing.length) {
+    return (
+      <div className="rounded-md border border-success/40 bg-success/10 p-3 text-[12px] text-success mb-4">
+        ✓ 包含全局概览、核心概念与关联图、文档摘要
+      </div>
+    )
+  }
+  return (
+    <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-[12px] text-warning mb-4">
+      ⚠ 该 Pack 缺少：{missing.join('、')}，导入后这些内容为空
+    </div>
+  )
+}
+
 export default function KbPage() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
+  const startKbImport = useKbImportStore((s) => s.start)
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const [showCreateDialog, setShowCreateDialog] = useState(false)
@@ -47,19 +67,13 @@ export default function KbPage() {
   const [newKbDesc, setNewKbDesc] = useState('')
   const [rebuildConfirm, setRebuildConfirm] = useState<KB | null>(null)
 
-  // 导入相关状态
+  // 导入相关状态（进度由全局 store 管理，右下角悬浮条展示）
   const importFileInput = useRef<HTMLInputElement>(null)
-  const importAbortRef = useRef<AbortController | null>(null)
   const [importFile, setImportFile] = useState<File | null>(null)
   const [importPrecheck, setImportPrecheck] = useState<KbImportPrecheck | null>(null)
-  const [importStep, setImportStep] = useState<'idle' | 'prechecking' | 'confirm' | 'importing'>('idle')
+  const [importStep, setImportStep] = useState<'idle' | 'prechecking' | 'confirm'>('idle')
   const [importError, setImportError] = useState<string | null>(null)
   const [importName, setImportName] = useState('')
-  // 进度状态
-  const [progressStage, setProgressStage] = useState<string>('')
-  const [progressCurrent, setProgressCurrent] = useState(0)
-  const [progressTotal, setProgressTotal] = useState(0)
-  const [progressFile, setProgressFile] = useState('')
 
   const { data: kbs, isLoading } = useQuery({
     queryKey: ['kbs'],
@@ -207,8 +221,10 @@ export default function KbPage() {
         return
       }
       if (data.ready_to_stream) {
-        // 后端就绪 → 启动 SSE 流式导入
-        startStreamImport(data.compatible ? false : true)
+        // 后端就绪 → 全局 store 启动 SSE，进度走右下角悬浮条
+        if (startKbImport(importFile!, { newName: importName.trim() || undefined, forceRebuild: !data.compatible })) {
+          resetImport()
+        }
         return
       }
       // 兜底：直接当成成功
@@ -224,105 +240,22 @@ export default function KbPage() {
     },
   })
 
-  const startStreamImport = (forceRebuild: boolean) => {
-    if (!importFile) return
-    setImportStep('importing')
-    setImportError(null)
-    setProgressStage('starting')
-    setProgressCurrent(0)
-    setProgressTotal(0)
-    setProgressFile('')
-
-    const ac = new AbortController()
-    importAbortRef.current = ac
-
-    const trimmed = importName.trim()
-    api.kb.importPackStream(
-      importFile,
-      { newName: trimmed || undefined, forceRebuild },
-      {
-        onStage: (d) => {
-          setProgressTotal(d.document_count || 0)
-        },
-        onProgress: (d: KbImportProgressData) => {
-          setProgressStage(d.stage)
-          if (typeof d.current === 'number') setProgressCurrent(d.current)
-          if (typeof d.total === 'number') setProgressTotal(d.total)
-          if (d.file) setProgressFile(d.file)
-        },
-        onDone: (d) => {
-          const rebuiltTxt = d.rebuilt ? '（已重建向量）' : ''
-          toast.success(`已导入知识库：${d.kb_name}${rebuiltTxt}`)
-          // ZIP 结构自动兼容提示
-          if (d.auto_normalized) {
-            setTimeout(() => {
-              toast.info(
-                '已自动兼容嵌套 ZIP 结构。下次打包请进入目录内选中文件再压缩。',
-                { duration: 6000 },
-              )
-            }, 500)
-          }
-          queryClient.invalidateQueries({ queryKey: ['kbs'] })
-          resetImport()
-        },
-        onError: (msg) => {
-          if (ac.signal.aborted) {
-            toast.info('已取消导入')
-          } else {
-            toast.error(`导入失败：${msg}`)
-            setImportError(msg)
-          }
-          setImportStep('confirm')
-        },
-      },
-      ac.signal,
-    ).catch((e) => {
-      if (ac.signal.aborted) {
-        toast.info('已取消导入')
-        resetImport()
-      } else {
-        const msg = e instanceof Error ? e.message : '未知错误'
-        toast.error(`导入失败：${msg}`)
-        setImportError(msg)
-        setImportStep('confirm')
-      }
-    })
-  }
-
-  const handleCancelImport = () => {
-    if (importAbortRef.current) {
-      importAbortRef.current.abort()
-      importAbortRef.current = null
-    }
-    // 状态恢复由 onError / catch 处理
-  }
-
   const handleConfirmImport = (forceRebuild: boolean) => {
     if (!importFile) return
-    // 第一步：调 /import 看 ready_to_stream，触发 SSE 流
-    setImportStep('importing')
-    setProgressStage('starting')
-    const trimmed = importName.trim()
     importMutation.mutate({
       file: importFile,
-      newName: trimmed || undefined,
+      newName: importName.trim() || undefined,
       forceRebuild,
     })
   }
 
   const resetImport = () => {
-    // 注意：不在这里 abort（正常完成时也会调这个，abort 会误触发"已取消"toast）
-    // abort 只在 handleCancelImport 里触发
-    importAbortRef.current = null
+    // 仅清理弹窗状态；进行中的导入归全局 store 管，取消入口在右下角悬浮条
     setImportFile(null)
     setImportPrecheck(null)
     setImportStep('idle')
     setImportError(null)
     setImportName('')
-    setProgressStage('')
-    setProgressCurrent(0)
-    setProgressTotal(0)
-    setProgressFile('')
     if (importFileInput.current) importFileInput.current.value = ''
   }
 
@@ -403,7 +336,7 @@ export default function KbPage() {
                       内置
                     </span>
                   )}
-                  {kb.source === 'imported' && (
+                  {kb.source === 'imported' && (!kb.owner_id || kb.owner_id === user.id) && (
                     <span className="rounded bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                       导入
                     </span>
@@ -667,7 +600,7 @@ export default function KbPage() {
 
       {/* 导入 Pack 对话框 */}
       {importStep !== 'idle' && importFile && (
-        <ManagementDialog title="导入知识库" onClose={resetImport} busy={importStep !== 'confirm' || importMutation.isPending} className="max-w-lg">
+        <ManagementDialog title="导入知识库" onClose={resetImport} busy={importStep === 'prechecking' || importMutation.isPending} className="max-w-lg">
             {importStep === 'prechecking' && (
               <>
                 <h2 className="text-lg font-semibold mb-2">正在预检 Pack...</h2>
@@ -729,7 +662,7 @@ export default function KbPage() {
 
                 {importPrecheck.compatible ? (
                   <div className="rounded-md border border-success/40 bg-success/10 p-3 text-[12px] text-success mb-4">
-                    ✓ 维度兼容，可直接导入向量（秒级完成）
+                    ✓ 维度兼容，可直接导入向量
                   </div>
                 ) : (
                   <div className="rounded-md border border-warning/40 bg-warning/10 p-3 text-[12px] mb-4">
@@ -746,6 +679,8 @@ export default function KbPage() {
                     </div>
                   </div>
                 )}
+
+                {derivedMetadataHint(importPrecheck.derived_metadata)}
 
                 {importError && (
                   <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[12px] text-destructive mb-3">
@@ -770,73 +705,6 @@ export default function KbPage() {
               </>
             )}
 
-            {importStep === 'importing' && (
-              <>
-                <h2 className="text-lg font-semibold mb-2">
-                  {progressStage === 'rebuilding_embeddings'
-                    ? '正在重建向量'
-                    : progressStage === 'importing_vectors'
-                      ? '正在导入向量'
-                      : progressStage === 'extracting_documents'
-                        ? '正在解压文档'
-                        : '正在导入...'}
-                </h2>
-
-                {/* 进度条（仅 extracting / rebuilding 阶段有 current/total） */}
-                {(progressStage === 'extracting_documents' ||
-                  progressStage === 'rebuilding_embeddings') &&
-                  progressTotal > 0 && (
-                    <div className="mb-3">
-                      <div className="mb-1 flex items-center justify-between text-[12px] text-muted-foreground">
-                        <span>
-                          {progressStage === 'rebuilding_embeddings'
-                            ? '嵌入文档'
-                            : '解压文档'}
-                          ：{progressCurrent}/{progressTotal}
-                        </span>
-                        <span>{Math.round((progressCurrent / progressTotal) * 100)}%</span>
-                      </div>
-                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                        <div
-                          className="h-full bg-primary transition-all"
-                          style={{ width: `${(progressCurrent / progressTotal) * 100}%` }}
-                        />
-                      </div>
-                      {progressFile && (
-                        <div className="mt-1 truncate text-[11px] text-muted-foreground">
-                          {progressFile}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                {(progressStage === 'starting' ||
-                  progressStage === 'creating_kb' ||
-                  progressStage === 'importing_vectors') && (
-                  <div className="mb-3 flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    <span>
-                      {progressStage === 'creating_kb'
-                        ? '创建知识库...'
-                        : progressStage === 'importing_vectors'
-                          ? `导入向量（${progressCurrent}）`
-                          : '准备中...'}
-                    </span>
-                  </div>
-                )}
-
-                <p className="mt-2 text-[12px] text-muted-foreground">
-                  请勿关闭页面。完成后会自动刷新列表。
-                </p>
-
-                <div className="mt-4 flex justify-end gap-2">
-                  <Button variant="outline" onClick={handleCancelImport}>
-                    <X className="mr-1.5 h-4 w-4" />
-                    取消
-                  </Button>
-                </div>
-              </>
-            )}
           </ManagementDialog>
       )}
     </div>

@@ -153,6 +153,12 @@ export type KbImportPrecheck = {
   total_chunks: number
   is_name_duplicate: boolean
   suggested_name: string
+  derived_metadata: {
+    documents: number
+    concepts: number
+    relations: number
+    global_summary: boolean
+  }
 }
 
 export type KbImportResult = {

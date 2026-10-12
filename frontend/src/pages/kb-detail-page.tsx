@@ -48,7 +48,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 
 export default function KbDetailPage() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
   const { id = '' } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -145,7 +145,7 @@ export default function KbDetailPage() {
                   内置
                 </span>
               )}
-              {kb.source === 'imported' && (
+              {kb.source === 'imported' && (!kb.owner_id || kb.owner_id === user.id) && (
                 <span className="rounded bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                   导入
                 </span>

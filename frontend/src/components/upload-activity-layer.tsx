@@ -13,6 +13,7 @@ import { Loader2, UploadCloud } from 'lucide-react'
 
 import { api, type UploadTask } from '@/lib/api'
 import { BatchUploadDialog } from '@/components/batch-upload-dialog'
+import { KbImportPill } from '@/components/kb-import-activity'
 import { useUploadUiStore } from '@/stores/upload-ui'
 import { useUploadRunner } from '@/stores/upload-runner'
 
@@ -80,13 +81,14 @@ export function UploadActivityLayer() {
 
   return (
     <>
-      {active.length > 0 && !viewTask ? (
-        <div className="fixed bottom-4 right-4 z-40 flex flex-col gap-2">
-          {active.map((t) => (
-            <Pill key={t.id} task={t} onClick={() => openView(t.id, t.kb_id)} />
-          ))}
-        </div>
-      ) : null}
+      <div className="fixed bottom-4 right-4 z-40 flex flex-col gap-2">
+        <KbImportPill />
+        {active.length > 0 && !viewTask
+          ? active.map((t) => (
+              <Pill key={t.id} task={t} onClick={() => openView(t.id, t.kb_id)} />
+            ))
+          : null}
+      </div>
 
       {viewTask ? (
         <BatchUploadDialog

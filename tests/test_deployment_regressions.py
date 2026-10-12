@@ -116,6 +116,39 @@ def test_derived_metadata_remaps_files_and_summary_snapshot(monkeypatch):
     assert db.get_kb_global_summary('pack-dst')['snapshot'] == {str(second): 'abc'}
 
 
+def _precheck_zip(tmp_path, derived):
+    body = b'round trip'
+    manifest = {
+        'kb': {'name': 'RT', 'embedding_dim': 2, 'embedding_model': 'm'},
+        'files': [{'relative_path': 'a.txt', 'original_file_id': 1, 'file_size': len(body),
+                   'content_hash': hashlib.sha256(body).hexdigest(), 'chunk_ids': ['c1']}],
+    }
+    if derived is not None:
+        manifest['derived_metadata'] = derived
+    path = tmp_path / f'pack_{bool(derived)}.zip'
+    with zipfile.ZipFile(path, 'w') as z:
+        z.writestr('manifest.json', json.dumps(manifest))
+        z.writestr('documents/a.txt', body)
+        z.writestr('vectors/chunks.jsonl', json.dumps(
+            {'id': 'c1', 'text': 't', 'vector': [0.1, 0.2],
+             'metadata': {'file_id': 1, 'chunk_index': 0}}))
+    return path
+
+
+@pytest.mark.parametrize('derived,expected', [
+    (None, {'documents': 0, 'concepts': 0, 'relations': 0, 'global_summary': False}),
+    ({'documents': [{'file_id': 1}], 'concepts': [{'id': 5}, {'id': 6}],
+      'global_summary': {'summary': 's'}},
+     {'documents': 1, 'concepts': 2, 'relations': 0, 'global_summary': True}),
+    ({'concepts': []}, {'documents': 0, 'concepts': 0, 'relations': 0, 'global_summary': False}),
+])
+def test_precheck_reports_derived_metadata(monkeypatch, tmp_path, derived, expected):
+    from src.core import accounts
+    monkeypatch.setattr(accounts, 'enabled', False)
+    result = kb_pack.precheck_import(_precheck_zip(tmp_path, derived))
+    assert result['derived_metadata'] == expected
+
+
 @pytest.mark.parametrize('content,reason,ok', [([{'type':'text','text':'a'},{'type':'text','text':'b'}],'end_turn',True), ([], 'end_turn',False), ([{'type':'text','text':'half'}], 'max_tokens',False)])
 def test_arch_response_completeness(monkeypatch, content, reason, ok):
     from src.core.llm_providers import AnthropicArchProvider, LLMError
