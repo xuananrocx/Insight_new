@@ -161,7 +161,9 @@ export function ChatHistory() {
         </div>
       })}
     </div>
-    <Dialog open={!!action} onOpenChange={value => { if (!value) setAction(null) }}><DialogContent>
+    <Dialog open={!!action} onOpenChange={value => { if (!value) setAction(null) }}>
+      {/* 弹层（Select 等 popper）开着时，遮罩点击只收起弹层，避免双 DismissableLayer 同帧卸载导致 body 指针事件锁死 */}
+      <DialogContent onInteractOutside={event => { if (document.querySelector('[data-radix-popper-content-wrapper]')) event.preventDefault() }}>
       <DialogTitle>{action?.kind}</DialogTitle><DialogDescription className="mt-2">{action?.kind === '删除分组' ? '组内会话将移到未分组，不会删除。' : action?.kind === '删除会话' ? `删除「${action.label}」及其问答记录？` : action?.kind === '移动到分组' ? '仅调整归类，不改变会话的知识库或上下文。' : '名称最多80字。'}</DialogDescription>
       <form className="mt-4 space-y-4" onSubmit={e => { e.preventDefault(); void save() }}>
         {action?.kind === '移动到分组' ? <Select value={target} onValueChange={setTarget}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{groups.map(g => <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>)}</SelectContent></Select> : !action?.kind.startsWith('删除') && <input autoFocus aria-label="名称" maxLength={80} value={name} onChange={e => setName(e.target.value)} className="w-full rounded border bg-background px-3 py-2 text-sm" />}

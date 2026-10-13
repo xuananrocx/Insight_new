@@ -49,7 +49,8 @@ export function ManagementDialog({ title, onClose, busy = false, className, chil
       onFocusCapture={event => {
         if (event.target instanceof HTMLElement && event.currentTarget.contains(event.target)) lastFocused.set(event.currentTarget, event.target)
       }}
-      onInteractOutside={event => { if (busy) event.preventDefault() }}
+      // 弹层（Select 等 popper）开着时，遮罩点击只收起弹层，避免双 DismissableLayer 同帧卸载导致 body 指针事件锁死
+      onInteractOutside={event => { if (busy || document.querySelector('[data-radix-popper-content-wrapper]')) event.preventDefault() }}
       onEscapeKeyDown={event => { if (busy) event.preventDefault() }}
       onCloseAutoFocus={event => {
         event.preventDefault()
