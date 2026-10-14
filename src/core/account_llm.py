@@ -15,18 +15,20 @@ class AccountChatClient(LLMClient):
     def __init__(self, provider: dict):
         self._account_scoped = True
         self.provider_id = provider["id"]
+        self.model_id = provider["chat_model"]
         cfg = a.provider_config(provider)
         cls = {
             "openai": OpenAIProvider,
             "anthropic": AnthropicProvider,
             "anthropic-arch": AnthropicArchProvider,
         }[provider["protocol"]]
-        impl = cls(provider["name"], cfg, cfg["api_key"])
-        self._providers = {provider["name"]: impl}
-        self._chat_chain = [provider["name"]]
+        label = f"{provider['name']} · {provider['chat_model']}"
+        impl = cls(label, cfg, cfg["api_key"])
+        self._providers = {label: impl}
+        self._chat_chain = [label]
 
     def check_access(self):
-        a.resolve_provider(self.provider_id)
+        a.resolve_provider(self.provider_id, self.model_id)
         if a.active_kb.get():
             a.require_kb(a.active_kb.get())
 
@@ -66,8 +68,8 @@ class AccountChatClient(LLMClient):
 
 
 def chat_client() -> AccountChatClient:
-    current = a.resolve_provider(a.selected_provider.get())
     frozen = a.provider_snapshot.get()
+    current = a.resolve_provider(a.selected_provider.get(), frozen["chat_model"] if frozen else None)
     return AccountChatClient(
         frozen if frozen and frozen["id"] == current["id"] else current
     )

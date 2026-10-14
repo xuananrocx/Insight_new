@@ -363,6 +363,8 @@ def start_task(task_id: str) -> None:
             current = accounts.user()
             accounts.execute('INSERT INTO auth_job_context VALUES (?,?,?,?) ON CONFLICT(task_id) DO UPDATE SET user_id=excluded.user_id,provider_id=excluded.provider_id,started_at=excluded.started_at',
                              (task_id,current['id'],accounts.selected_provider.get(),_now_ms()))
+            frozen = accounts.provider_snapshot.get()
+            accounts.execute('INSERT INTO api_job_models VALUES (?,?) ON CONFLICT(task_id) DO UPDATE SET model_id=excluded.model_id', (task_id, frozen['chat_model'] if frozen else None))
             accounts.audit('upload_started', task_id)
         context = contextvars.copy_context()
         if accounts.enabled:

@@ -117,6 +117,8 @@ def init_auth() -> None:
     from src.core import permissions
 
     permissions.init()
+    from src.core import api_models
+    api_models.init_schema()
     enabled = True
 
 
@@ -289,7 +291,7 @@ def visible_kb_ids() -> list[str]:
     return permissions.visible_kbs()
 
 
-def resolve_provider(provider_id: str | None = None) -> dict:
+def resolve_provider(provider_id: str | None = None, model_id: str | None = None) -> dict:
     from src.core import permissions
 
     current = user()
@@ -308,7 +310,14 @@ def resolve_provider(provider_id: str | None = None) -> dict:
             raise HTTPException(403, "没有此 API 的使用权限")
     else:
         permissions.require_resource("api", pid, "use")
-    return provider
+    from src.core import api_models
+    if model_id is None and provider_id is None:
+        model_id = api_models.preferences()["model_id"]
+    model_id = model_id or provider["chat_model"]
+    model = next((m for m in api_models.models(provider) if m["model_id"] == model_id), None)
+    if not model:
+        raise HTTPException(409, "所选模型已删除，请重新选择")
+    return {**provider, "chat_model": model_id, "model_label": model["display_name"] or model_id, "model_revision": model.get("revision", 0)}
 
 
 def provider_config(p: dict) -> dict:
@@ -324,11 +333,11 @@ def provider_config(p: dict) -> dict:
     }
 
 
-def bind_provider(provider_id: str | None = None, required: bool = True) -> None:
+def bind_provider(provider_id: str | None = None, required: bool = True, model_id: str | None = None) -> None:
     """Freeze selection and configuration once; permission is still rechecked at use."""
     provider_binding_error.set(None)
     try:
-        p = resolve_provider(provider_id)
+        p = resolve_provider(provider_id, model_id)
     except HTTPException as exc:
         if required:
             raise
@@ -402,6 +411,8 @@ def bootstrap(username: str, password: str, token: str) -> None:
     from src.core import permissions
 
     permissions.init()
+    from src.core import api_models
+    api_models.init_schema()
     path.unlink(missing_ok=True)
 
 

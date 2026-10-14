@@ -20,7 +20,16 @@ atexit.register(shutil.rmtree, _TMP_DIR, ignore_errors=True)
 @pytest.fixture(scope="session", autouse=True)
 def _isolated_data_dir():
     """测试期间所有数据目录指到临时目录，避免污染用户数据。"""
+    from src.core.config import settings
+    previous = settings.config['paths'].get('feed_folder')
+    settings.config['paths']['feed_folder'] = str(Path(_TMP_DIR) / 'feeds')
+    settings._paths_cache.pop('feed_folder', None)
     yield Path(_TMP_DIR)
+    if previous is None:
+        settings.config['paths'].pop('feed_folder', None)
+    else:
+        settings.config['paths']['feed_folder'] = previous
+    settings._paths_cache.pop('feed_folder', None)
 
 
 @pytest.fixture(scope="session", autouse=True)

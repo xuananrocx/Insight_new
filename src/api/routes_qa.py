@@ -25,12 +25,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/qa", tags=["qa"])
 
 
+def _account_retry_default():
+    from src.core import accounts, api_models
+    return api_models.preferences()["retry_count"] if accounts.enabled and accounts.identity.get() else 10
+
+
 class AskRequest(BaseModel):
     operation: Literal["ask", "expand"] = "ask"
     deep_ai_options: DeepAiOptions | None = None
-    api_retry_count: int = Field(10, ge=0, le=10, strict=True)
+    api_retry_count: int = Field(default_factory=_account_retry_default, ge=0, le=10, strict=True)
     strict_knowledge: bool = False
     provider_id: str | None = None
+    model_id: str | None = Field(None, max_length=200)
     question: str = Field(..., min_length=1, max_length=4000)
     top_k: int | None = Field(None, ge=1, le=20)
     history: list[dict] | None = None
@@ -369,6 +375,7 @@ async def ask_stream_endpoint(req: AskRequest):
 
 class SummarizeTitleRequest(BaseModel):
     provider_id: str | None = None
+    model_id: str | None = Field(None, max_length=200)
     question: str = Field(..., min_length=1, max_length=4000)
     answer: str = Field("", max_length=8000)
     session_id: str | None = None  # 用于 AI 日志关联
