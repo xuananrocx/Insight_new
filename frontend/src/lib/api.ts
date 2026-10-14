@@ -744,9 +744,10 @@ export const api = {
         method: 'POST',
       }),
 
-    resumeUploadTask: (taskId: string) =>
+    resumeUploadTask: (taskId: string, selection?: { provider_id: string; model_id: string | null }) =>
       request<{ ok: boolean }>(`/knowledge/upload_tasks/${taskId}/resume`, {
         method: 'POST',
+        body: selection ? JSON.stringify(selection) : undefined,
       }),
 
     deleteUploadTask: (taskId: string) =>
@@ -1070,6 +1071,7 @@ export const api = {
       apiRetryCount = 10,
       deepAiOptions?: DeepAiOptions,
       operation: 'ask' | 'expand' = 'ask',
+      modelId?: string,
     ): Promise<void> => {
      let terminal = false
      try {
@@ -1081,6 +1083,7 @@ export const api = {
           history,
           kb_scope: kbScope,
           provider_id: providerId,
+          model_id: modelId,
           strict_knowledge: strictKnowledge ?? false,
           api_retry_count: apiRetryCount,
           deep_ai_options: deepAiOptions,
@@ -1188,10 +1191,10 @@ export const api = {
       cb.onError?.({ message: e?.message || '网络错误' })
      }
     },
-    summarizeTitle: (question: string, answer: string, providerId?: string, sessionId?: string) =>
+    summarizeTitle: (question: string, answer: string, providerId?: string, sessionId?: string, modelId?: string) =>
       request<{ title: string }>('/qa/summarize-title', {
         method: 'POST',
-        body: JSON.stringify({ question, answer, provider_id: providerId, session_id: sessionId }),
+        body: JSON.stringify({ question, answer, provider_id: providerId, session_id: sessionId, model_id: modelId }),
         timeoutMs: 90_000,  // 调 LLM，可能慢
       }),
   },

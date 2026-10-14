@@ -1,5 +1,7 @@
 export type Account = { roles: { id: string; name: string; enabled: boolean }[]; permissions: string[]; is_super: boolean; permission_revision: number; display_name?: string; note?: string; last_login?: number; created_at?: number; password_reset_at?: number;  id: string; username: string; role: 'admin' | 'member'; disabled: boolean; must_change_password: boolean; default_provider: string | null; csrf?: string }
-export type Provider = { id: string; name: string; scope: 'personal' | 'team'; protocol: string; base_url: string; chat_model: string; enabled: boolean; has_api_key: boolean; manageable: boolean; usable: boolean; grantable: boolean }
+export type ApiModel = { model_id: string; display_name: string; connection_status?: string | null; connection_message?: string | null; connection_checked_at?: number | null; tools_status?: string | null; tools_message?: string | null; tools_checked_at?: number | null }
+export type ModelSelection = { provider_id: string | null; model_id: string | null; valid: boolean; reason?: string | null; provider_name?: string; model_label?: string; retry_count?: number }
+export type Provider = { id: string; name: string; scope: 'personal' | 'team'; protocol: string; base_url: string; chat_model: string; enabled: boolean; has_api_key: boolean; manageable: boolean; usable: boolean; grantable: boolean; models: ApiModel[] }
 export type Member = { id: string; username: string; role?: string }
 
 let csrf = ''
@@ -70,8 +72,12 @@ export const accountApi = {
   setup: (username: string, password: string, token: string) => accountRequest('/auth/setup', 'POST', { username, password, token }),
   logout: () => accountRequest('/auth/logout', 'POST'),
   password: (old_password: string, new_password: string) => accountRequest('/auth/password', 'POST', { old_password, new_password }),
-  providers: () => accountRequest<{ items: Provider[]; default_provider: string | null }>('/providers'),
-  choose: (provider_id: string | null) => accountRequest('/account/provider', 'PUT', { provider_id }),
+  providers: () => accountRequest<{ items: Provider[]; default_provider: string | null; selection: ModelSelection }>('/providers'),
+  choose: (provider_id: string | null, model_id?: string) => accountRequest<ModelSelection>('/account/provider', 'PUT', { provider_id, model_id }),
+  apiPreferences: () => accountRequest<ModelSelection>('/account/api-preferences'),
+  retryPreference: (retry_count: number) => accountRequest<ModelSelection>('/account/api-preferences', 'PUT', { retry_count }),
+  sessionModel: (id: string) => accountRequest<ModelSelection>(`/sessions/${encodeURIComponent(id)}/model-selection`),
+  selectSessionModel: (id: string, provider_id: string, model_id: string) => accountRequest<ModelSelection>(`/sessions/${encodeURIComponent(id)}/model-selection`, 'PUT', { provider_id, model_id }),
   members: () => accountRequest<Member[]>('/members'),
   users: () => accountRequest<Account[]>('/admin/users'),
 }

@@ -1,3 +1,4 @@
+import { useResumeUpload } from '@/hooks/use-resume-upload'
 import { UploadElapsed } from '@/components/upload-elapsed'
 import { uploadProgressView } from '@/lib/upload-progress'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -67,6 +68,7 @@ export function BatchUploadDialog({
   initialTaskId,
   onCompleted,
 }: Props) {
+  const resumeUpload = useResumeUpload()
   const [streamVersion, setStreamVersion] = useState(0)
   const [phase, setPhase] = useState<'idle' | 'uploading' | 'running'>('idle')
   const [selectedFiles, setSelectedFiles] = useState<SelectedFile[]>([])
@@ -661,7 +663,7 @@ export function BatchUploadDialog({
             onResume={async () => {
               if (!taskId) return
               try {
-                await api.knowledge.resumeUploadTask(taskId)
+                if (!await resumeUpload(taskId)) return
                 setStreamVersion((n) => n + 1)
               } catch (e) {
                 toast.error(`恢复失败：${(e as Error).message}`)

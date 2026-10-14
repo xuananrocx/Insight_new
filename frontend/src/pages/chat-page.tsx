@@ -1,3 +1,5 @@
+import { ApiModelSelect } from '@/components/api-model-select'
+import { accountApi, type ModelSelection } from '@/lib/account-api'
 import { ManagementDialog } from '@/components/management-dialog'
 import { createUuid } from '@/lib/uuid'
 import { MessageNavigation } from '@/components/message-navigation'
@@ -7,12 +9,11 @@ import { SessionRename } from '@/components/session-rename'
 import { useDeepAiOptions } from '@/hooks/use-deep-ai-options'
 import { useEffect, useId, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   ArrowUp,
   ArrowDown,
-  Zap,
   Library,
   Loader2,
   AlertCircle,
@@ -149,17 +150,29 @@ export function ChatPage() {
   const [pendingKbScope, setPendingKbScope] = useState<string | null>(null)
   const [switchingKb, setSwitchingKb] = useState(false)
 
-  const { data: providersData, isLoading: providersLoading } = useQuery({
-    queryKey: ['llm-providers'],
-    queryFn: () => api.llm.providers(),
-    staleTime: 30_000,
-    refetchOnWindowFocus: true,
+  const modelQc = useQueryClient()
+  const { data: providersData } = useQuery({ queryKey: ['account-providers'], queryFn: accountApi.providers })
+  const selectionQuery = useQuery({
+    queryKey: ['session-model', ctx.activeId],
+    queryFn: () => accountApi.sessionModel(ctx.activeId!), enabled: !!ctx.activeId,
   })
-  const activeProvider = providersData?.providers.find(
-    (p) => p.name === providersData?.current_provider,
-  )
-  const activeModelLabel =
-    activeProvider?.chat_model || providersData?.current_provider || '未配置'
+  const [draftModel, setDraftModel] = useState<ModelSelection>()
+  const [selectingModel, setSelectingModel] = useState(false)
+  const selection = ctx.activeId ? selectionQuery.data : draftModel || providersData?.selection
+  const activeProvider = selection?.valid ? providersData?.items.find(p => p.id === selection.provider_id && p.usable && p.models.some(m => m.model_id === selection.model_id)) : undefined
+  async function selectModel(providerId: string, modelId: string) {
+    setSelectingModel(true)
+    try {
+      if (ctx.activeId) {
+        const value = await accountApi.selectSessionModel(ctx.activeId, providerId, modelId)
+        modelQc.setQueryData(['session-model', ctx.activeId], value)
+      } else {
+        const provider = providersData?.items.find(p => p.id === providerId)
+        const model = provider?.models.find(m => m.model_id === modelId)
+        setDraftModel({ provider_id: providerId, model_id: modelId, provider_name: provider?.name, model_label: model?.display_name || modelId, valid: true })
+      }
+    } catch (error) { toast.error((error as Error).message) } finally { setSelectingModel(false) }
+  }
   // 空状态下选择的 KB（第一次提问时用）
   const [selectedKbForNewSession, setSelectedKbForNewSession] = useState<string | null>(null)
   // 并发流式支持：sessionId -> turnId 映射（zustand 跨组件共享；切会话/离开聊天页不中断）
@@ -211,7 +224,8 @@ export function ChatPage() {
     history: ChatMessage[] | undefined,
     mode: RetrievalMode,
   ) {
-    const providerId = providersData?.current_provider
+    const providerId = selection?.provider_id || undefined
+    const modelId = selection?.model_id || undefined
     const turnId = createUuid()
     const turn: ChatTurn = {
       id: turnId,
@@ -233,6 +247,12 @@ export function ChatPage() {
     const accumulatedStages: QaTraceStage[] = []
 
     try {
+      if (['ai', 'deep_ai'].includes(mode)) {
+        if (!activeProvider || !providerId || !modelId) throw new Error('请选择可用的 API 与模型')
+        const saved = await accountApi.selectSessionModel(sessionId, providerId, modelId)
+        modelQc.setQueryData(['session-model', sessionId], saved)
+        setDraftModel(undefined)
+      }
       await ctx.appendTurn(sessionId, turn)
       await api.qa.askStream(
         question,
@@ -298,7 +318,7 @@ export function ChatPage() {
               try {
                 const latest = await api.sessions.get(sessionId)
                 if (latest.title !== '新会话' || !data.answer) return
-                const result = await api.qa.summarizeTitle(question, data.answer, providerId, sessionId)
+                const result = await api.qa.summarizeTitle(question, data.answer, providerId, sessionId, modelId)
                 if (result.title) {
                   await ctx.renameSession(sessionId, result.title, true)
                 }
@@ -361,6 +381,8 @@ export function ChatPage() {
         undefined, // Legacy strict flag is superseded by constraint_strategy.
         apiRetryCount,
         deepAiOptions,
+        'ask',
+        modelId,
       )
     } finally {
       useAnswerStreams.getState().end(sessionId)
@@ -381,11 +403,11 @@ export function ChatPage() {
       return
     }
     if (['ai', 'deep_ai'].includes(session?.retrieval_mode ?? newSessionMode) && !activeProvider) {
-      toast.error('请先在设置中添加并选择个人 API，或选择管理员授权的团队 API。')
+      toast.error(selection?.reason || '请在输入框下方选择模型；没有可选项时请先配置 API。')
       return
     }
     // 只在"当前会话"有 stream 时禁止发新问题（其他会话的 stream 不影响）
-    if (!q || isStreaming(ctx.activeId)) return
+    if (!q || isStreaming(ctx.activeId) || selectingModel) return
     // U-3: 超长问题前端预检（后端会 422，预检避免 error turn 残留）
     if (q.length > 4000) {
       toast.error(`问题过长（${q.length} 字，上限 4000），请精简后重试`)
@@ -419,11 +441,11 @@ export function ChatPage() {
   // 部分完成/失败回答的一键重试：用原问题与原模式重新发起一轮
   function retryTurn(turn: ChatTurn) {
     const sid = ctx.activeId
-    if (!sid || isStreaming(sid)) return
+    if (!sid || isStreaming(sid) || selectingModel) return
     const requested = turn.mode ?? 'basic'
     const mode: RetrievalMode = requested === 'deep' ? 'basic' : requested
     if (['ai', 'deep_ai'].includes(mode) && !activeProvider) {
-      toast.error('请先在设置中添加并选择个人 API，或选择管理员授权的团队 API。')
+      toast.error(selection?.reason || '请在输入框下方选择模型；没有可选项时请先配置 API。')
       return
     }
     scrollToBottom()
@@ -535,18 +557,12 @@ export function ChatPage() {
                     value={topK}
                     onChange={(v) => setTopK(v)}
                   />
-                  <span
-                    className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground"
-                    title={`当前模型：${activeProvider?.name || '—'} · ${activeProvider?.chat_model || '—'}`}
-                  >
-                    <Zap className="h-3 w-3" />
-                    {providersLoading ? '…' : activeModelLabel}
-                  </span>
+                  <ApiModelSelect compact providers={providersData?.items || []} selection={selection} disabled={selectingModel || isStreaming(ctx.activeId)} onChange={(p, m) => void selectModel(p, m)} />
                   <span className="inline-flex items-center gap-1 rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground">
                     Enter 发送 · Shift+Enter 换行
                   </span>
                 </div>
-                <Button type="submit" size="sm" className="gap-1.5 text-[12px]" disabled={isStreaming(ctx.activeId) || !input.trim()}>
+                <Button type="submit" size="sm" className="gap-1.5 text-[12px]" disabled={selectingModel || isStreaming(ctx.activeId) || !input.trim()}>
                   {isStreaming(ctx.activeId) ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
@@ -670,15 +686,9 @@ export function ChatPage() {
                     value={topK}
                     onChange={(v) => setTopK(v)}
                   />
-                  <span
-                    className="ml-2 inline-flex items-center gap-1 rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground"
-                    title={`当前模型：${activeProvider?.name || '—'} · ${activeProvider?.chat_model || '—'}`}
-                  >
-                    <Zap className="h-3 w-3" />
-                    {providersLoading ? '…' : activeModelLabel}
-                  </span>
+                  <ApiModelSelect compact providers={providersData?.items || []} selection={selection} disabled={selectingModel || isStreaming(ctx.activeId)} onChange={(p, m) => void selectModel(p, m)} />
                 </div>
-                <Button type="submit" size="sm" className="gap-1.5 text-[12px]" disabled={isStreaming(ctx.activeId) || !input.trim()}>
+                <Button type="submit" size="sm" className="gap-1.5 text-[12px]" disabled={selectingModel || isStreaming(ctx.activeId) || !input.trim()}>
                   {isStreaming(ctx.activeId) ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
