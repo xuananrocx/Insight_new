@@ -22,11 +22,43 @@ export async function apiFetch(input: string, init: RequestInit = {}) {
   return res
 }
 
+export function accountErrorMessage(value: unknown, status: number): string {
+  const fallback = `请求失败 (${status})`
+  if (!value || typeof value !== 'object' || !('detail' in value)) return fallback
+  if (typeof value.detail === 'string') return value.detail
+  if (!Array.isArray(value.detail)) return fallback
+  const labels: Record<string, string> = {
+    username: '用户名', password: '密码', token: '初始化令牌',
+    old_password: '当前密码', new_password: '新密码',
+  }
+  const messages = value.detail.flatMap((error: unknown) => {
+    if (!error || typeof error !== 'object' || !('loc' in error) || !Array.isArray(error.loc)) return []
+    const field = error.loc.at(-1)
+    const label = typeof field === 'string' ? labels[field] || '输入项' : '输入项'
+    const type = 'type' in error ? error.type : undefined
+    const ctx = 'ctx' in error && error.ctx && typeof error.ctx === 'object' ? error.ctx : {}
+    if (type === 'missing') return [`${label}不能为空`]
+    if (type === 'string_pattern_mismatch' && field === 'username') {
+      return ['用户名只能包含英文字母、数字、下划线、点、@ 和短横线']
+    }
+    if (type === 'string_too_short' && 'min_length' in ctx && typeof ctx.min_length === 'number') {
+      return [`${label}至少需要 ${ctx.min_length} 个字符`]
+    }
+    if (type === 'string_too_long' && 'max_length' in ctx && typeof ctx.max_length === 'number') {
+      return [`${label}不能超过 ${ctx.max_length} 个字符${field === 'token' ? '，请只复制 setup-token.txt 文件内的令牌内容' : ''}`]
+    }
+    // Validation responses may contain raw passwords/tokens in input or ctx.
+    // Never stringify the error or display those values in the UI.
+    return [`${label}格式不正确，请检查后重试`]
+  })
+  return [...new Set(messages)].join('；') || fallback
+}
+
 export async function accountRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
   const res = await apiFetch(`/api/v1${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!res.ok) {
     const value = await res.json().catch(() => ({}))
-    throw new Error(typeof value.detail === 'string' ? value.detail : `请求失败 (${res.status})`)
+    throw new Error(accountErrorMessage(value, res.status))
   }
   return res.status === 204 ? undefined as T : res.json()
 }
