@@ -56,6 +56,7 @@ export function RebuildConfirmModal({
         </div>
 
         <div className="mb-4 rounded-md bg-warning/10 px-3 py-2 text-[11px] text-warning">
+          {precheck.availability && <p className="mb-2">{precheck.availability.message}</p>}
           ⚠️ 重建期间问答功能暂停。失败时会自动回滚到当前模型。
         </div>
 

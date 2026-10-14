@@ -443,6 +443,7 @@ class LLMClient:
         只读现有实例，不触发模型加载（保证接口秒回）；
         未初始化时维度从 config 的 available_models 取。
         """
+        from src.core.model_availability import model_availability
         emb_cfg = settings.config["llm"].get("embedding", {})
         available = emb_cfg.get("available_models", [])
         current = emb_cfg.get("local_model", "")
@@ -467,6 +468,7 @@ class LLMClient:
                     "description": m["description"],
                     "is_active": m["name"] == current,
                     "is_cached": m["name"] in cached,
+                    "availability": model_availability(m["name"], in_memory=m["name"] in cached),
                 }
                 for m in available
             ],

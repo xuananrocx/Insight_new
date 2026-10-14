@@ -231,6 +231,13 @@ export type EmbeddingModel = {
   description: string
   is_active: boolean
   is_cached?: boolean
+  availability?: ModelAvailability
+}
+
+export type ModelAvailability = {
+  state: 'in_memory' | 'local' | 'offline_missing' | 'download_required' | 'download_unavailable'
+  can_switch: boolean
+  message: string
 }
 
 export type DimMismatchedKb = {
@@ -1537,6 +1544,7 @@ export const api = {
 }
 
 export type EmbeddingPrecheckResult = {
+  availability?: ModelAvailability
   needs_rebuild: boolean
   current_dim: number
   new_dim: number
