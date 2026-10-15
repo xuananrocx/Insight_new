@@ -289,6 +289,9 @@ def create_session(req: CreateSessionRequest) -> dict:
         if "UNIQUE constraint failed" in msg:
             raise HTTPException(status_code=409, detail="会话 ID 已存在")
         raise HTTPException(status_code=500, detail=f"创建失败: {e}")
+    from src.core import accounts, api_models
+    if accounts.enabled:
+        api_models.freeze_session_default(req.id)
     logger.info(f"create session id={req.id} mode={req.retrieval_mode}")
     return {
         "id": req.id,

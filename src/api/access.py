@@ -116,6 +116,7 @@ async def authorize(request: Request):
         return  # Each endpoint requires its specific capability or resource management right.
     if path.startswith("/api/v1/providers") or path in (
         "/api/v1/account/provider",
+        "/api/v1/account/api-preferences",
         "/api/v1/account/preferences",
         "/api/v1/members",
     ):
@@ -136,9 +137,25 @@ async def authorize(request: Request):
                 a.db.get_session(sid).get("retrieval_mode") if sid else "ai"
             )
             if mode in ("ai", "deep_ai"):
-                a.bind_provider(data.get("provider_id"))
+                from src.core import api_models
+                if data.get("model_id") and not data.get("provider_id"):
+                    raise HTTPException(422, "选择模型时必须指定 API")
+                if data.get("provider_id"):
+                    a.bind_provider(data["provider_id"], model_id=data.get("model_id"))
+                elif sid:
+                    selected = api_models.session_selection(sid)
+                    if not selected["valid"]:
+                        raise HTTPException(409, selected["reason"])
+                    a.bind_provider(selected["provider_id"], model_id=selected["model_id"])
+                else:
+                    a.bind_provider()
+                if sid:
+                    frozen = a.provider_snapshot.get()
+                    # Only initialize legacy sessions; explicit request overrides
+                    # must not race with or overwrite a newer saved selection.
+                    a.execute("INSERT OR IGNORE INTO api_session_selection VALUES (?,?,?)", (sid, frozen["id"], frozen["chat_model"]))
         elif path.endswith("/summarize-title"):
-            a.bind_provider(data.get("provider_id"))
+            a.bind_provider(data.get("provider_id"), model_id=data.get("model_id"))
         else:
             raise HTTPException(403, "未授权的操作")
         return
@@ -178,7 +195,7 @@ async def authorize(request: Request):
                 p.require(
                     "kb.team_create" if data.get("scope") == "team" else "kb.create"
                 )
-            a.bind_provider(current["default_provider"], required=False)
+            a.bind_provider(required=False)
         return
     if path.startswith("/api/v1/knowledge"):
         if "/download/" in path:
@@ -225,7 +242,10 @@ async def authorize(request: Request):
             a.require_kb(kb, "reader" if method in SAFE else "editor")
             a.active_kb.set(kb)
         if method not in SAFE:
-            a.bind_provider(current["default_provider"], required=False)
+            if path.endswith("/resume") and "provider_id" in data:
+                a.bind_provider(data.get("provider_id") or "", required=False, model_id=data.get("model_id"))
+            else:
+                a.bind_provider(required=False)
         return
     if path.startswith("/api/v1/ai_logs"):
         p.require("ai_logs.view")

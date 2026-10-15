@@ -36,12 +36,6 @@ import { AiCallLogConfigCard } from '@/components/ai-call-log-config-card'
 import { api, type EmbeddingPrecheckResult, type EmbeddingRebuildStatus } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
-const SIZE_TO_MB: Record<string, number> = {
-  '93MB': 93,
-  '400MB': 400,
-  '1.2GB': 1200,
-}
-
 // LLM Provider 配置对话框组件
 function LLMTimeoutsCard() {
   const qc = useQueryClient()
@@ -251,13 +245,6 @@ function AiGenerationConfigCard() {
 }
 
 
-function estimateSeconds(size: string, cached: boolean) {
-  if (cached) return 0
-  const mb = SIZE_TO_MB[size] ?? 100
-  // 下载 + 加载，约 30MB/s
-  return Math.ceil(mb / 30) + 2
-}
-
 function DefaultKbCard() {
   const qc = useQueryClient()
   const defaultKb = useQuery({
@@ -399,10 +386,7 @@ export function SettingsPage() {
       }
     } catch (e) {
       setPrecheckError(e instanceof Error ? e.message : String(e))
-      setTimeout(() => {
-        setSwitchTarget(null)
-        setPrecheckError(null)
-      }, 3000)
+      setSwitchTarget(null)
     }
   }
 
@@ -441,7 +425,6 @@ export function SettingsPage() {
   const switchingTo = switchMutation.variables
   const switchingModel = e?.available_models.find((m) => m.name === switchingTo)
   const isCached = switchingModel?.is_cached ?? false
-  const etaSeconds = switchingModel ? estimateSeconds(switchingModel.size, isCached) : 0
 
   const cachedCount = e?.cached_models?.length ?? 0
 
@@ -467,7 +450,7 @@ export function SettingsPage() {
           <SwitchProgress
             size={switchingModel.size}
             cached={isCached}
-            etaSeconds={etaSeconds}
+            needsDownload={switchingModel.availability?.state === 'download_required'}
           />
         ) : null}
 
@@ -488,7 +471,7 @@ export function SettingsPage() {
                   {m.is_cached ? (
                     <span className="inline-flex items-center gap-1 rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
                       <HardDrive className="h-2.5 w-2.5" />
-                      已缓存
+                      已加载到内存
                     </span>
                   ) : null}
                 </div>
@@ -499,6 +482,7 @@ export function SettingsPage() {
                   <span>大小 {m.size}</span>
                   <span>维度 {m.dimensions}</span>
                 </div>
+                {m.availability && <p className="mt-1 text-[11px] text-muted-foreground">{m.availability.message}</p>}
               </div>
               {m.is_active ? (
                 <span className="inline-flex items-center gap-1 text-[11px] font-medium text-primary">
@@ -511,7 +495,7 @@ export function SettingsPage() {
                   variant="outline"
                   className="h-7 gap-1.5 text-[11px]"
                   onClick={() => handleSwitch(m.name, m.label)}
-                  disabled={!!switchTarget || switchMutation.isPending}
+                  disabled={!!switchTarget || switchMutation.isPending || m.availability?.can_switch === false}
                 >
                   {switchTarget?.name === m.name ? (
                     <>
@@ -519,7 +503,7 @@ export function SettingsPage() {
                       检查中...
                     </>
                   ) : (
-                    '切换'
+                    m.availability?.can_switch === false ? '无法切换' : m.availability?.state === 'download_required' ? '下载并切换' : '切换'
                   )}
                 </Button>
               )}
@@ -635,8 +619,9 @@ export function SettingsPage() {
       ) : null}
 
       {precheckError ? (
-        <div className="fixed bottom-4 right-4 z-50 max-w-sm rounded-md border border-destructive/40 bg-destructive/10 p-3 text-[12px] text-destructive">
+        <div role="alert" className="fixed bottom-4 right-4 z-50 max-w-sm rounded-md border border-destructive/40 bg-background p-3 text-[12px] text-destructive">
           {precheckError}
+          <button className="ml-3 underline" onClick={() => setPrecheckError(null)}>关闭</button>
         </div>
       ) : null}
     </SettingsLayout>
@@ -703,11 +688,11 @@ function estimateMemoryMB(cached: string[], models: { name: string; size: string
 function SwitchProgress({
   size,
   cached,
-  etaSeconds,
+  needsDownload,
 }: {
   size: string
   cached: boolean
-  etaSeconds: number
+  needsDownload: boolean
 }) {
   const [elapsed, setElapsed] = useState(0)
   useEffect(() => {
@@ -716,20 +701,9 @@ function SwitchProgress({
     return () => clearInterval(t)
   }, [])
 
-  // 进度：缓存命中→固定 95%；首次→根据 ETA 估算，但不超 90%
-  const pct = cached
-    ? 95
-    : etaSeconds > 0
-      ? Math.min(90, Math.round((elapsed / etaSeconds) * 100))
-      : 30
-
   const phase = cached
-    ? '正在切换到缓存的模型...'
-    : elapsed < 3
-      ? '正在加载模型文件...'
-      : elapsed < etaSeconds
-        ? '正在初始化模型（首次较慢）...'
-        : '即将完成...'
+    ? '正在切换到内存中的模型...'
+    : needsDownload ? '正在下载并加载模型，请勿重复切换...' : '正在加载本地模型...'
 
   return (
     <div className="mb-4 rounded-md border bg-muted/20 p-3">
@@ -739,19 +713,18 @@ function SwitchProgress({
           {phase}
         </span>
         <span className="text-muted-foreground">
-          {cached ? '秒级' : `${elapsed}s / ~${etaSeconds}s`} · {size}
+          已等待 {elapsed}s · 模型大小 {size}
         </span>
       </div>
       <div className="h-1.5 overflow-hidden rounded-full bg-muted">
         <div
-          className="h-full rounded-full bg-gradient-to-r from-primary to-primary/60 transition-all duration-500"
-          style={{ width: `${pct}%` }}
+          className="h-full w-1/3 animate-pulse rounded-full bg-primary/60"
         />
       </div>
       {!cached ? (
         <div className="mt-2 flex items-center gap-1 text-[10px] text-muted-foreground">
           <X className="h-2.5 w-2.5" />
-          首次切换需下载，之后切换永远秒级（LRU 缓存）
+          {needsDownload ? '完整下载耗时取决于网络和磁盘空间，当前未提供下载百分比。' : '模型文件已在本地，加载耗时取决于模型大小和设备性能。'}
         </div>
       ) : null}
     </div>

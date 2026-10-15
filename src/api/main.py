@@ -337,13 +337,15 @@ def embedding_switch(req: EmbeddingSwitchRequest) -> dict:
             status_code=400,
             detail=f"不支持的模型: {req.model_name}。可选: {valid_names}",
         )
+    from src.core.model_availability import require_model_access, download_error_message
+    require_model_access(client, req.model_name)
     try:
         return client.switch_embedding_model(req.model_name)
     except llm_client.EmbeddingBusyError as e:
         raise HTTPException(status_code=409, detail=str(e))
-    except Exception:
+    except Exception as error:
         logger.exception("embedding 模型切换失败")
-        raise HTTPException(status_code=500, detail="模型切换失败，请检查模型文件是否完整及可访问；原模型保持可用。")
+        raise HTTPException(status_code=500, detail=download_error_message(error) + "原模型保持可用。")
 
 
 @app.post("/api/v1/embedding/precheck")
@@ -361,7 +363,9 @@ def embedding_precheck(req: EmbeddingSwitchRequest) -> dict:
             status_code=400,
             detail=f"不支持的模型: {req.model_name}。可选: {valid_names}",
         )
-    return rebuild.precheck(req.model_name)
+    from src.core.model_availability import require_model_access
+    availability = require_model_access(client, req.model_name)
+    return {**rebuild.precheck(req.model_name), "availability": availability}
 
 
 @app.post("/api/v1/embedding/rebuild-and-switch")
@@ -385,6 +389,9 @@ def embedding_rebuild_and_switch(req: EmbeddingSwitchRequest) -> dict:
             detail=f"不支持的模型: {req.model_name}。可选: {valid_names}",
         )
 
+    # Reject unavailable offline models before starting a rebuild or writing markers.
+    from src.core.model_availability import require_model_access
+    require_model_access(client, req.model_name)
     # 启动后台线程，立即返回
     thread = threading.Thread(
         target=rebuild.rebuild_and_switch,

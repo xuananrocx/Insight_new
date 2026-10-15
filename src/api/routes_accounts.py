@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import time
 import uuid
 from urllib.parse import urlsplit
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, Field
-from src.core import accounts as a, permissions as perm
+from pydantic import BaseModel, Field, model_validator
+from src.core import accounts as a, permissions as perm, api_models
 
 router = APIRouter(prefix="/api/v1", tags=["accounts"])
 
@@ -165,12 +166,26 @@ def revoke_kb(kb_id: str, uid: str):
     return {"ok": True}
 
 
+class ModelInput(BaseModel):
+    model_id: str = Field(min_length=1, max_length=200)
+    display_name: str = Field("", max_length=80)
+
+    @model_validator(mode="after")
+    def normalize(self):
+        self.model_id = self.model_id.strip()
+        self.display_name = self.display_name.strip()
+        if not self.model_id:
+            raise ValueError("模型 ID 不能为空")
+        return self
+
+
 class ProviderInput(BaseModel):
     name: str = Field(min_length=1, max_length=80)
     scope: Literal["personal", "team"] = "personal"
     protocol: Literal["openai", "anthropic", "anthropic-arch"] = "openai"
     base_url: str = Field(min_length=1, max_length=2048)
-    chat_model: str = Field(min_length=1, max_length=200)
+    chat_model: str | None = Field(None, min_length=1, max_length=200)
+    models: list[ModelInput] | None = Field(None, min_length=1, max_length=100)
     api_key: str | None = Field(None, max_length=8192)
     enabled: bool = True
 
@@ -208,13 +223,14 @@ def providers():
         provider["has_api_key"] = bool(
             a.cipher().decrypt(provider.pop("secret").encode())
         )
+        provider["models"] = api_models.models(provider)
         provider.update(
             usable=usable,
             manageable=perm.has("api.personal" if personal else "api.manage"),
             grantable=not personal and perm.has("api.grant"),
         )
         items.append(provider)
-    return {"items": items, "default_provider": u["default_provider"]}
+    return {"items": items, "default_provider": u["default_provider"], "selection": api_models.selection_status(api_models.preferences())}
 
 
 def save_provider(req: ProviderInput, pid: str | None = None):
@@ -245,37 +261,47 @@ def save_provider(req: ProviderInput, pid: str | None = None):
         secret = old["secret"]
     else:
         secret = a.cipher().encrypt((req.api_key or "").encode()).decode()
+    catalog = req.models
+    if catalog is None:
+        # Legacy updates preserve a multi-model catalog; they may only name the
+        # explicit compatibility model, never silently erase the other models.
+        if old:
+            catalog = [ModelInput(**m) for m in api_models.models(old)]
+            if req.chat_model and req.chat_model != old["chat_model"]:
+                if len(catalog) > 1:
+                    raise HTTPException(409, "请使用新版模型管理修改多模型配置")
+                catalog = [ModelInput(model_id=req.chat_model)]
+        elif req.chat_model:
+            catalog = [ModelInput(model_id=req.chat_model)]
+        else:
+            raise HTTPException(422, "请至少添加一个模型")
+    ids = [m.model_id for m in catalog]
+    if len(set(ids)) != len(ids):
+        raise HTTPException(422, "同一个 API 内的模型 ID 不能重复")
+    compatibility_model = (req.chat_model if req.models is None and req.chat_model else old["chat_model"] if old else ids[0])
     pid = pid or uuid.uuid4().hex
-    if old:
-        a.execute(
-            "UPDATE auth_providers SET name=?,protocol=?,base_url=?,chat_model=?,secret=?,enabled=? WHERE id=?",
-            (
-                req.name,
-                req.protocol,
-                req.base_url.strip().rstrip("/"),
-                req.chat_model,
-                secret,
-                int(req.enabled),
-                pid,
-            ),
-        )
-    else:
-        a.execute(
-            "INSERT INTO auth_providers VALUES (?,?,?,?,?,?,?,?,?)",
-            (
-                pid,
-                u["id"] if req.scope == "personal" else None,
-                req.scope,
-                req.name,
-                req.protocol,
-                req.base_url.strip().rstrip("/"),
-                req.chat_model,
-                secret,
-                int(req.enabled),
-            ),
-        )
     with a.db.get_cursor() as cur:
+        cur.execute("BEGIN IMMEDIATE")
+        if old:
+            cur.execute("""INSERT OR IGNORE INTO api_preferences(user_id,model_id)
+              SELECT id,? FROM auth_users WHERE default_provider=?""", (old["chat_model"], pid))
+            cur.execute("UPDATE auth_providers SET name=?,protocol=?,base_url=?,chat_model=?,secret=?,enabled=? WHERE id=?",
+                        (req.name, req.protocol, req.base_url.strip().rstrip("/"), compatibility_model, secret, int(req.enabled), pid))
+        else:
+            cur.execute("INSERT INTO auth_providers VALUES (?,?,?,?,?,?,?,?,?)",
+                        (pid, u["id"] if req.scope == "personal" else None, req.scope, req.name, req.protocol,
+                         req.base_url.strip().rstrip("/"), compatibility_model, secret, int(req.enabled)))
+        placeholders = ",".join("?" for _ in ids)
+        cur.execute(f"DELETE FROM api_models WHERE provider_id=? AND model_id NOT IN ({placeholders})", (pid, *ids))
+        for model in catalog:
+            cur.execute("""INSERT INTO api_models(provider_id,model_id,display_name,revision) VALUES (?,?,?,?)
+              ON CONFLICT(provider_id,model_id) DO UPDATE SET display_name=excluded.display_name""",
+                        (pid, model.model_id, model.display_name, time.time_ns()))
+        if old and any((old["protocol"] != req.protocol, old["base_url"] != req.base_url.strip().rstrip("/"), req.api_key is not None)):
+            cur.execute("""UPDATE api_models SET revision=revision+1,connection_status=NULL,connection_message=NULL,connection_checked_at=NULL,
+              tools_status=NULL,tools_message=NULL,tools_checked_at=NULL WHERE provider_id=?""", (pid,))
         perm.bump(cur)
+        cur.connection.commit()
     a.audit("provider_saved", pid)
     return {"id": pid}
 
@@ -305,17 +331,42 @@ def delete_provider(pid: str):
 
 class DefaultProvider(BaseModel):
     provider_id: str | None = None
+    model_id: str | None = Field(None, max_length=200)
 
 
 @router.put("/account/provider")
 def choose_provider(req: DefaultProvider):
-    if req.provider_id:
-        a.resolve_provider(req.provider_id)
-    a.execute(
-        "UPDATE auth_users SET default_provider=? WHERE id=?",
-        (req.provider_id, a.user()["id"]),
-    )
-    return {"ok": True}
+    return api_models.save_preferences(req.provider_id, req.model_id, api_models.preferences()["retry_count"])
+
+
+class RetryPreference(BaseModel):
+    retry_count: int = Field(ge=0, le=10, strict=True)
+
+
+@router.get("/account/api-preferences")
+def api_preferences():
+    return api_models.selection_status(api_models.preferences())
+
+
+@router.put("/account/api-preferences")
+def retry_preference(req: RetryPreference):
+    pref = api_models.preferences()
+    # Retry preference can be changed even when a previous selection is invalid.
+    a.execute("""INSERT INTO api_preferences VALUES (?,?,?) ON CONFLICT(user_id)
+      DO UPDATE SET retry_count=excluded.retry_count""", (a.user()["id"], pref["model_id"], req.retry_count))
+    return api_preferences()
+
+
+@router.get("/sessions/{session_id}/model-selection")
+def get_session_model(session_id: str):
+    return api_models.session_selection(session_id)
+
+
+@router.put("/sessions/{session_id}/model-selection")
+def set_session_model(session_id: str, req: DefaultProvider):
+    if not req.provider_id or not req.model_id:
+        raise HTTPException(422, "请选择 API 与模型")
+    return api_models.save_session_selection(session_id, req.provider_id, req.model_id)
 
 
 @router.get("/providers/{pid}/members")
@@ -349,9 +400,9 @@ def revoke_provider(pid: str, uid: str):
 
 
 @router.post("/providers/{pid}/test")
-def test_provider(pid: str):
-    p = a.resolve_provider(pid)
-    a.bind_provider(pid)
+def test_provider(pid: str, model_id: str | None = None):
+    p = a.resolve_provider(pid, model_id)
+    a.bind_provider(pid, model_id=model_id)
     a.rate_limit("provider-test:" + a.user()["id"], 20, 60)
     from src.core.account_llm import chat_client
 
@@ -367,28 +418,36 @@ def test_provider(pid: str):
     except RetryDeferredError as exc:
         raise HTTPException(503, str(exc)) from exc
     except Exception:
+        api_models.record_test(p, "connection", "failed", "连接失败，请检查地址、密钥和模型")
         raise HTTPException(502, "连接失败，请检查 API 地址、密钥和模型名称")
     finally:
         client.close()
-    return {"ok": bool(answer), "name": p["name"]}
+    api_models.record_test(p, "connection", "passed" if answer else "failed", "连接成功" if answer else "模型返回空内容")
+    if not answer:
+        raise HTTPException(502, "模型返回空内容")
+    return {"ok": True, "name": p["name"]}
 
 
 @router.post("/providers/{pid}/test-tools")
-async def test_provider_tools(pid: str):
+async def test_provider_tools(pid: str, model_id: str | None = None):
     import asyncio
     from src.core.tool_chat import probe_tools, ToolProtocolError
     from src.core.api_retry import RetryDeferredError
 
-    a.resolve_provider(pid)
-    a.bind_provider(pid)
+    p = a.resolve_provider(pid, model_id)
+    a.bind_provider(pid, model_id=model_id)
     a.rate_limit("provider-test:" + a.user()["id"], 20, 60)
     try:
-        return await asyncio.wait_for(probe_tools(), 60)
+        result = await asyncio.wait_for(probe_tools(), 60)
+        api_models.record_test(p, "tools", "passed" if result["supported"] else "failed" if result["supported"] is False else "unknown", result["message"])
+        return result
     except HTTPException:
         raise
     except (ToolProtocolError, RetryDeferredError) as exc:
+        api_models.record_test(p, "tools", "unknown", "检测未完成，请重新检查连接与模型协议")
         return {"supported": None, "message": str(exc)}
     except Exception:
+        api_models.record_test(p, "tools", "unknown", "检测未完成，请重新检查连接与模型协议")
         return {"supported": None, "message": "检测未完成，暂不能判断支持情况。请检查连接、模型和服务商工具协议。"}
 
 

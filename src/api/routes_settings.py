@@ -279,7 +279,7 @@ def get_llm_providers() -> LLMProvidersResponse:
     return LLMProvidersResponse(current_provider=current, fallback_chain=[], providers=[LLMProviderInfo(
         name=p['id'],has_chat=True,has_embedding=False,api_key_configured=p['has_api_key'],
         api_key_preview=None,api_key=None,protocol=p['protocol'],base_url=p['base_url'],
-        chat_model=p['chat_model'],is_active=p['id']==current
+        chat_model=(data['selection']['model_id'] if p['id']==current else p['chat_model']),is_active=p['id']==current
     ) for p in data['items'] if p['usable']])
 
 

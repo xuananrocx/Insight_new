@@ -1,3 +1,4 @@
+import { useResumeUpload } from '@/hooks/use-resume-upload'
 import { uploadProgressView } from '@/lib/upload-progress'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -16,6 +17,7 @@ import { useUploadUiStore } from '@/stores/upload-ui'
  */
 export function InterruptedTasksBanner() {
   const qc = useQueryClient()
+  const resumeUpload = useResumeUpload()
   const openView = useUploadUiStore((s) => s.openView)
   const { data, isLoading } = useQuery({
     queryKey: ['upload-tasks', 'active'],
@@ -24,8 +26,9 @@ export function InterruptedTasksBanner() {
   })
 
   const resumeMutation = useMutation({
-    mutationFn: (taskId: string) => api.knowledge.resumeUploadTask(taskId),
-    onSuccess: () => {
+    mutationFn: (taskId: string) => resumeUpload(taskId),
+    onSuccess: (resumed) => {
+      if (!resumed) return
       toast.success('已恢复任务')
       qc.invalidateQueries({ queryKey: ['upload-tasks', 'active'] })
     },

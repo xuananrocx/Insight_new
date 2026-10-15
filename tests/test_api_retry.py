@@ -223,8 +223,9 @@ def test_connection_endpoint_uses_short_probe_and_reports_long_backpressure(monk
         return True
     fake = SimpleNamespace(_providers={'test': SimpleNamespace(test_connection=probe)},
                            check_access=lambda: None, close=lambda: closed.append(True))
-    monkeypatch.setattr(accounts, 'resolve_provider', lambda pid: {'name': 'test'})
-    monkeypatch.setattr(accounts, 'bind_provider', lambda pid: None)
+    monkeypatch.setattr(accounts, 'resolve_provider', lambda pid, model_id=None: {'name': 'test'})
+    monkeypatch.setattr(routes_accounts.api_models, 'record_test', lambda *args: None)
+    monkeypatch.setattr(accounts, 'bind_provider', lambda pid, **kwargs: None)
     monkeypatch.setattr(accounts, 'rate_limit', lambda *args: None)
     monkeypatch.setattr(accounts, 'user', lambda: {'id': 'test'})
     monkeypatch.setattr(account_llm, 'chat_client', lambda: fake)
