@@ -543,7 +543,7 @@ class LLMClient:
                     used_model = getattr(p, "chat_model", None)
                     answer = p.chat(messages, **kwargs)
                     if not answer or not answer.strip():
-                        raise LLMError("模型返回空文本")
+                        raise LLMError(f"模型返回空文本（结束原因：{getattr(answer, 'stop_reason', None) or '未知'}）")
                     used_model = getattr(answer, "model", None) or used_model
                     usage = getattr(answer, "usage", {})
                     # 成功 → 记日志

@@ -287,21 +287,20 @@ def test_separate_download_export_and_stale_preview(env, monkeypatch):
 
 
 def test_global_summary_requires_resource_management(env, monkeypatch):
-    from types import SimpleNamespace
     from src.api import routes_kbs
-    from src.knowledge import ai_summarizer
+    from src.knowledge import summary_tasks
 
     kid = kb(env.alice)
     path = f"/api/v1/kbs/{kid}/global_summary"
     db.update_kb_global_summary(kid, "original overview", "test", 10)
     builds = []
 
-    def build(kb_id, force=False):
-        builds.append((kb_id, force))
+    def build(kb_id):
+        builds.append(kb_id)
         db.update_kb_global_summary(kb_id, "updated overview", "test", 12)
-        return SimpleNamespace(ok=True, summary="updated overview", model="test", tokens=12, doc_count=1)
+        return {"id": "test-job", "state": "queued"}
 
-    monkeypatch.setattr(ai_summarizer, "generate_kb_global_summary", build)
+    monkeypatch.setattr(summary_tasks, "start", build)
     # Match the reported case: access comes from the ordinary member role.
     grant(env.alice, "kb", kid, "member", ["query", "download"], "role")
     assert env.bob.get(path).json()["summary"] == "original overview"
@@ -321,11 +320,11 @@ def test_global_summary_requires_resource_management(env, monkeypatch):
     assert env.bob.delete(path).status_code == 403
     assert env.bob.post(path + "/build").status_code == 403
     grant(env.alice, "kb", kid, env.bob_id, ["query", "edit", "manage"])
-    assert env.bob.post(path + "/build?force=true").status_code == 200
-    assert builds == [(kid, True)]
+    assert env.bob.post(path + "/build?force=true").status_code == 202
+    assert builds == [kid]
     assert env.bob.delete(path).status_code == 200
     assert db.get_kb_global_summary(kid) is None
-    assert env.alice.post(path + "/build").status_code == 200
+    assert env.alice.post(path + "/build").status_code == 202
     grant(env.alice, "kb", kid, env.bob_id, [], effect="remove")
     assert env.bob.get(path).status_code == 200
     assert env.bob.delete(path).status_code == 403

@@ -19,6 +19,7 @@ from src.core.ingest_state import TaskCancelledError
 
 
 import json
+import contextvars
 import logging
 import re
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ from src.db import metadata_db
 from src.knowledge.chunker import Chunk
 
 logger = logging.getLogger(__name__)
+summary_call_check = contextvars.ContextVar("summary_call_check", default=lambda: None)
 
 
 # 摘要 chunk 的 id 前缀（区别于普通 chunk）
@@ -97,6 +99,27 @@ def _segment_chars() -> int:
     return int(cfg.get("segment_chars", 30000))
 
 
+def _without_source_overlap(chunks):
+    """Only remove overlap proven by source offsets; legacy chunks stay intact."""
+    result = []
+    previous = None
+    for chunk in chunks:
+        meta = chunk.metadata or {}
+        start, end = meta.get('source_char_start'), meta.get('source_char_end')
+        key = (meta.get('source_path'), meta.get('section_index'))
+        valid = isinstance(start, int) and isinstance(end, int) and start >= 0 and end - start == len(chunk.text)
+        text = chunk.text
+        if valid and previous and previous[0] == key:
+            prev_start, prev_end, prev_text = previous[1:]
+            overlap = prev_end - start
+            if start >= prev_start and 0 < overlap <= min(len(prev_text), len(text)) and prev_text[-overlap:] == text[:overlap]:
+                text = text[overlap:]
+        if text:
+            result.append(Chunk(text=text, metadata=meta))
+        previous = (key, start, end, chunk.text) if valid else None
+    return result
+
+
 def _split_chunks_by_sections(chunks: list[Chunk], max_chars: int) -> list[list[Chunk]]:
     """按章节边界把 chunks 聚合成段，每段大小不超过 max_chars。
 
@@ -105,24 +128,81 @@ def _split_chunks_by_sections(chunks: list[Chunk], max_chars: int) -> list[list[
     - 累积到 max_chars → 强制切段（防单章超长）
     - 全程不足 max_chars → 单段（调用方走单次全文路径）
     """
-    soft = int(max_chars * 0.8)
-    segments: list[list[Chunk]] = []
-    cur: list[Chunk] = []
-    cur_size = 0
-    for c in chunks:
-        label = (c.metadata or {}).get("section_label") or ""
-        prev_label = (cur[-1].metadata or {}).get("section_label") or "" if cur else ""
-        if cur and (
-            cur_size >= max_chars
-            or (cur_size >= soft and label and label != prev_label)
-        ):
-            segments.append(cur)
-            cur, cur_size = [], 0
-        cur.append(c)
-        cur_size += len(c.text)
+    if max_chars < 100:
+        raise ValueError("摘要段长必须至少为 100 字符")
+    soft = int(max_chars * .8)
+    segments, cur, size = [], [], 0
+    for chunk in chunks:
+        # Include separators in the hard limit; split oversized source chunks.
+        for offset in range(0, len(chunk.text), max_chars):
+            part = Chunk(text=chunk.text[offset:offset + max_chars], metadata=chunk.metadata)
+            label = (part.metadata or {}).get("section_label")
+            previous = (cur[-1].metadata or {}).get("section_label") if cur else None
+            if cur and (size + 2 + len(part.text) > max_chars or
+                        (size >= soft and label and label != previous)):
+                segments.append(cur)
+                cur, size = [], 0
+            size += len(part.text) + (2 if cur else 0)
+            cur.append(part)
     if cur:
         segments.append(cur)
     return segments
+
+
+def _checked_chat(client, messages, *, max_tokens, **kwargs):
+    """One bounded recovery for empty/truncated/invalid output, never provider fallback."""
+    for attempt in range(2):
+        summary_call_check.get()()
+        try:
+            answer, provider = client.chat(messages, max_tokens=max_tokens, **kwargs)
+            if getattr(answer, "stop_reason", None) in ("max_tokens", "length", "incomplete"):
+                if attempt == 0:
+                    max_tokens = min(8000, max_tokens * 2)
+                    continue
+                raise ValueError("模型输出达到上限，摘要未完整生成")
+            if not answer.strip():
+                raise ValueError("模型返回空文本")
+            return answer, provider
+        except Exception as exc:
+            if attempt == 0 and "模型返回空文本" in str(exc):
+                if "max_tokens" in str(exc) or "length" in str(exc):
+                    max_tokens = min(8000, max_tokens * 2)
+                continue
+            raise
+    raise ValueError("模型未返回完整摘要")
+
+
+def _reduce_notes(client, notes, kb_id, check, progress):
+    # Bound every reduce input, including large KBs; retain all groups.
+    while sum(len(note) + len(label) + 40 for label, note in notes) > 16000:
+        groups, group, size = [], [], 0
+        for label, note in notes:
+            for offset in range(0, len(note), 12000):
+                part = note[offset:offset + 12000]
+                cost = len(label) + len(part) + 40
+                if group and size + cost > 16000:
+                    groups.append(group)
+                    group, size = [], 0
+                group.append((label, part))
+                size += cost
+        if group:
+            groups.append(group)
+        reduced = []
+        for i, group in enumerate(groups, 1):
+            check()
+            progress(f"分层汇总 {i}/{len(groups)}")
+            answer, _ = _checked_chat(client, [
+                {"role": "system", "content": "合并以下笔记为不超过 1200 字的中文概述，保留各来源的关键内容，不编造，不声称未覆盖内容已覆盖。只输出正文。"},
+                {"role": "user", "content": "\n\n".join(f"{label}: {note}" for label, note in group)},
+            ], max_tokens=3000, scene="summarize", log_meta={"kb_id": kb_id})
+            check()
+            if len(answer) > 6000:
+                raise ValueError("分层汇总输出过长，已停止以避免无限汇总")
+            reduced.append((f"汇总组 {i}", answer))
+        if sum(len(n) + len(label) + 40 for label, n in reduced) >= sum(len(n) + len(label) + 40 for label, n in notes):
+            raise ValueError("分层汇总未收敛，已保留原结果")
+        notes = reduced
+    return notes
 
 
 def _build_user_prompt(file_name: str, doc_text: str) -> str:
@@ -173,9 +253,9 @@ def _map_segment(
     total: int,
     segment_text: str,
 ) -> str:
-    """map 阶段：对一个分段出要点笔记。失败返回空串（跳过该段，不影响其他段）。"""
+    """map 阶段：对一个分段出要点笔记。失败立即停止，成功笔记可供重试复用。"""
     try:
-        answer, _ = client.chat(
+        answer, _ = _checked_chat(client,
             [
                 {"role": "system", "content": _MAP_SYSTEM_PROMPT},
                 {
@@ -187,13 +267,13 @@ def _map_segment(
                 },
             ],
             temperature=0.1,
-            max_tokens=600,
+            max_tokens=4000,
             scene="summarize",
             log_meta={"kb_id": kb_id},
         )
     except Exception as e:
-        logger.warning(f"[ai_summary] map 段 {idx}/{total} 失败: {e}")
-        return ""
+        logger.warning("[ai_summary] map 段 %s/%s 失败: %s", idx, total, type(e).__name__)
+        raise
     note = answer.strip()
     if note.startswith("无实质内容"):
         return ""
@@ -207,39 +287,19 @@ def _parse_llm_response(raw: str) -> dict[str, Any]:
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
-    # 找首个 { 到匹配的 }
     start = text.find("{")
     if start < 0:
-        raise ValueError(f"LLM 输出无 JSON 起始符: {raw[:200]}")
-    # 简单括号配对（不处理嵌套字符串里的 {}）
-    depth = 0
-    end = -1
-    for i, ch in enumerate(text[start:], start):
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-    if end < 0:
-        raise ValueError(f"LLM 输出 JSON 不完整: {raw[:200]}")
-
-    json_text = text[start:end]
-    # 第一层：标准 json.loads
+        raise ValueError("模型输出不是 JSON 对象")
     try:
-        return json.loads(json_text)
-    except json.JSONDecodeError:
-        pass
-    # 第二层：json_repair（处理未转义引号、尾随逗号、单引号等常见 LLM 错误）
-    try:
-        from json_repair import repair_json
-        repaired = repair_json(json_text, return_objects=True)
-        if isinstance(repaired, dict):
-            return repaired
-    except Exception as e:
-        logger.warning(f"json_repair 也失败了: {e}")
-    raise ValueError(f"JSON 解析失败（标准 + repair 都不行）: {raw[:200]}")
+        parsed, _ = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError as exc:
+        raise ValueError("模型 JSON 输出不完整或格式错误") from exc
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("summary"), str):
+        raise ValueError("摘要字段必须为文本")
+    concepts = parsed.get("concepts", [])
+    if not isinstance(concepts, list):
+        raise ValueError("概念字段必须为列表")
+    return parsed
 
 
 def _estimate_tokens(text: str) -> int:
@@ -266,6 +326,8 @@ def summarize_and_extract(
     collection_name: str,
     source_path: str,
     check_cancel=None,
+    progress=None,
+    checkpoint=None,
 ) -> SummarizeResult:
     """对单个文档跑 LLM 摘要 + 概念提取，并写入数据库 + 向量库。
 
@@ -282,6 +344,7 @@ def summarize_and_extract(
     """
     result = SummarizeResult()
     check_cancel = check_cancel or (lambda: None)
+    progress = progress or (lambda detail: None)
     check_cancel()
 
     if not chunks:
@@ -291,6 +354,7 @@ def summarize_and_extract(
     # 1. 调 LLM：小文档单次全文直出；大文档按章节分段 map-reduce
     try:
         client = llm_client.get_client()
+        chunks = _without_source_overlap(chunks)
         segments = _split_chunks_by_sections(chunks, _segment_chars())
         if len(segments) <= 1:
             doc_text = "\n\n".join(c.text for c in chunks)
@@ -307,25 +371,30 @@ def summarize_and_extract(
             for i, seg in enumerate(segments, 1):
                 label = (seg[0].metadata or {}).get("section_label") or ""
                 check_cancel()
-                note = _map_segment(
-                    client, file_name, kb_id, i, len(segments),
-                    "\n\n".join(c.text for c in seg),
-                )
+                segment_text = "\n\n".join(c.text for c in seg)
+                progress(f"分段摘要 {i}/{len(segments)}")
+                note = checkpoint(segment_text, None) if checkpoint else None
+                if note is None:
+                    note = _map_segment(client, file_name, kb_id, i, len(segments), segment_text)
+                    check_cancel()
+                    if checkpoint:
+                        checkpoint(segment_text, note)
                 check_cancel()
                 if note:
                     notes.append((label, note))
             if not notes:
                 result.error = "全部分段摘要（map）均失败"
                 return result
+            notes = _reduce_notes(client, notes, kb_id, check_cancel, progress)
             messages = [
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": _build_user_prompt_from_segments(file_name, notes)},
             ]
         check_cancel()
-        raw_answer, used_provider = client.chat(
+        raw_answer, used_provider = _checked_chat(client,
             messages,
             temperature=0.1,  # 摘要要稳定，低温度
-            max_tokens=1500,
+            max_tokens=4000,
             scene="summarize",
             log_meta={"kb_id": kb_id},
         )
@@ -339,12 +408,20 @@ def summarize_and_extract(
     check_cancel()
     # 2. 解析 JSON
     try:
-        parsed = _parse_llm_response(raw_answer)
+        try:
+            parsed = _parse_llm_response(raw_answer)
+        except ValueError:
+            check_cancel()
+            retry_messages = [*messages, {"role": "user", "content": "请重新生成完整且有效的 JSON 对象，summary 必须为字符串，concepts 必须为列表，不要代码围栏。"}]
+            raw_answer, used_provider = _checked_chat(client, retry_messages, max_tokens=4000,
+                temperature=.1, scene="summarize", log_meta={"kb_id": kb_id})
+            check_cancel()
+            parsed = _parse_llm_response(raw_answer)
     except TaskCancelledError:
         raise
     except Exception as e:
         result.error = f"LLM 输出解析失败: {e}"
-        logger.warning(f"[ai_summary] file_id={file_id} JSON 解析失败: {e}; raw={raw_answer[:200]}")
+        logger.warning("[ai_summary] file_id=%s JSON 解析失败: %s", file_id, e)
         return result
 
     summary = (parsed.get("summary") or "").strip()
@@ -393,55 +470,17 @@ def summarize_and_extract(
             "section_label": f"[摘要] {file_name}",
             "title": file_name,
         }
-        vector_store.upsert_chunks(
-            chunks=[{
-                "id": summary_chunk_id,
-                "text": summary,
-                "embedding": summary_embedding,
-                "metadata": summary_meta,
-            }],
-            collection_name=collection_name,
-        )
+        from src.knowledge.summary_publication import publish
+        publish(file_id, kb_id, content_hash,
+                dict(id=summary_chunk_id, text=summary, embedding=summary_embedding, metadata=summary_meta),
+                collection_name, used_provider, result.summary_tokens, clean_concepts, check_cancel)
         result.summary_chunk_id = summary_chunk_id
     except TaskCancelledError:
         raise
     except Exception as e:
-        result.error = f"摘要向量化/入库失败: {e}"
-        logger.warning(f"[ai_summary] file_id={file_id} 摘要入库失败: {e}")
+        result.error = f"摘要保存失败: {e}"
+        logger.warning("[ai_summary] file_id=%s 摘要保存失败: %s", file_id, type(e).__name__)
         return result
-
-    # 4. 概念入 kb_concepts 表（去重 + 聚合）
-    try:
-        for concept in clean_concepts:
-            metadata_db.upsert_kb_concept(
-                kb_id=kb_id,
-                concept_name=concept["name"],
-                concept_type=concept["type"],
-                description=concept["description"],
-                source_file_id=file_id,
-            )
-    except TaskCancelledError:
-        raise
-    except Exception as e:
-        # 概念入库失败不影响摘要（摘要已成功）
-        logger.warning(f"[ai_summary] file_id={file_id} 概念入库部分失败: {e}")
-
-    # 5. 更新 document_meta
-    try:
-        metadata_db.upsert_document_meta(
-            file_id=file_id,
-            kb_id=kb_id,
-            processed_level="summarized",
-            summary=summary,
-            summary_model=used_provider,
-            summary_tokens=result.summary_tokens,
-            concepts_extracted=len(raw_concepts),
-            concepts_count=len(clean_concepts),
-        )
-    except TaskCancelledError:
-        raise
-    except Exception as e:
-        logger.warning(f"[ai_summary] file_id={file_id} document_meta 更新失败: {e}")
 
     result.ok = True
     return result
@@ -599,9 +638,9 @@ def generate_kb_global_summary(kb_id: str, *, force: bool = False) -> GlobalSumm
     kb_name = kb_row["name"]
 
     # 2. 缺摘要的文档现场补齐，再拉全量摘要
-    # force 时连文档摘要一起重生成（旧的可能是截断版/旧模型产物）
+    # force 仅重做全局汇总，文档摘要始终复用。
     all_metas = metadata_db.list_document_meta_by_kb(kb_id)
-    summarized_ids = set() if force else {
+    summarized_ids = {
         m["file_id"] for m in all_metas if m.get("summary")
     }
     ok_cnt, fail_cnt = _backfill_doc_summaries(kb_id, kb_row, skip_file_ids=summarized_ids)
@@ -620,9 +659,11 @@ def generate_kb_global_summary(kb_id: str, *, force: bool = False) -> GlobalSumm
         result.error = "KB 无文档摘要（已尝试自动补摘要：无已入库文档或 LLM 调用失败，详见后端日志）"
         return result
 
-    # 限制最多 30 个文档（避免 prompt 过长）
-    if len(doc_summaries) > 30:
-        doc_summaries = doc_summaries[:30]
+    if fail_cnt:
+        result.error = f"{fail_cnt} 份文档摘要失败，未发布不完整的全局摘要"
+        return result
+    notes = _reduce_notes(llm_client.get_client(), [(d['title'], d['summary']) for d in doc_summaries], kb_id, lambda: None, lambda _: None)
+    doc_summaries = [{"title": label, "summary": note} for label, note in notes]
 
     # 3. 调 LLM
     try:
@@ -631,10 +672,10 @@ def generate_kb_global_summary(kb_id: str, *, force: bool = False) -> GlobalSumm
             {"role": "system", "content": _GLOBAL_SUMMARY_SYSTEM_PROMPT},
             {"role": "user", "content": _build_global_summary_user_prompt(kb_name, doc_summaries)},
         ]
-        raw_answer, used_provider = client.chat(
+        raw_answer, used_provider = _checked_chat(client,
             messages,
             temperature=0.1,
-            max_tokens=1500,
+            max_tokens=4000,
             scene="summarize",
             log_meta={"kb_id": kb_id},
         )

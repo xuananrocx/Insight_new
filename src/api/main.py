@@ -149,6 +149,8 @@ def _on_startup() -> None:
     accounts.init_auth()
     from src.knowledge import index_tasks
     index_tasks.recover()
+    from src.knowledge import summary_tasks
+    summary_tasks.recover()
 
     # BM25 依赖预检：缺失时 ingest 的 add_chunks 会静默失败（只记 warning），
     # 历史上因此建过空索引，这里显式报错提醒安装
@@ -502,3 +504,5 @@ async def stop_conversation_summary_tasks():
     await shutdown()
     from src.knowledge import index_tasks
     index_tasks.shutdown()
+    from src.knowledge import summary_tasks
+    summary_tasks.shutdown()
