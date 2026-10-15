@@ -53,8 +53,9 @@ export default function KbDetailPage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [expandedDocumentsKb, setExpandedDocumentsKb] = useState<string | null>(null)
-  const documentsExpanded = expandedDocumentsKb === id
+  const [documentView, setDocumentView] = useState({ kbId: id, expanded: true })
+  if (documentView.kbId !== id) setDocumentView({ kbId: id, expanded: true })
+  const documentsExpanded = documentView.kbId !== id || documentView.expanded
 
   const kbQuery = useQuery({
     queryKey: ['kb', id],
@@ -274,7 +275,7 @@ export default function KbDetailPage() {
       {/* 文档列表（只读） */}
       <Card className="mb-6 overflow-hidden">
         <div className="flex items-center justify-between border-b px-5 py-3">
-          <button type="button" aria-expanded={documentsExpanded} aria-controls={`kb-documents-${kb.id}`} onClick={() => setExpandedDocumentsKb(documentsExpanded ? null : id)} className="flex items-center gap-2">
+          <button type="button" aria-expanded={documentsExpanded} aria-controls={`kb-documents-${kb.id}`} onClick={() => setDocumentView({ kbId: id, expanded: !documentsExpanded })} className="flex items-center gap-2">
             <ChevronRight className={`h-4 w-4 transition-transform ${documentsExpanded ? 'rotate-90' : ''}`} />
             <FileText className="h-4 w-4 text-muted-foreground" />
             <span className="text-[14px] font-medium">文档</span>
@@ -303,16 +304,16 @@ export default function KbDetailPage() {
             这个知识库还没有文档
           </div>
         ) : (
-          <div className="divide-y">
+          <div className="kb-bounded-list divide-y" role="region" aria-label="文档列表" tabIndex={0}>
             {files.map((f) => {
               const name = f.relative_path.split('/').pop() ?? f.relative_path
               const dir = f.relative_path.includes('/')
                 ? f.relative_path.slice(0, f.relative_path.lastIndexOf('/'))
                 : ''
               return (
-                <div key={f.relative_path} className="flex items-center gap-3 px-5 py-2.5">
+                <div key={f.relative_path} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-5 py-2.5">
                   <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-[1_1_180px]" title={f.relative_path}>
                     <div className="truncate text-[13px]">{name}</div>
                     {dir ? (
                       <div className="truncate text-[10px] text-muted-foreground">{dir}/</div>

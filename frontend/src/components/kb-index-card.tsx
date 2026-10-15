@@ -55,11 +55,19 @@ export function KbIndexCard({ kbId, canManage }: { kbId: string; canManage: bool
           {canManage && busy && <Button variant="ghost" size="sm" disabled={cancel.isPending || task.state === 'cancelling'} onClick={() => cancel.mutate(task.id)}>安全取消</Button>}</div>
         {task.state !== 'done' && <p className="mt-1 break-words text-xs text-muted-foreground">{task.detail}</p>}
         {busy && <progress aria-label="文档索引建设进度" className="mt-2 h-2 w-full" max={Math.max(1, task.total)} value={task.completed} />}
-        {task.results.filter(r => r.status === 'failed').map(r => <p key={r.file_id} className="mt-1 break-words text-xs text-destructive">{r.name}：{r.error}</p>)}
+        {task.results.some(r => r.status === 'failed') && <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-destructive">失败明细（{task.results.filter(r => r.status === 'failed').length}）</summary>
+          <div className="kb-bounded-list mt-2 max-h-40" role="region" aria-label="索引失败明细" tabIndex={0}>
+            {task.results.filter(r => r.status === 'failed').map(r => <p key={r.file_id} className="mt-1 break-words text-xs text-destructive">{r.name}：{r.error}</p>)}
+          </div>
+        </details>}
       </div>}
-      <div className="mt-3 max-h-80 divide-y overflow-auto">
-        {files.map(file => <div key={file.id} className="flex items-center gap-3 py-2 text-sm">
-          <span className="min-w-0 flex-1 break-all">{file.name}</span><span className="shrink-0 text-xs text-muted-foreground">{labels[file.status]}</span>
+      <div className="kb-bounded-list mt-3 divide-y" role="region" aria-label="文档索引列表" tabIndex={0}>
+        {files.map(file => <div key={file.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2 text-sm">
+          <span className="min-w-0 flex-[1_1_180px]" title={file.name}>
+            <span className="block truncate text-[13px]">{file.name.split(/[\\/]/).pop()}</span>
+            {/[\\/]/.test(file.name) && <span className="block truncate text-[10px] text-muted-foreground">{file.name.replace(/[^\\/]+$/, '')}</span>}
+          </span><span className="shrink-0 text-xs text-muted-foreground">{labels[file.status]}</span>
           {canManage && <Button size="sm" variant="ghost" disabled={busy || query.isError || file.status === 'unavailable'} onClick={() => setSelection({ force: true, file_ids: [file.id], label: `重建 ${file.name} 的索引` })}>重建</Button>}
         </div>)}
       </div>

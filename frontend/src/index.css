@@ -387,3 +387,19 @@
 [data-sonner-toast][data-expanded="false"][data-front="false"][data-styled="true"] > * {
   opacity: 1 !important;
 }
+
+/* Knowledge detail lists grow naturally, then scroll within the card. */
+.kb-bounded-list {
+  max-height: min(320px, 40dvh);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior-y: contain;
+  scrollbar-gutter: stable;
+}
+.kb-bounded-list.max-h-40 {
+  max-height: min(160px, 40dvh);
+}
+.kb-bounded-list:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
