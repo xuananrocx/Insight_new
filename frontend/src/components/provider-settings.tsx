@@ -1,6 +1,8 @@
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { Plug } from 'lucide-react'
 import { accountApi, accountRequest, type ApiModel, type Provider } from '@/lib/account-api'
 import { accountInput, useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
@@ -93,7 +95,12 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
     await run(() => accountRequest(`/providers/${p.id}`, 'PUT', { ...p, api_key: null, enabled: !p.enabled }), p.enabled ? '已暂停使用' : '已恢复使用')
   }
   const items = providers.data?.items || []
-  const managed = items.filter(p => p.scope === (team ? 'team' : 'personal'))
+  const groups = team
+    ? [{ title: '团队 API 配置', description: '管理连接、模型列表和成员使用权。个人默认模型请在个人设置中选择。', items: items.filter(p => p.scope === 'team'), canCreate: can('api.manage') }]
+    : [
+      { title: '我的 API 配置', description: '保存连接信息与模型列表；保存配置不会自动改变当前使用的模型。', items: items.filter(p => p.scope === 'personal'), canCreate: can('api.personal') },
+      { title: '已授权的团队 API', description: '可以选择和检测模型。连接信息及模型列表由团队管理员维护。', items: items.filter(p => p.scope === 'team' && p.usable), canCreate: false },
+    ]
   return <div className="space-y-4">
     {!team && <Card className="space-y-3 p-5"><h2 className="font-semibold">我的默认模型</h2>
       <p className="text-sm text-muted-foreground">用于新会话和之后发起的 AI 摘要任务。聊天中可以单独切换会话模型；失败不会自动换用其他 API。</p>
@@ -101,26 +108,51 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
       {providers.data?.selection.valid && <p className="text-xs text-muted-foreground">来源：{providers.data.selection.provider_name}</p>}
       {providers.data && !providers.data.selection.valid && <p role="alert" className="text-sm text-destructive">{providers.data.selection.reason}</p>}
     </Card>}
-    <Card className="space-y-4 p-5"><div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">{team ? '团队 API 配置' : '我的 API 配置'}</h2>
-      {can(team ? 'api.manage' : 'api.personal') && <Button size="sm" onClick={() => setForm({ scope: team ? 'team' : 'personal' })}>新增 API</Button>}</div>
-      <p className="text-sm text-muted-foreground">{team ? '管理连接、模型列表和成员使用权。个人默认模型请在个人设置中选择。' : '保存连接信息与模型列表；保存配置不会自动改变当前使用的模型。'}</p>
-      {(failure || providers.error) && <p role="alert" className="text-sm text-destructive">{failure || providers.error?.message}</p>}
-      {!providers.isLoading && managed.length === 0 && <p className="text-sm text-muted-foreground">暂无{team ? '团队' : '个人'} API 配置。</p>}
-      {managed.map(p => <section key={p.id} className="space-y-3 rounded-lg border p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2"><div><h3 className="font-medium">{p.name} {!p.enabled && <span className="text-xs text-muted-foreground">（已暂停）</span>}</h3><p className="break-all text-xs text-muted-foreground">{p.base_url} · {p.protocol}</p></div>
-          {team && p.manageable && <label className="flex items-center gap-2 text-sm">{p.enabled ? '服务已启用' : '服务已停用'}<Toggle label={`启用 ${p.name}`} checked={!!p.enabled} disabled={busy} onChange={() => void toggle(p)} /></label>}</div>
-        {!p.usable && <p className="text-xs text-muted-foreground">{!p.enabled ? '恢复使用后才能选择或检测模型。' : '没有调用授权，不能选择或检测；管理配置不自动获得调用权。'}</p>}
-        <div className="divide-y">{p.models.map(m => <div key={m.model_id} className="space-y-1 py-3"><p className="text-sm font-medium">{m.display_name || m.model_id}</p>{m.display_name && <p className="break-all text-xs text-muted-foreground">{m.model_id}</p>}
-          <TestResult model={m} kind="connection" /><TestResult model={m} kind="tools" />
-          <div className="flex flex-wrap gap-2"><Button size="sm" variant="ghost" disabled={busy || !p.usable} onClick={() => void run(() => accountRequest(`/providers/${p.id}/test?model_id=${encodeURIComponent(m.model_id)}`, 'POST'), '连接测试成功')}>测试连接</Button>
-            <Button size="sm" variant="ghost" disabled={busy || !p.usable} onClick={() => void run(async () => { const result = await accountRequest<{ supported: boolean | null; message: string }>(`/providers/${p.id}/test-tools?model_id=${encodeURIComponent(m.model_id)}`, 'POST'); if (!result.supported) throw new Error(result.message); toast.success(result.message) })}>检测工具调用</Button></div>
-        </div>)}</div>
-        <div className="flex flex-wrap items-center gap-2">{p.manageable && <><Button size="sm" variant="outline" disabled={busy} onClick={() => setForm({ scope: p.scope, initial: p })}>编辑连接与模型</Button>
-          <details><summary className="cursor-pointer px-2 text-sm">更多</summary><div className="mt-2 flex flex-wrap gap-2">{!team && <Button size="sm" variant="outline" disabled={busy} onClick={() => void toggle(p)}>{p.enabled ? '暂停使用' : '恢复使用'}</Button>}
-            <Button size="sm" variant="ghost" disabled={busy} onClick={async () => { if (await confirm('删除 API 及其模型？相关默认选择和会话将需要重新选择，历史回答保留。')) void run(() => accountRequest(`/providers/${p.id}`, 'DELETE'), 'API 已删除') }}>删除 API</Button></div></details></>}
-          {team && p.grantable && <Button size="sm" variant="outline" onClick={() => setGrants(p)}>使用授权</Button>}</div>
-      </section>)}
-    </Card>
+    {(failure || providers.error) && <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">{failure || providers.error?.message}</p>}
+    {groups.map(group => <Card key={group.title} className="space-y-4 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">{group.title}</h2>
+        {group.canCreate && <Button size="sm" onClick={() => setForm({ scope: team ? 'team' : 'personal' })}>新增 API</Button>}</div>
+      <p className="text-sm text-muted-foreground">{group.description}</p>
+      {!providers.isLoading && group.items.length === 0 && <p className="text-sm text-muted-foreground">{group.title === '已授权的团队 API' ? '暂无已授权且启用的团队 API。' : '暂无 API 配置。'}</p>}
+      {group.items.map(p => {
+        const editable = p.manageable && (team || p.scope === 'personal')
+        return <section key={p.id} className="rounded-lg border p-4">
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3">
+            <div className="min-w-0 flex-1 basis-56">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <h3 className="flex min-w-0 items-center gap-2 font-medium"><Plug aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="min-w-0 break-words">{p.name} {!p.enabled && !(team && p.manageable) && <span className="text-xs text-muted-foreground">（已暂停）</span>}</span></h3>
+                {team && p.manageable && <label className="flex shrink-0 items-center gap-2 whitespace-nowrap text-xs text-muted-foreground"><Toggle label={`启用 ${p.name}`} checked={!!p.enabled} disabled={busy} onChange={() => void toggle(p)} />{p.enabled ? '服务已启用' : '服务已停用'}</label>}
+              </div>
+              <p className="mt-1 break-all text-xs text-muted-foreground">{p.base_url} · {p.protocol}</p>
+            </div>
+            <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1">
+              {team && p.grantable && <Button size="sm" variant="outline" onClick={() => setGrants(p)}>使用授权</Button>}
+              {editable && <Button size="sm" variant="outline" disabled={busy} onClick={() => setForm({ scope: p.scope, initial: p })}>编辑</Button>}
+              {editable && <DropdownMenu.Root>
+                <DropdownMenu.Trigger asChild><Button size="sm" variant="ghost" disabled={busy} aria-label={`${p.name} 更多操作`}>更多</Button></DropdownMenu.Trigger>
+                <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={4} collisionPadding={8} className="z-[90] min-w-32 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md">
+                  {!team && <DropdownMenu.Item className="cursor-pointer rounded px-3 py-2 outline-none focus:bg-accent" onSelect={() => void toggle(p)}>{p.enabled ? '暂停使用' : '恢复使用'}</DropdownMenu.Item>}
+                  <DropdownMenu.Item className="cursor-pointer rounded px-3 py-2 text-destructive outline-none focus:bg-accent" onSelect={() => void (async () => { if (await confirm('删除 API 及其模型？相关默认选择和会话将需要重新选择，历史回答保留。')) await run(() => accountRequest(`/providers/${p.id}`, 'DELETE'), 'API 已删除') })()}>删除 API</DropdownMenu.Item>
+                </DropdownMenu.Content></DropdownMenu.Portal>
+              </DropdownMenu.Root>}
+            </div>
+          </div>
+          {!p.usable && <p className="mt-2 text-xs text-muted-foreground">{!p.enabled ? '恢复使用后才能选择或检测模型。' : '没有调用授权，不能选择或检测；管理配置不自动获得调用权。'}</p>}
+          <div className="mb-1 ml-2 mt-5 border-l pl-3 sm:pl-5">
+            <p className="mb-1 text-xs text-muted-foreground">模型 · {p.models.length}</p>
+            <div className="divide-y">{p.models.map(m => <div key={m.model_id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
+            <div className="min-w-0 flex-1 basis-40"><p className="break-all text-sm font-normal">{m.display_name || m.model_id}</p>{m.display_name && <p className="break-all text-xs text-muted-foreground">{m.model_id}</p>}
+              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1"><TestResult model={m} kind="connection" /><TestResult model={m} kind="tools" /></div>
+            </div>
+            <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1">
+              <Button size="sm" variant="ghost" disabled={busy || !p.usable} onClick={() => void run(() => accountRequest(`/providers/${p.id}/test?model_id=${encodeURIComponent(m.model_id)}`, 'POST'), '连接测试成功')}>测试连接</Button>
+              <Button size="sm" variant="ghost" disabled={busy || !p.usable} onClick={() => void run(async () => { const result = await accountRequest<{ supported: boolean | null; message: string }>(`/providers/${p.id}/test-tools?model_id=${encodeURIComponent(m.model_id)}`, 'POST'); if (!result.supported) throw new Error(result.message); toast.success(result.message) })}>检测工具调用</Button>
+            </div>
+          </div>)}</div>
+          </div>
+        </section>
+      })}
+    </Card>)}
     {form && <ProviderForm key={form.initial?.id || form.scope} {...form} onClose={() => setForm(null)} />}
     {grants && <ManagementDialog title={`${grants.name} · 使用授权`} onClose={() => { setGrants(null); void refreshApiQueries(qc) }}><AccessEditor kind="api" id={grants.id} /></ManagementDialog>}
   </div>
