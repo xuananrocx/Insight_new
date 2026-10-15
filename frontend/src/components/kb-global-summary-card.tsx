@@ -5,6 +5,7 @@ import { Globe, RefreshCw, Trash2, Sparkles, AlertCircle, AlertTriangle } from '
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { Card } from '@/components/ui/card'
+import { SummaryPlanPreview } from './summary-plan-preview'
 
 interface Props {
   kbId: string
@@ -13,9 +14,14 @@ interface Props {
 
 export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
   const queryClient = useQueryClient()
+  const [previewKb, setPreviewKb] = useState<string | null>(null)
   const [expanded, setExpanded] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  useEffect(() => { setConfirmDelete(false) }, [kbId, canManage])
+  const [deleteConfirmation, setDeleteConfirmation] = useState<{ kbId: string; canManage: boolean; open: boolean }>({ kbId, canManage, open: false })
+  if (deleteConfirmation.kbId !== kbId || deleteConfirmation.canManage !== canManage) {
+    setDeleteConfirmation({ kbId, canManage, open: false })
+  }
+  const confirmDelete = deleteConfirmation.kbId === kbId && canManage && deleteConfirmation.open
+  const setConfirmDelete = (open: boolean) => setDeleteConfirmation({ kbId, canManage, open })
 
   const query = useQuery({
     queryKey: ['kb-global-summary', kbId],
@@ -23,14 +29,20 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
     enabled: !!kbId,
   })
 
-  const buildMutation = useMutation({
-    mutationFn: (force: boolean) => {
-      if (!canManage) throw new Error('没有管理此知识库的权限')
-      return api.kb.globalSummary.build(kbId, force)
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['kb-global-summary', kbId] })
-    },
+  const taskQuery = useQuery({
+    queryKey: ['kb-summary-task', kbId],
+    queryFn: () => api.kb.globalSummary.task(kbId),
+    enabled: !!kbId,
+    refetchInterval: query => ['queued', 'running', 'cancelling'].includes(query.state.data?.task?.state || '') ? 2000 : 10000,
+  })
+  const task = taskQuery.data?.task
+  const taskActive = !!task && ['queued', 'running', 'cancelling'].includes(task.state)
+  useEffect(() => {
+    if (task?.state === 'done') void queryClient.invalidateQueries({ queryKey: ['kb-global-summary', kbId] })
+  }, [task?.id, task?.state, kbId, queryClient])
+  const cancelMutation = useMutation({
+    mutationFn: () => api.kb.globalSummary.cancel(kbId, task!.id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['kb-summary-task', kbId] }),
   })
 
   const deleteMutation = useMutation({
@@ -46,6 +58,11 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
 
   const data = query.data
   const hasSummary = data?.has_summary ?? false
+  // Move only the application-generated notice in the display. Keep the stored
+  // overview intact so AI consumers retain the notice when truncating context.
+  const coverageMatch = data?.summary?.match(/^【覆盖说明】([^\n]+)(?:\r?\n){2}/)
+  const coverageNotice = coverageMatch?.[1] ?? ''
+  const summaryBody = coverageMatch ? data!.summary!.slice(coverageMatch[0].length) : data?.summary ?? ''
 
   return (
     <Card className="mb-6 overflow-hidden">
@@ -54,7 +71,7 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
           <Globe className="h-4 w-4 text-muted-foreground" />
           <span className="text-[14px] font-medium">KB 全局概览</span>
           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-            迭代 6
+            文档摘要汇总
           </span>
           {hasSummary && data?.tokens ? (
             <span className="rounded bg-muted/40 px-1.5 py-0.5 text-[10px] text-muted-foreground">
@@ -76,20 +93,20 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
             <>
               <button
                 type="button"
-                onClick={() => buildMutation.mutate(true)}
-                disabled={buildMutation.isPending || deleteMutation.isPending}
+                onClick={() => setPreviewKb(kbId)}
+                disabled={taskActive || deleteMutation.isPending}
                 className="inline-flex items-center gap-1 rounded border bg-background px-2 py-1 text-[11px] font-medium hover:bg-accent/30 disabled:opacity-50"
-                title="强制重新生成（基于最新文档摘要）"
+                title="复用已有有效文档摘要，只补齐缺失或过期部分后重新汇总"
               >
-                <RefreshCw className={cn('h-3 w-3', buildMutation.isPending && 'animate-spin')} />
-                {buildMutation.isPending ? '生成中...' : '重新生成'}
+                <RefreshCw className={'h-3 w-3'} />
+                {taskActive ? '生成中...' : '重新生成'}
               </button>
               {confirmDelete ? (
                 <>
                   <button
                     type="button"
                     onClick={() => deleteMutation.mutate()}
-                    disabled={buildMutation.isPending || deleteMutation.isPending}
+                    disabled={taskActive || deleteMutation.isPending}
                     className="rounded border border-destructive bg-destructive/10 px-2 py-1 text-[11px] font-medium text-destructive hover:bg-destructive/20"
                   >
                     {deleteMutation.isPending ? '删除中...' : '确认删除'}
@@ -106,7 +123,7 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
                 <button
                   type="button"
                   onClick={() => setConfirmDelete(true)}
-                  disabled={buildMutation.isPending || deleteMutation.isPending}
+                  disabled={taskActive || deleteMutation.isPending}
                   className="inline-flex items-center gap-1 rounded border bg-background px-2 py-1 text-[11px] hover:bg-accent/30"
                   title="删除全局摘要"
                 >
@@ -117,19 +134,33 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
           ) : (
             <button
               type="button"
-              onClick={() => buildMutation.mutate(false)}
-              disabled={buildMutation.isPending || deleteMutation.isPending}
+              onClick={() => setPreviewKb(kbId)}
+              disabled={taskActive || deleteMutation.isPending}
               className="inline-flex items-center gap-1 rounded border border-primary bg-primary px-2.5 py-1 text-[11px] font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
               <Sparkles className="h-3 w-3" />
-              {buildMutation.isPending ? '生成中...' : '生成全局摘要'}
+              {taskActive ? '生成中...' : '生成全局摘要'}
             </button>
           )}
         </div>}
       </div>
 
       <div className="px-5 py-4">
-        {(query.error || buildMutation.error || deleteMutation.error) && <p role="alert" className="mb-3 text-xs text-destructive">{(query.error || buildMutation.error || deleteMutation.error)?.message}</p>}
+        {canManage && previewKb === kbId && !taskActive && <SummaryPlanPreview key={kbId} kbId={kbId} onClose={() => setPreviewKb(null)} onStarted={() => {
+          setPreviewKb(null)
+          void queryClient.invalidateQueries({ queryKey: ['kb-summary-task', kbId] })
+          void queryClient.invalidateQueries({ queryKey: ['kb-global-summary', kbId] })
+        }} />}
+        {task && task.state !== 'done' && <div className="mb-3 space-y-2 rounded-lg border p-3 text-xs" aria-live="polite">
+          <p>{taskActive ? (task.state === 'queued' ? '等待生成' : task.state === 'cancelling' ? '正在取消' : '正在生成') : task.state === 'failed' ? '生成失败' : task.state === 'interrupted' ? '生成已中断' : '生成已取消'} · 文档 {task.completed}/{task.total} · 复用 {task.reused} 份</p>
+          <p className="text-muted-foreground">{task.detail || '检查并复用已有摘要'}{task.model_id ? ` · 模型 ${task.model_id}` : ''}</p>
+          <p className="text-muted-foreground">耗时 {Math.round(task.elapsed_seconds / 60)} 分钟。{taskActive ? '可离开页面，后台继续处理。' : '已有有效摘要保留。'}</p>
+          {canManage && taskActive && <button className="rounded border px-2 py-1 disabled:opacity-50" disabled={task.state === 'cancelling' || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>取消生成</button>}
+          {canManage && ['failed', 'cancelled', 'interrupted'].includes(task.state) && <button className="rounded border px-2 py-1 disabled:opacity-50" onClick={() => setPreviewKb(kbId)}>预览并继续（复用已完成部分）</button>}
+        </div>}
+        {(taskQuery.error || cancelMutation.error) && <p role="alert" className="mb-3 text-xs text-destructive">{cancelMutation.error?.message || '任务状态暂时无法读取，后台任务不一定已停止，请稍后刷新。'}</p>}
+
+        {(query.error || deleteMutation.error) && <p role="alert" className="mb-3 text-xs text-destructive">{(query.error || deleteMutation.error)?.message}</p>}
         {query.isLoading ? (
           <div className="py-4 text-center text-[12px] text-muted-foreground">加载中...</div>
         ) : hasSummary && data?.summary ? (
@@ -140,9 +171,9 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
                 !expanded && 'line-clamp-6',
               )}
             >
-              {data.summary}
+              {summaryBody}
             </div>
-            {data.summary.length > 300 ? (
+            {summaryBody.length > 300 ? (
               <button
                 type="button"
                 onClick={() => setExpanded(!expanded)}
@@ -151,18 +182,26 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
                 {expanded ? '收起' : '展开全文'}
               </button>
             ) : null}
-            <div className="mt-3 rounded-md bg-muted/30 px-3 py-2 text-[10px] leading-relaxed text-muted-foreground">
+            {(data.created_at || data.model) && <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground">
+              {data.created_at && <span>生成于 {new Date(data.created_at).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>}
+              {data.model && <span>模型 {data.model}</span>}
+            </div>}
+            <div className="mt-3 text-left text-[10px] leading-relaxed text-muted-foreground">
               <span className="font-medium text-foreground">用途：</span>{' '}
-              summary/agentic 检索策略下会作为 KB 整体背景注入 prompt 顶部，
+              在支持知识库概览的检索流程中提供整体背景，
               帮助回答"这个系统是什么"、"整体架构如何"等全局问题。
             </div>
+            {coverageNotice && <div className="mt-3 border-t pt-3 text-[11px] leading-relaxed text-muted-foreground">
+              <div className="mb-1 flex items-center gap-1.5 font-medium"><AlertCircle className="h-3.5 w-3.5 shrink-0" />覆盖说明</div>
+              <p className="break-words">{coverageNotice}</p>
+            </div>}
           </div>
         ) : (
           <div className="py-6 text-center text-[12px] text-muted-foreground">
             <AlertCircle className="mx-auto mb-2 h-5 w-5 opacity-40" />
             还没有 KB 全局摘要。
             <div className="mt-1 text-[10px]">
-              {canManage ? '点击右上角“生成全局摘要”按钮（基于已投喂的文档摘要）。需要先在投喂时启用 AI 摘要。' : '请联系知识库所有者或具有管理权限的用户生成概览。'}
+              {canManage ? '点击“生成全局摘要”，复用已有有效文档摘要，仅补齐缺失或过期部分。' : '请联系知识库所有者或具有管理权限的用户生成概览。'}
             </div>
           </div>
         )}

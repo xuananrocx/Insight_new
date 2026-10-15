@@ -16,7 +16,7 @@ from typing import Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.core.config import settings
-from src.knowledge.parsers.base import ParsedDocument, ParsedSection
+from src.knowledge.parsers.base import ParsedDocument
 
 
 @dataclass
@@ -37,6 +37,7 @@ def _build_splitter() -> RecursiveCharacterTextSplitter:
         chunk_overlap=cfg.get("chunk_overlap", 100),
         separators=["\n\n", "\n", "。", "！", "？", "；", ". ", "! ", "? ", "; ", " ", ""],
         keep_separator=True,
+        add_start_index=True,
     )
 
 
@@ -48,8 +49,9 @@ def chunk_document(doc: ParsedDocument) -> list[Chunk]:
         text = section.text.strip()
         if not text:
             continue
-        pieces = splitter.split_text(text)
-        for i, piece in enumerate(pieces):
+        pieces = splitter.create_documents([text])
+        for i, document in enumerate(pieces):
+            piece = document.page_content
             meta = {
                 "source_path": str(doc.source_path),
                 "source_name": doc.source_path.name,
@@ -58,6 +60,8 @@ def chunk_document(doc: ParsedDocument) -> list[Chunk]:
                 "section_index": section.section_index,
                 "section_label": section.section_label,
                 "chunk_index": i,
+                "source_char_start": document.metadata["start_index"],
+                "source_char_end": document.metadata["start_index"] + len(piece),
                 "chunk_total_in_section": len(pieces),
                 # 额外元数据透传
                 **{k: v for k, v in section.extra.items()

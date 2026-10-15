@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Palette, Check } from 'lucide-react'
+import { Palette, SunMoon, Check } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { useTheme, type ThemeKey } from '@/hooks/use-theme'
@@ -28,7 +28,7 @@ const THEMES: { key: ThemeKey; label: string; preview: string[] }[] = [
   },
 ]
 
-export function ThemeToggle() {
+export function ThemeToggle({ compact = false }: { compact?: boolean }) {
   const { theme, setTheme } = useTheme()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
@@ -52,11 +52,13 @@ export function ThemeToggle() {
       <Button
         variant="ghost"
         size="sm"
-        className="gap-1.5 px-2 text-[12px]"
+        className={compact ? 'h-8 w-8 rounded-lg p-0 text-muted-foreground' : 'gap-1.5 px-2 text-[12px]'}
         onClick={() => setOpen(!open)}
         title="切换主题"
+        aria-label="切换主题"
+        aria-expanded={open}
       >
-        <Palette className="h-3.5 w-3.5" />
+        {compact ? <SunMoon aria-hidden="true" className="h-4 w-4" /> : <><Palette aria-hidden="true" className="h-3.5 w-3.5" />
         <div className="flex gap-0.5">
           {current.preview.map((c, i) => (
             <span
@@ -65,7 +67,7 @@ export function ThemeToggle() {
               style={{ background: c }}
             />
           ))}
-        </div>
+        </div></>}
       </Button>
 
       {open ? (

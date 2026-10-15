@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useSearchParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
 
 type SettingsSection = {
@@ -19,6 +19,7 @@ export function SettingsLayout({ title, description, sections, readOnly = false,
 }) {
   const prefix = useId()
   const [searchParams] = useSearchParams()
+  const location = useLocation()
   const requested = searchParams.get('section')
   const initial = sections.some(s => s.id === requested) ? requested! : sections[0].id
   const [active, setActive] = useState(initial)
@@ -88,11 +89,11 @@ export function SettingsLayout({ title, description, sections, readOnly = false,
 
   // Deep link (?section=xxx)：渲染完成后滚到指定分区
   useEffect(() => {
-    if (initial === sections[0].id) return
-    const frame = requestAnimationFrame(() => jumpTo(initial))
+    if (!requested || !sectionIds.split('|').includes(requested)) return
+    const frame = requestAnimationFrame(() => jumpTo(requested))
     return () => cancelAnimationFrame(frame)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [requested, location.key, sectionIds])
 
   return (
     <div ref={rootRef} className="mx-auto grid h-full min-h-0 w-full max-w-6xl grid-rows-[auto_minmax(0,1fr)] overflow-hidden lg:grid-cols-[220px_minmax(0,1fr)] lg:grid-rows-[minmax(0,1fr)]">

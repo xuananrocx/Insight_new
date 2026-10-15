@@ -886,41 +886,53 @@ def get_kb_global_summary_api(kb_id: str) -> KbGlobalSummaryResponse:
         model=data["model"],
         tokens=data["tokens"],
         created_at=data["created_at"],
+        doc_count=len(data.get("snapshot") or {}) or None,
         stale=metadata_db.is_kb_summary_stale(kb_id),
     )
 
 
-@router.post("/{kb_id}/global_summary/build", response_model=KbGlobalSummaryResponse)
-def build_kb_global_summary(kb_id: str, force: bool = False) -> KbGlobalSummaryResponse:
-    """生成/更新 KB 全局摘要。"""
+class SummaryPlanRequest(BaseModel):
+    full_file_ids: list[int] = []
+    plan_token: str | None = None
+    budget: int = Field(default=40, ge=1, le=1000)
+
+
+@router.post("/{kb_id}/global_summary/preview")
+def preview_kb_global_summary(kb_id: str, body: SummaryPlanRequest):
     if accounts.enabled:
         permissions.require_resource("kb", kb_id, "manage")
-    from src.knowledge.ai_summarizer import generate_kb_global_summary
-    kb = metadata_db.get_kb(kb_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
-    result = generate_kb_global_summary(kb_id, force=force)
-    if not result.ok:
-        if result.error == "already_exists":
-            # 已有，返回现有的
-            data = metadata_db.get_kb_global_summary(kb_id)
-            return KbGlobalSummaryResponse(
-                kb_id=kb_id,
-                has_summary=True,
-                summary=data["summary"] if data else "",
-                model=data["model"] if data else None,
-                tokens=data["tokens"] if data else None,
-                created_at=data["created_at"] if data else None,
-            )
-        raise HTTPException(status_code=500, detail=f"生成失败: {result.error}")
-    return KbGlobalSummaryResponse(
-        kb_id=kb_id,
-        has_summary=True,
-        summary=result.summary,
-        model=result.model,
-        tokens=result.tokens,
-        doc_count=result.doc_count,
-    )
+        accounts.bind_provider()
+    from src.knowledge import summary_plan
+    return summary_plan.preview(kb_id, body.full_file_ids)
+
+
+@router.post("/{kb_id}/global_summary/build", status_code=202)
+def build_kb_global_summary(kb_id: str, force: bool = False, body: SummaryPlanRequest | None = None):
+    """Old clients use safe automatic mode; full processing requires a confirmed plan."""
+    if accounts.enabled:
+        permissions.require_resource("kb", kb_id, "manage")
+    from src.knowledge import summary_tasks
+    if body is None:
+        return summary_tasks.start(kb_id)
+    if not body.plan_token:
+        raise HTTPException(400, '请先预览生成计划')
+    return summary_tasks.start(kb_id, body.plan_token, body.full_file_ids, body.budget)
+
+
+@router.get("/{kb_id}/global_summary/task")
+def global_summary_task(kb_id: str):
+    if accounts.enabled:
+        permissions.require_resource("kb", kb_id, "query")
+    from src.knowledge import summary_tasks
+    return {"task": summary_tasks.latest(kb_id)}
+
+
+@router.post("/{kb_id}/global_summary/tasks/{task_id}/cancel")
+def cancel_global_summary_task(kb_id: str, task_id: str):
+    if accounts.enabled:
+        permissions.require_resource("kb", kb_id, "manage")
+    from src.knowledge import summary_tasks
+    return summary_tasks.cancel(task_id, kb_id)
 
 
 @router.delete("/{kb_id}/global_summary", response_model=dict)
@@ -928,8 +940,17 @@ def delete_kb_global_summary(kb_id: str) -> dict:
     """删除 KB 全局摘要。"""
     if accounts.enabled:
         permissions.require_resource("kb", kb_id, "manage")
-    kb = metadata_db.get_kb(kb_id)
-    if not kb:
-        raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
-    metadata_db.update_kb_global_summary(kb_id, summary="", model="", tokens=0)
+    from src.knowledge import summary_tasks
+    summary_tasks.init_schema()
+    with metadata_db.get_cursor() as cur:
+        cur.execute('BEGIN IMMEDIATE')
+        try:
+            if cur.execute("SELECT 1 FROM summary_jobs WHERE kb_id=? AND state IN ('queued','running','cancelling')", (kb_id,)).fetchone():
+                raise HTTPException(409, "请先取消正在生成的摘要任务")
+            if not metadata_db.update_kb_global_summary(kb_id, summary="", model="", tokens=0, _cursor=cur):
+                raise HTTPException(404, "知识库不存在")
+            cur.execute('COMMIT')
+        except BaseException:
+            cur.execute('ROLLBACK')
+            raise
     return {"deleted": True, "kb_id": kb_id}

@@ -208,13 +208,17 @@ class OpenAIProvider(BaseLLMProvider):
                     input=messages,
                     **self._responses_kwargs(kwargs),
                 )
-                return resp.output_text or ""
+                return ChatText(resp.output_text or "", stop_reason=getattr(resp, "status", None), model=getattr(resp, "model", self.chat_model))
             resp = self.client.chat.completions.create(
                 model=self.chat_model,
                 messages=messages,
                 **kwargs,
             )
-            return resp.choices[0].message.content or ""
+            return ChatText(resp.choices[0].message.content or "",
+                            stop_reason=resp.choices[0].finish_reason,
+                            usage={"input_tokens": getattr(resp.usage, "prompt_tokens", None),
+                                   "output_tokens": getattr(resp.usage, "completion_tokens", None)},
+                            model=resp.model)
         except Exception as e:
             raise LLMError(f"provider {self.name} chat 失败: {e}") from e
 
@@ -470,12 +474,16 @@ class AnthropicProvider(BaseLLMProvider):
 
             resp = self.client.messages.create(**create_kwargs)
 
-            # 提取文本内容
-            if hasattr(resp, 'content') and resp.content:
-                for block in resp.content:
-                    if hasattr(block, 'text'):
-                        return block.text
-            return ""
+            text = "".join(getattr(block, "text", "") for block in (resp.content or []))
+            reason = getattr(resp, "stop_reason", None)
+            usage = getattr(resp, "usage", None)
+            logger.info("同步模型响应 provider=%s model=%s stop_reason=%s blocks=%s text_chars=%s",
+                        self.name, self.chat_model, reason,
+                        [getattr(block, "type", "unknown") for block in (resp.content or [])], len(text))
+            return ChatText(text, stop_reason=reason,
+                            usage={"input_tokens": getattr(usage, "input_tokens", None),
+                                   "output_tokens": getattr(usage, "output_tokens", None)},
+                            model=getattr(resp, "model", self.chat_model))
         except Exception as e:
             raise LLMError(f"provider {self.name} chat 失败: {e}") from e
 

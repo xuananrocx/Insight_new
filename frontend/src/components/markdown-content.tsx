@@ -5,15 +5,16 @@ import { Check, Copy } from 'lucide-react'
 import { remarkCitations } from '@/lib/remark-citations'
 import { remarkCjkStrong } from '@/lib/remark-cjk-strong'
 
-export function MarkdownContent({ content, citationCount = 0, citationPrefix = 'citation', onCitationClick, hideCitations = false }: {
+export function MarkdownContent({ content, citationCount = 0, citationPrefix = 'citation', onCitationClick, hideCitations = false, reading = false }: {
   content: string
+  reading?: boolean
   citationCount?: number
   citationPrefix?: string
   onCitationClick?: (number: number) => void
   hideCitations?: boolean
 }) {
   return (
-    <div className="md-body text-[13px] leading-relaxed">
+    <div className={reading ? "md-body chat-reading" : "md-body text-[13px] leading-relaxed"}>
       <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkStrong, [remarkCitations, { count: citationCount, prefix: citationPrefix, hidden: hideCitations }]]} components={{
         a: ({ node, ...props }) => {
           const prefix = `#${citationPrefix}-`

@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import shutil
 import sqlite3
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -941,6 +941,7 @@ def upsert_document_meta(
     summary_tokens: int | None = None,
     concepts_extracted: int | None = None,
     concepts_count: int | None = None,
+    _cursor=None,
 ) -> None:
     """插入或更新 document_meta 行（1:1 关联 knowledge_files）。
 
@@ -949,7 +950,7 @@ def upsert_document_meta(
     import time
     now_ms = int(time.time() * 1000)
 
-    with get_cursor() as cur:
+    with (nullcontext(_cursor) if _cursor is not None else get_cursor()) as cur:
         cur.execute("SELECT file_id FROM document_meta WHERE file_id=?", (file_id,))
         exists = cur.fetchone() is not None
 
@@ -1091,6 +1092,7 @@ def upsert_kb_concept(
     concept_type: str | None = None,
     description: str | None = None,
     source_file_id: int | None = None,
+    _cursor=None,
 ) -> int:
     """插入或更新一个 KB 概念（kb_id + concept_name 唯一）。
 
@@ -1102,7 +1104,7 @@ def upsert_kb_concept(
     import time
     now_ms = int(time.time() * 1000)
 
-    with get_cursor() as cur:
+    with (nullcontext(_cursor) if _cursor is not None else get_cursor()) as cur:
         cur.execute(
             "SELECT id, source_file_ids_json, mention_count FROM kb_concepts WHERE kb_id=? AND concept_name=?",
             (kb_id, concept_name),
@@ -2106,6 +2108,7 @@ def update_kb(
 def update_kb_global_summary(
     kb_id: str, summary: str, model: str, tokens: int,
     snapshot: dict | None = None,
+    _cursor=None,
 ) -> bool:
     """更新 KB 全局摘要。返回是否找到 KB。
 
@@ -2117,7 +2120,7 @@ def update_kb_global_summary(
     import time
     now_ms = int(time.time() * 1000)
     snapshot_json = json.dumps(snapshot) if (snapshot and summary) else None
-    with get_cursor() as cur:
+    with (nullcontext(_cursor) if _cursor is not None else get_cursor()) as cur:
         cur.execute(
             """
             UPDATE kbs SET

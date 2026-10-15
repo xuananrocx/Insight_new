@@ -14,10 +14,18 @@ import httpx
 
 logger = logging.getLogger(__name__)
 retry_observer = contextvars.ContextVar("api_retry_observer", default=None)
+request_deadline = contextvars.ContextVar("request_deadline", default=None)
+request_guard = contextvars.ContextVar("request_guard", default=lambda: None)
 
 
 def network_timeout(read=60):
     return httpx.Timeout(read, connect=min(10, read), write=min(30, read), pool=min(10, read))
+
+
+def configured_read_timeout():
+    from src.core.config import settings
+    value = float(settings.config.get("llm", {}).get("request_timeout_seconds", 120))
+    return value if math.isfinite(value) and value > 0 else 120
 
 
 def retry_after(headers):
@@ -98,6 +106,9 @@ class RetryBudget:
 
     @classmethod
     def for_scene(cls, scene, count=None):
+        def deadline(seconds):
+            value = time.monotonic() + seconds
+            return min(value, request_deadline.get()) if request_deadline.get() is not None else value
         if scene == "qa_chat":
             # 增强 AI 作答预算走统一配置卡；默认放宽到 600 秒。
             from src.core.config import settings
@@ -105,14 +116,15 @@ class RetryBudget:
                 seconds = max(30, int((settings.config.get("qa", {}).get("ai_generation") or {}).get("timeout_seconds", 600)))
             except (ValueError, TypeError):
                 seconds = 600
-            return cls(min(10, max(0, 10 if count is None else int(count))), time.monotonic() + seconds)
+            return cls(min(10, max(0, 10 if count is None else int(count))), deadline(seconds))
         seconds, default = (20, 1) if scene == "test" else (30, 2) if scene == "title" else (90, 10) if scene == "conversation_summary" else (300, 3)
-        return cls(min(10, max(0, default if count is None else int(count))), time.monotonic() + seconds)
+        return cls(min(10, max(0, default if count is None else int(count))), deadline(seconds))
 
 
 def call_sync(call, budget, scene, meta=None, check=lambda: None):
     import concurrent.futures
     for attempt in range(budget.maximum + 1):
+        request_guard.get()()
         check()
         remaining = budget.deadline - time.monotonic()
         if remaining <= 0:
@@ -122,7 +134,7 @@ def call_sync(call, budget, scene, meta=None, check=lambda: None):
             # Bound wall time as well as per-network-operation idle time.
             executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="api-request")
             context = contextvars.copy_context()
-            future = executor.submit(context.run, call, network_timeout(min(60, remaining)))
+            future = executor.submit(context.run, call, network_timeout(min(configured_read_timeout(), remaining)))
             try:
                 return future.result(timeout=remaining)
             finally:
@@ -133,18 +145,24 @@ def call_sync(call, budget, scene, meta=None, check=lambda: None):
                 raise
             check()
             report_retry(plan, scene, meta, request_ms=round((time.monotonic() - started) * 1000))
-            time.sleep(plan["delay"])
+            wait_remaining = plan["delay"]
+            while wait_remaining > 0:
+                request_guard.get()()
+                interval = min(.5, wait_remaining)
+                time.sleep(interval)
+                wait_remaining -= interval
 
 
 async def call_stream(call, budget, scene, meta=None, check=lambda: None):
     from contextlib import aclosing
     for attempt in range(budget.maximum + 1):
+        await asyncio.to_thread(request_guard.get())
         await asyncio.to_thread(check)
         emitted = False
         started = time.monotonic()
         try:
             async with asyncio.timeout(max(0, budget.deadline - time.monotonic())):
-                async with aclosing(call(network_timeout(min(60, max(.01, budget.deadline - time.monotonic()))))) as stream:
+                async with aclosing(call(network_timeout(min(configured_read_timeout(), max(.01, budget.deadline - time.monotonic()))))) as stream:
                     async for item in stream:
                         emitted = True
                         yield item

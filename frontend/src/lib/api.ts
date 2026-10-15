@@ -931,17 +931,11 @@ export const api = {
           doc_count: number | null
           stale?: boolean
         }>(`/kbs/${id}/global_summary`),
-      build: (id: string, force = false) =>
-        request<{
-          kb_id: string
-          has_summary: boolean
-          summary: string | null
-          model: string | null
-          tokens: number | null
-          created_at: number | null
-          doc_count: number | null
-          stale?: boolean
-        }>(`/kbs/${id}/global_summary/build?force=${force}`, { method: 'POST' }),
+      task: (id: string) => request<{ task: SummaryTask | null }>(`/kbs/${id}/global_summary/task`),
+      cancel: (id: string, taskId: string) => request<SummaryTask>(`/kbs/${id}/global_summary/tasks/${taskId}/cancel`, { method: 'POST' }),
+      preview: (id: string, full_file_ids: number[]) => request<SummaryPlan>(`/kbs/${id}/global_summary/preview`, { method: 'POST', body: JSON.stringify({ full_file_ids }) }),
+      buildPlan: (id: string, plan: { full_file_ids: number[]; plan_token: string; budget: number }) => request<SummaryTask>(`/kbs/${id}/global_summary/build`, { method: 'POST', body: JSON.stringify(plan) }),
+      build: (id: string, force = false) => request<SummaryTask>(`/kbs/${id}/global_summary/build?force=${force}`, { method: 'POST' }),
       remove: (id: string) =>
         request<{ deleted: boolean; kb_id: string }>(`/kbs/${id}/global_summary`, {
           method: 'DELETE',
@@ -1659,4 +1653,15 @@ export type LogLevelInfo = {
 
 export function getFeedbackSources(fb: FeedbackItem): QaSource[] {
   return api.feedback.parseSources(fb.sources_json)
+}
+
+export type SummaryTask = {
+  id: string; state: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'interrupted' | 'failed' | 'done';
+  detail: string; completed: number; reused: number; total: number; created_at: number; updated_at: number; elapsed_seconds: number;
+  model_id: string | null;
+}
+
+export type SummaryPlan = {
+  token: string; estimated_calls: number; default_budget: number; blocked: boolean
+  documents: { file_id: number; name: string; action: string; chars: number; segments: number; cached_segments: number; estimated_calls: number; full_calls: number; error: string | null }[]
 }
