@@ -5,11 +5,10 @@ import { createUuid } from '@/lib/uuid'
 import { MessageNavigation } from '@/components/message-navigation'
 import { useChatScroll } from '@/hooks/use-chat-scroll'
 import { kbLabel, kbMetaSuffix } from '@/lib/kb-label'
-import { SessionRename } from '@/components/session-rename'
 import { useDeepAiOptions } from '@/hooks/use-deep-ai-options'
 import { useEffect, useId, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   ArrowUp,
@@ -19,7 +18,7 @@ import {
   AlertCircle,
   AlertTriangle,
   BarChart3,
-  MessageSquarePlus,
+  Info,
   Copy,
   Check,
 } from 'lucide-react'
@@ -114,6 +113,7 @@ export function ChatPage() {
   const ctx = useChatSessionsCtx()
   const session = ctx.activeSession
   const [input, setInput] = useState('')
+  const [showSessionInfo, setShowSessionInfo] = useState(false)
   // 空状态（无会话）下选的检索模式，首问建会话时带过去
   const [legacyModeNotice, setLegacyModeNotice] = useLocalStorage('amd-ui-mode-merge-notice', false)
   useEffect(() => {
@@ -181,11 +181,6 @@ export function ChatPage() {
   const [deepAiOptions] = useDeepAiOptions()
   const isStreaming = (sid: string | null | undefined): boolean =>
     !!sid && !!streamingMap[sid]
-
-  const titleMutation = useMutation({
-    mutationFn: ({ question, answer }: { question: string; answer: string }) =>
-      api.qa.summarizeTitle(question, answer),
-  })
 
   // KB 列表查询
   const kbListQuery = useQuery({
@@ -582,43 +577,31 @@ export function ChatPage() {
   return (
     <>
       <div className="flex h-full flex-col">
-        <div className="flex items-center justify-between border-b border-white/10 px-6 py-3">
-          <div className="min-w-0">
-            <h1 className="flex items-center gap-2 text-[16px] font-semibold tracking-tight">
-              <span className="truncate">{title}</span>
-              {session && <SessionRename id={session.id} title={title} />}
-              {titleMutation.isPending ? (
-                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
-              ) : null}
-            </h1>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              已对话 {turns.length} 轮 · 多轮上下文
-            </p>
-            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-              <Library className="h-3 w-3" />
-              <span className="font-medium">知识库：</span>
-              <KbPicker
-                kbs={kbListQuery.data}
-                value={currentKbId}
-                label={currentKbLabel}
-                onPick={pickKb}
-                variant="calm"
-                disabled={switchingKb || isStreaming(ctx.activeId)}
-                title={isStreaming(ctx.activeId) ? '请先完成或停止生成' : '换库将新建会话，原会话不动'}
-              />
-            </div>
+        <div className="chat-session-header flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/60 pl-2.5 pr-4 py-2">
+          <div className="flex min-w-0 items-center gap-1.5">
+            <button type="button" onClick={() => setShowSessionInfo(true)} className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="会话信息" title="会话信息">
+              <Info className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
+            <Library className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <KbPicker
+              kbs={kbListQuery.data}
+              value={currentKbId}
+              label={currentKbLabel}
+              onPick={pickKb}
+              variant="calm"
+              disabled={switchingKb || isStreaming(ctx.activeId)}
+              title={isStreaming(ctx.activeId) ? '请先完成或停止生成' : '换库将新建会话，原会话不动'}
+            />
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="shrink-0 gap-1.5 text-[12px]"
-            onClick={() => ctx.clearActive()}
-            title="开始新对话"
-          >
-            <MessageSquarePlus className="h-3.5 w-3.5" />
-            新对话
-          </Button>
         </div>
+        {showSessionInfo && <ManagementDialog title="会话信息" onClose={() => setShowSessionInfo(false)} className="max-w-sm">
+          <dl className="space-y-2 text-sm">
+            <div><dt className="text-xs text-muted-foreground">会话</dt><dd>{title}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">知识库</dt><dd>{currentKbLabel}</dd></div>
+            <div><dt className="text-xs text-muted-foreground">对话轮数</dt><dd>{turns.length} 轮</dd></div>
+          </dl>
+          <p className="text-xs leading-relaxed text-muted-foreground">多轮上下文会按当前配置与预算选取，不表示每次请求都会发送全部历史。换库会新建会话，原会话保留。</p>
+        </ManagementDialog>}
 
         <div className="relative min-h-0 flex-1">
         <MessageNavigation key={ctx.activeId} turns={turns} viewportRef={viewportRef} contentRef={contentRef} onJump={jumpToTurn} />
@@ -811,6 +794,7 @@ function TurnCard({ turn, onStop, onRetry, searchResults }: { turn: ChatTurn; on
           {!isStreaming && (!turn.error || !!turn.answer) && !isSearchMode && (
             <>
               <MarkdownContent
+                reading
                 content={turn.answer || ''}
                 hideCitations={!showCitations}
                 citationCount={turn.sources?.length ?? 0}

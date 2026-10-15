@@ -403,3 +403,41 @@
   outline: 2px solid hsl(var(--ring));
   outline-offset: -2px;
 }
+
+/* Answer-specific reading colors; controls, errors and prompt previews retain
+   their existing contrast. Both streamed and completed answers use this style. */
+:root {
+  --chat-text: #253441;
+  --chat-emphasis: #17232e;
+}
+.theme-stripe-dark, .theme-macos {
+  --chat-text: #d2dbe2;
+  --chat-emphasis: #e3e9ee;
+}
+.theme-linear {
+  --chat-text: #d2d2cc;
+  --chat-emphasis: #e4e4df;
+}
+.chat-session-header { min-height: 48px; }
+.chat-reading {
+  color: var(--chat-text);
+  font-size: 14px;
+  line-height: 1.75;
+  font-weight: 400;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  overflow-wrap: anywhere;
+}
+.chat-reading p { margin: 0.65em 0; }
+.chat-reading h1, .chat-reading h2, .chat-reading h3, .chat-reading h4 {
+  color: var(--chat-emphasis);
+  font-weight: 600;
+  line-height: 1.5;
+}
+.chat-reading h1 { font-size: 18px; }
+.chat-reading h2 { font-size: 16px; }
+.chat-reading h3 { font-size: 15px; }
+.chat-reading h4 { font-size: 14px; }
+.chat-reading strong { color: var(--chat-emphasis); font-weight: 600; }
+.chat-reading li { margin: 0.35em 0; }
+.chat-reading table { font-size: 13px; }
+.chat-reading pre code { color: var(--chat-text); }

@@ -27,7 +27,7 @@ export function Topbar() {
       <div className="ml-auto flex items-center gap-2">
         <Button
           size="sm"
-          className="gap-1.5 text-[12px]"
+          className="h-7 gap-1.5 text-[12px]"
           onClick={() => {
             ctx.clearActive()
             navigate('/')

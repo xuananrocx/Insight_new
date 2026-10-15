@@ -83,7 +83,7 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
         <div className="border-t border-border/30 px-3 py-2">
           <div className="mb-1 text-[10px] text-muted-foreground">答案生成中...</div>
           <div className="text-[12px] leading-relaxed text-foreground/85">
-            <MarkdownContent content={partial} hideCitations={!showCitations} />
+            <MarkdownContent reading content={partial} hideCitations={!showCitations} />
             <span className="ml-0.5 inline-block h-3 w-1 animate-pulse bg-primary/70 align-text-bottom" />
           </div>
         </div>
