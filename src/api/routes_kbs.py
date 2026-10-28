@@ -894,7 +894,8 @@ def get_kb_global_summary_api(kb_id: str) -> KbGlobalSummaryResponse:
 class SummaryPlanRequest(BaseModel):
     full_file_ids: list[int] = []
     plan_token: str | None = None
-    budget: int = Field(default=40, ge=1, le=1000)
+    budget: int = Field(default=40, ge=1, le=1000)  # legacy logical-call budget
+    request_limit: int | None = Field(default=None, ge=1, le=1000)
 
 
 @router.post("/{kb_id}/global_summary/preview")
@@ -916,7 +917,7 @@ def build_kb_global_summary(kb_id: str, force: bool = False, body: SummaryPlanRe
         return summary_tasks.start(kb_id)
     if not body.plan_token:
         raise HTTPException(400, '请先预览生成计划')
-    return summary_tasks.start(kb_id, body.plan_token, body.full_file_ids, body.budget)
+    return summary_tasks.start(kb_id, body.plan_token, body.full_file_ids, body.budget, body.request_limit)
 
 
 @router.get("/{kb_id}/global_summary/task")

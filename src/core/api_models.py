@@ -18,6 +18,10 @@ def init_schema():
           connection_status TEXT, connection_message TEXT, connection_checked_at INTEGER,
           tools_status TEXT, tools_message TEXT, tools_checked_at INTEGER,
           PRIMARY KEY(provider_id, model_id));
+        CREATE TABLE IF NOT EXISTS api_model_limits (
+          provider_id TEXT NOT NULL, model_id TEXT NOT NULL, context_tokens INTEGER, output_tokens INTEGER,
+          PRIMARY KEY(provider_id,model_id),
+          FOREIGN KEY(provider_id,model_id) REFERENCES api_models(provider_id,model_id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS api_preferences (
           user_id TEXT PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE,
           model_id TEXT, retry_count INTEGER NOT NULL DEFAULT 10 CHECK(retry_count BETWEEN 0 AND 10));
@@ -39,7 +43,7 @@ def init_schema():
 
 def models(provider):
     found = a.rows(
-        "SELECT * FROM api_models WHERE provider_id=? ORDER BY rowid", (provider["id"],)
+        "SELECT m.*,l.context_tokens,l.output_tokens FROM api_models m LEFT JOIN api_model_limits l USING(provider_id,model_id) WHERE m.provider_id=? ORDER BY m.rowid", (provider["id"],)
     )
     return found or [dict(model_id=provider["chat_model"], display_name="")]
 

@@ -40,16 +40,11 @@ import { cn } from '@/lib/utils'
 function LLMTimeoutsCard() {
   const qc = useQueryClient()
   const timeouts = useQuery({ queryKey: ['llm', 'timeouts'], queryFn: api.llm.timeouts })
-  const [form, setForm] = useState<{ test: number; request: number } | null>(null)
-
-  useEffect(() => {
-    if (timeouts.data && form === null) {
-      setForm({
-        test: timeouts.data.test_timeout_seconds,
-        request: timeouts.data.request_timeout_seconds,
-      })
-    }
-  }, [timeouts.data, form])
+  const [draft, setForm] = useState<{ test: number; request: number } | null>(null)
+  const form = draft ?? (timeouts.data ? {
+    test: timeouts.data.test_timeout_seconds,
+    request: timeouts.data.request_timeout_seconds,
+  } : null)
 
   const saveMutation = useMutation({
     mutationFn: () =>
@@ -59,6 +54,9 @@ function LLMTimeoutsCard() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['llm', 'timeouts'] })
+      qc.invalidateQueries({ queryKey: ['ai-summary-config'] })
+      qc.invalidateQueries({ queryKey: ['summary-preview'] })
+      setForm(null)
       toast.success('超时配置已保存')
     },
     onError: (e: Error) => toast.error(`保存失败：${e.message}`),
@@ -70,7 +68,7 @@ function LLMTimeoutsCard() {
     <Card className="mb-4 p-5">
       <div className="mb-4 flex items-center gap-2">
         <Timer className="h-4 w-4 text-muted-foreground" />
-        <span className="text-[14px] font-medium">LLM 超时配置</span>
+        <span className="text-[14px] font-medium">通用连接</span>
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
@@ -86,16 +84,16 @@ function LLMTimeoutsCard() {
           <p className="mt-1 text-[11px] text-muted-foreground">「测试」按钮的等待时长，建议 5-15 秒</p>
         </div>
         <div>
-          <label className="mb-1.5 block text-[13px] font-medium">请求超时（秒）</label>
+          <label className="mb-1.5 block text-[13px] font-medium">网络读取等待（秒）</label>
           <input
             type="number"
-            min={5}
+            min={10}
             max={3600}
             value={form.request}
             onChange={(e) => setForm({ ...form, request: Number(e.target.value) })}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">正式对话请求超时（流式为相邻输出最大间隔），建议 60-300 秒</p>
+          <p className="mt-1 text-[11px] text-muted-foreground">网络持续无数据时的等待上限。摘要默认继承；任务总时长另行设置。</p>
         </div>
       </div>
       <div className="mt-3 flex justify-end">
@@ -164,7 +162,7 @@ function AiGenerationConfigCard() {
     <Card className="mb-4 p-5">
       <div className="mb-2 flex items-center gap-2">
         <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-        <span className="text-[14px] font-medium">AI 生成配置</span>
+        <span className="text-[14px] font-medium">问答生成</span>
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
           深度 AI 与增强 AI 通用
         </span>
@@ -183,7 +181,7 @@ function AiGenerationConfigCard() {
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
           />
           <p className="mt-1 text-[11px] text-muted-foreground">
-            不设上限，建议 32768-131072
+            须符合所选模型的输出能力，建议 32768-131072
           </p>
         </div>
         <div>
@@ -574,8 +572,7 @@ export function SettingsPage() {
       </Card>
 
       </> },
-      { id: 'documents', label: '文档处理', description: '导入时的摘要与概念提取', content: <AiSummaryConfigCard /> },
-      { id: 'ai', label: 'AI 运行配置', description: '生成参数、系统提示词与请求超时', content: <><AiGenerationConfigCard /><LLMTimeoutsCard /><SystemPromptCard /></> },
+      { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>
       {confirmDisable ? (

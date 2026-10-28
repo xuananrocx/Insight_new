@@ -24,7 +24,9 @@ def network_timeout(read=60):
 
 def configured_read_timeout():
     from src.core.config import settings
-    value = float(settings.config.get("llm", {}).get("request_timeout_seconds", 120))
+    from src.core.summary_policy import active_policy
+    frozen = active_policy.get()
+    value = float(frozen.read_timeout_seconds if frozen and frozen.read_timeout_seconds else settings.config.get("llm", {}).get("request_timeout_seconds", 120))
     return value if math.isfinite(value) and value > 0 else 120
 
 
@@ -109,6 +111,10 @@ class RetryBudget:
         def deadline(seconds):
             value = time.monotonic() + seconds
             return min(value, request_deadline.get()) if request_deadline.get() is not None else value
+        if scene == "summarize":
+            from src.core.summary_policy import policy
+            p = policy()
+            return cls(p.retry_count if count is None else int(count), deadline(p.step_timeout_seconds))
         if scene == "qa_chat":
             # 增强 AI 作答预算走统一配置卡；默认放宽到 600 秒。
             from src.core.config import settings

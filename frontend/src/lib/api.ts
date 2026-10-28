@@ -934,7 +934,7 @@ export const api = {
       task: (id: string) => request<{ task: SummaryTask | null }>(`/kbs/${id}/global_summary/task`),
       cancel: (id: string, taskId: string) => request<SummaryTask>(`/kbs/${id}/global_summary/tasks/${taskId}/cancel`, { method: 'POST' }),
       preview: (id: string, full_file_ids: number[]) => request<SummaryPlan>(`/kbs/${id}/global_summary/preview`, { method: 'POST', body: JSON.stringify({ full_file_ids }) }),
-      buildPlan: (id: string, plan: { full_file_ids: number[]; plan_token: string; budget: number }) => request<SummaryTask>(`/kbs/${id}/global_summary/build`, { method: 'POST', body: JSON.stringify(plan) }),
+      buildPlan: (id: string, plan: { full_file_ids: number[]; plan_token: string; budget: number; request_limit?: number }) => request<SummaryTask>(`/kbs/${id}/global_summary/build`, { method: 'POST', body: JSON.stringify(plan) }),
       build: (id: string, force = false) => request<SummaryTask>(`/kbs/${id}/global_summary/build?force=${force}`, { method: 'POST' }),
       remove: (id: string) =>
         request<{ deleted: boolean; kb_id: string }>(`/kbs/${id}/global_summary`, {
@@ -1296,13 +1296,10 @@ export const api = {
   },
 
   aiSummary: {
-    get: () =>
-      request<{ enabled: boolean; min_word_count: number }>('/settings/ai_summary'),
-    update: (config: { enabled: boolean; min_word_count: number }) =>
-      request<{ enabled: boolean; min_word_count: number }>('/settings/ai_summary', {
-        method: 'PUT',
-        body: JSON.stringify(config),
-      }),
+    get: () => request<SummaryConfigResponse>('/settings/ai_summary'),
+    update: (config: SummaryConfig) => request<SummaryConfigResponse>('/settings/ai_summary', {
+      method: 'PUT', body: JSON.stringify(config),
+    }),
   },
 
   aiGeneration: {
@@ -1658,10 +1655,22 @@ export function getFeedbackSources(fb: FeedbackItem): QaSource[] {
 export type SummaryTask = {
   id: string; state: 'queued' | 'running' | 'cancelling' | 'cancelled' | 'interrupted' | 'failed' | 'done';
   detail: string; completed: number; reused: number; total: number; created_at: number; updated_at: number; elapsed_seconds: number;
-  model_id: string | null;
+  model_id: string | null; request_count?: number; request_limit?: number;
 }
 
 export type SummaryPlan = {
   token: string; estimated_calls: number; default_budget: number; blocked: boolean
+  cached_groups: number; request_limit: number; request_limit_max: number; task_timeout_seconds: number
   documents: { file_id: number; name: string; action: string; chars: number; segments: number; cached_segments: number; estimated_calls: number; full_calls: number; error: string | null }[]
+}
+
+export type SummaryConfig = {
+  enabled: boolean; min_word_count: number; output_tokens: number; output_token_limit: number
+  read_timeout_seconds: number | null; step_timeout_seconds: number; task_timeout_seconds: number
+  request_limit: number; retry_count: number; segment_chars: number; reduce_chars: number
+  auto_full_calls: number; split_depth: number; checkpoint_retention_days: number
+}
+export type SummaryConfigResponse = SummaryConfig & {
+  effective_read_timeout_seconds: number; defaults: SummaryConfig; sources: Record<string, string>
+  schema: Record<string, { minimum?: number; maximum?: number; anyOf?: { minimum?: number; maximum?: number }[] }>
 }

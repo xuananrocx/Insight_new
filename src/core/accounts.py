@@ -317,7 +317,7 @@ def resolve_provider(provider_id: str | None = None, model_id: str | None = None
     model = next((m for m in api_models.models(provider) if m["model_id"] == model_id), None)
     if not model:
         raise HTTPException(409, "所选模型已删除，请重新选择")
-    return {**provider, "chat_model": model_id, "model_label": model["display_name"] or model_id, "model_revision": model.get("revision", 0)}
+    return {**provider, "chat_model": model_id, "model_label": model["display_name"] or model_id, "model_revision": model.get("revision", 0), "context_tokens": model.get("context_tokens"), "output_tokens": model.get("output_tokens")}
 
 
 def provider_config(p: dict) -> dict:

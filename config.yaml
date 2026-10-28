@@ -184,6 +184,9 @@ ingest:
     # 超过则按章节分段 map-reduce（每段出要点笔记再汇总），全文覆盖不截断。
     # 段长只影响调用粒度与成本，调大可减少调用次数（需 provider 上下文足够）。
     segment_chars: 30000
+    # 输出、步骤/任务时长、请求预算等在设置 → AI 运行配置中管理。
+    # 新字段未配置时由 src/core/summary_policy.py 统一提供默认值；
+    # read_timeout_seconds: null 表示继承 llm.request_timeout_seconds。
 qa:
   top_k: 5
   # AI 生成配置（系统级，设置页「AI 运行配置」卡片写入此处）：深度 AI 与增强 AI 统一生效。

@@ -55,6 +55,9 @@ class _FakeMapReduceClient:
         self.kinds: list[str] = []
         self.user_contents: list[str] = []
 
+    async def chat_stream(self, messages, **kwargs):
+        yield self.chat(messages, **kwargs)
+
     def chat(self, messages, **kwargs):
         is_map = "要点笔记" in messages[0]["content"]
         self.kinds.append("map" if is_map else "reduce")

@@ -169,6 +169,8 @@ def revoke_kb(kb_id: str, uid: str):
 class ModelInput(BaseModel):
     model_id: str = Field(min_length=1, max_length=200)
     display_name: str = Field("", max_length=80)
+    context_tokens: int | None = Field(None, ge=4096, le=10000000)
+    output_tokens: int | None = Field(None, ge=256, le=1000000)
 
     @model_validator(mode="after")
     def normalize(self):
@@ -297,6 +299,14 @@ def save_provider(req: ProviderInput, pid: str | None = None):
             cur.execute("""INSERT INTO api_models(provider_id,model_id,display_name,revision) VALUES (?,?,?,?)
               ON CONFLICT(provider_id,model_id) DO UPDATE SET display_name=excluded.display_name""",
                         (pid, model.model_id, model.display_name, time.time_ns()))
+            if 'context_tokens' in model.model_fields_set or 'output_tokens' in model.model_fields_set:
+                previous = cur.execute('SELECT context_tokens,output_tokens FROM api_model_limits WHERE provider_id=? AND model_id=?', (pid, model.model_id)).fetchone()
+                context = model.context_tokens if 'context_tokens' in model.model_fields_set else (previous[0] if previous else None)
+                output = model.output_tokens if 'output_tokens' in model.model_fields_set else (previous[1] if previous else None)
+                if context and output and output >= context:
+                    raise HTTPException(422, '模型输出上限必须小于上下文容量')
+                cur.execute('INSERT OR REPLACE INTO api_model_limits VALUES (?,?,?,?)', (pid, model.model_id, context, output))
+
         if old and any((old["protocol"] != req.protocol, old["base_url"] != req.base_url.strip().rstrip("/"), req.api_key is not None)):
             cur.execute("""UPDATE api_models SET revision=revision+1,connection_status=NULL,connection_message=NULL,connection_checked_at=NULL,
               tools_status=NULL,tools_message=NULL,tools_checked_at=NULL WHERE provider_id=?""", (pid,))

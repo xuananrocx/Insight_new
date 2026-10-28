@@ -358,3 +358,15 @@ def test_deleted_compatibility_model_never_selects_another(env):
             a.resolve_provider(pid)
         assert a.resolve_provider(pid, "model-b")["chat_model"] == "model-b"
     assert choose(env.alice, pid, "model-b")["valid"]
+
+
+def test_model_capacity_preserved_for_legacy_updates(env):
+    pid = create(env.alice)
+    result = update(env.alice, pid, models=[dict(model_id='model-a', context_tokens=64000, output_tokens=16000)])
+    assert result.status_code == 200, result.text
+    assert update(env.alice, pid, models=[dict(model_id='model-a', display_name='new')]).status_code == 200
+    with actor(env.alice_id):
+        model = a.resolve_provider(pid, 'model-a')
+        assert model['context_tokens'] == 64000
+        assert model['output_tokens'] == 16000
+    assert update(env.alice, pid, models=[dict(model_id='model-a', context_tokens=4096, output_tokens=16000)]).status_code == 422

@@ -4,15 +4,16 @@ import { api } from '@/lib/api'
 
 export function SummaryPlanPreview({ kbId, onClose, onStarted }: { kbId: string; onClose: () => void; onStarted: () => void }) {
   const [fullIds, setFullIds] = useState<number[]>([])
-  const [budget, setBudget] = useState(40)
+  const [chosenLimit, setBudget] = useState<number | null>(null)
   const plan = useQuery({
     queryKey: ['summary-preview', kbId, fullIds],
     queryFn: () => api.kb.globalSummary.preview(kbId, fullIds),
     staleTime: 0,
     retry: false,
   })
+  const budget = chosenLimit ?? plan.data?.request_limit ?? 0
   const build = useMutation({
-    mutationFn: () => api.kb.globalSummary.buildPlan(kbId, { full_file_ids: fullIds, plan_token: plan.data!.token, budget }),
+    mutationFn: () => api.kb.globalSummary.buildPlan(kbId, { full_file_ids: fullIds, plan_token: plan.data!.token, budget: plan.data!.request_limit_max, request_limit: budget }),
     onSuccess: onStarted,
   })
   const labels: Record<string, string> = { reuse: '复用完整摘要', reuse_overview: '复用概览', full: '完整摘要', overview: '生成概览 · 非全文覆盖', unavailable: '索引不可用' }
@@ -28,11 +29,12 @@ export function SummaryPlanPreview({ kbId, onClose, onStarted }: { kbId: string;
           {['overview', 'reuse_overview'].includes(doc.action) || fullIds.includes(doc.file_id) ? <label className="mt-2 flex items-center gap-2"><input type="checkbox" checked={fullIds.includes(doc.file_id)} disabled={build.isPending} onChange={e => setFullIds(ids => e.target.checked ? [...ids, doc.file_id].sort((a,b) => a-b) : ids.filter(id => id !== doc.file_id))} />改为完整摘要（可能产生大量请求）</label> : null}
         </div>)}
       </div>
-      <p>含最终汇总，预计 <strong>{plan.data.estimated_calls}</strong> 次调用。此为估算，输出长度及重试会影响实际用量；不含向量化请求。单次任务默认最多运行 60 分钟，未完成部分可继续。</p>
-      <label className="flex flex-wrap items-center gap-2">本次模型调用上限<input aria-label="本次模型调用上限" className="w-24 rounded border bg-background px-2 py-1" type="number" min={1} max={1000} value={budget} disabled={build.isPending} onChange={e => setBudget(Number(e.target.value))} /><span className="text-muted-foreground">达到上限停止，保留已完成结果；网络重试另有次数限制。</span></label>
+      {plan.data.cached_groups > 0 && <p className="text-muted-foreground">可复用 {plan.data.cached_groups} 组已完成汇总。</p>}
+      <p>含最终汇总，预计 <strong>{plan.data.estimated_calls}</strong> 次调用。此为估算，输出长度及重试会影响实际用量；不含向量化请求。本次任务最多运行 {Math.round(plan.data.task_timeout_seconds / 60)} 分钟，未完成部分可继续。</p>
+      <label className="flex flex-wrap items-center gap-2">本次实际请求上限<input aria-label="本次实际请求上限" className="w-24 rounded border bg-background px-2 py-1" type="number" min={1} max={plan.data.request_limit_max} value={budget} disabled={build.isPending} onChange={e => setBudget(Number(e.target.value))} /><span className="text-muted-foreground">达到上限停止，保留已完成结果；包含网络重试与生成补偿，命中缓存不计数。</span></label>
       <p className="text-muted-foreground">概览使用结构统计与有限原文窗口，不保证覆盖所有类别和异常。已有历史摘要将继续复用，其完整性无法追溯确认。</p>
       {plan.data.estimated_calls > budget && <p className="text-amber-600">预计调用量超过预算。请选择概览，或确认成本后提高上限。</p>}
-      <button className="rounded-md bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50" disabled={build.isPending || plan.isFetching || plan.data.blocked || !Number.isInteger(budget) || budget < plan.data.estimated_calls || budget > 1000} onClick={() => build.mutate()}>{build.isPending ? '正在创建任务…' : '确认并开始生成'}</button>
+      <button className="rounded-md bg-primary px-3 py-2 text-primary-foreground disabled:opacity-50" disabled={build.isPending || plan.isFetching || plan.data.blocked || !Number.isInteger(budget) || budget < plan.data.estimated_calls || budget > plan.data.request_limit_max} onClick={() => build.mutate()}>{build.isPending ? '正在创建任务…' : '确认并开始生成'}</button>
     </>}
     {(plan.error || build.error) && <div role="alert" className="text-destructive">{(plan.error || build.error)?.message}<button className="ml-2 underline" onClick={() => { build.reset(); void plan.refetch() }}>重新预览</button></div>}
   </div>

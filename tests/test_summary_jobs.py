@@ -38,9 +38,22 @@ def run(job):
     return jobs.get(job['id'], job['kb_id'])
 
 
+def stream_client(chat):
+    async def chat_stream(*args, **kw):
+        text, provider = chat(*args, **kw)
+        yield str(text), provider
+        if getattr(text, 'stop_reason', None) == 'max_tokens':
+            from src.core.llm_client import STREAM_TRUNCATED_MARK
+            yield '', STREAM_TRUNCATED_MARK
+    return SimpleNamespace(chat_stream=chat_stream)
+
+
 class Client:
     def __init__(self):
         self.inputs = []
+    async def chat_stream(self, messages, **kw):
+        yield self.chat(messages, **kw)
+
     def chat(self, messages, **kw):
         self.inputs.append(messages)
         return '完整的全局摘要，涵盖知识库中所有文档。' * 8, 'fake'
@@ -136,8 +149,8 @@ def test_truncated_retry_bounded():
         calls.append(kw['max_tokens'])
         return ChatText('partial', stop_reason='max_tokens'), 'fake'
     with pytest.raises(ValueError):
-        summary._checked_chat(SimpleNamespace(chat=chat), [], max_tokens=2000)
-    assert calls == [2000, 4000]
+        summary._checked_chat(stream_client(chat), [], max_tokens=2000)
+    assert calls == [16000, 32000]
 
 
 def test_checkpoint_survives_failed_attempt(monkeypatch):
@@ -162,7 +175,7 @@ def test_snapshot_change_during_model_call_prevents_publish(monkeypatch):
         with db.get_cursor() as cur:
             cur.execute("UPDATE knowledge_files SET content_hash='new' WHERE id=?", (files[0],))
         return '新摘要' * 40, 'fake'
-    monkeypatch.setattr(summary.llm_client, 'get_client', lambda: SimpleNamespace(chat=chat))
+    monkeypatch.setattr(summary.llm_client, 'get_client', lambda: stream_client(chat))
     assert run(jobs.start(kb))['state'] == 'failed'
     assert db.get_kb_global_summary(kb)['summary'] == '旧摘要'
 
@@ -173,7 +186,7 @@ def test_cancellation_during_model_call_prevents_publish(monkeypatch):
     def chat(*a, **kw):
         jobs.cancel(job['id'], kb)
         return '新摘要' * 40, 'fake'
-    monkeypatch.setattr(summary.llm_client, 'get_client', lambda: SimpleNamespace(chat=chat))
+    monkeypatch.setattr(summary.llm_client, 'get_client', lambda: stream_client(chat))
     assert run(job)['state'] == 'cancelled'
     assert db.get_kb_global_summary(kb) is None
 
@@ -331,7 +344,7 @@ def test_budget_stops_before_extra_call_and_preserves_old_summary(monkeypatch):
     def chat(*a, **kw):
         calls.append(1)
         return ChatText('partial', stop_reason='max_tokens'), 'fake'
-    monkeypatch.setattr(summary.llm_client, 'get_client', lambda: SimpleNamespace(chat=chat))
+    monkeypatch.setattr(summary.llm_client, 'get_client', lambda: stream_client(chat))
     result = run(job)
     assert result['state'] == 'failed'
     assert len(calls) == 1
@@ -355,3 +368,21 @@ def test_full_selection_promotes_overview_without_regenerating_other_docs(monkey
     assert run(jobs.start(kb, plan['token'], files))['state'] == 'done'
     assert seen == files
     assert '【覆盖说明】' not in db.get_kb_global_summary(kb)['summary']
+
+
+def test_task_freezes_policy_and_counts_actual_requests(monkeypatch):
+    from src.core.config import settings
+    kb, _ = make_kb()
+    monkeypatch.setitem(settings.config, 'ingest', {'ai_summary': {'request_limit': 1}})
+    job = jobs.start(kb)
+    monkeypatch.setitem(settings.config, 'ingest', {'ai_summary': {'request_limit': 99}})
+    calls = []
+    def chat(*a, **kw):
+        calls.append(True)
+        return ChatText('partial', stop_reason='max_tokens'), 'fake'
+    monkeypatch.setattr(summary.llm_client, 'get_client', lambda: stream_client(chat))
+    result = run(job)
+    assert result['state'] == 'failed'
+    assert result['request_limit'] == result['request_count'] == len(calls) == 1
+    assert '实际请求上限' in result['detail']
+    assert db.get_kb_global_summary(kb) is None

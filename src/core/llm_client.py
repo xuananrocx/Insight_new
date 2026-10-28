@@ -16,11 +16,10 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 
-from src.core.config import ConfigError, settings
+from src.core.config import settings
 from src.core.llm_providers import (
     AnthropicArchProvider,
     AnthropicProvider,
-    BaseLLMProvider,
     OpenAIProvider,
     LLMError,
 )
@@ -617,7 +616,7 @@ class LLMClient:
         used_provider: str | None = None
         used_model: str | None = None
         collected_tokens: list[str] = []  # 收集所有 token 流结束后记日志
-        status: dict[str, Any] = {}  # provider 回填 stop_reason，用于识别输出截断
+        status: dict[str, Any] = {"strict_summary": scene == "summarize"}  # provider 回填 stop_reason，用于识别输出截断
 
         try:
             for name in self._chat_chain:
@@ -635,6 +634,14 @@ class LLMClient:
                             collected_tokens.append(token)
                             yield token, (name if first else "")
                             first = False
+                    if scene == "summarize" and status.get("stop_reason") not in (
+                        "stop", "end_turn", "stop_sequence", "completed", "max_tokens", "length", "incomplete"
+                    ):
+                        raise LLMError("摘要流未返回有效结束原因，未保存不完整结果")
+                    if scene == 'summarize':
+                        logger.info('摘要模型响应 provider=%s model=%s stop_reason=%s usage=%s text_chars=%s',
+                                    name, status.get('actual_model', used_model), status.get('stop_reason'),
+                                    status.get('usage', {}), sum(len(t) for t in collected_tokens))
                     # 流式正常结束 → 记日志
                     full_response = "".join(collected_tokens)
                     _log_call(

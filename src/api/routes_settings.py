@@ -6,10 +6,17 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from src.qa.rag import (
+    DEFAULT_SYSTEM_PROMPT,
+    MAX_SYSTEM_PROMPT_LENGTH,
+    ask,
+)
+from src.core import llm_client
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from src.core.config import settings
+from src.core.summary_policy import SummaryPolicy, policy as summary_policy, effective_policy
 from src.core.logging_config import get_log_level, set_log_level
 from src.db import metadata_db
 import logging
@@ -57,12 +64,6 @@ def _ensure_secure_permissions() -> None:
             pass
 
 logger = logging.getLogger(__name__)
-from src.qa.rag import (
-    DEFAULT_SYSTEM_PROMPT,
-    MAX_SYSTEM_PROMPT_LENGTH,
-    ask,
-)
-from src.core import llm_client
 
 router = APIRouter(prefix="/api/v1/settings", tags=["settings"])
 
@@ -323,8 +324,8 @@ def test_provider(req: TestProviderRequest) -> dict[str, Any]:
 
 
 class LLMTimeoutsInfo(BaseModel):
-    test_timeout_seconds: int
-    request_timeout_seconds: int
+    test_timeout_seconds: int = Field(ge=1, le=300)
+    request_timeout_seconds: int = Field(ge=10, le=3600)
 
 
 @router.get("/llm_timeouts", response_model=LLMTimeoutsInfo)
@@ -340,9 +341,6 @@ def get_llm_timeouts() -> LLMTimeoutsInfo:
 @router.put("/llm_timeouts", response_model=LLMTimeoutsInfo)
 def update_llm_timeouts(req: LLMTimeoutsInfo) -> LLMTimeoutsInfo:
     """更新 LLM 超时配置并持久化；重建 provider 连接使新超时生效。"""
-    llm = settings.config.setdefault("llm", {})
-    llm["test_timeout_seconds"] = req.test_timeout_seconds
-    llm["request_timeout_seconds"] = req.request_timeout_seconds
 
     from src.core.config import USER_CONFIG_PATH
     with open(USER_CONFIG_PATH, encoding="utf-8") as f:
@@ -350,6 +348,10 @@ def update_llm_timeouts(req: LLMTimeoutsInfo) -> LLMTimeoutsInfo:
     raw.setdefault("llm", {})["test_timeout_seconds"] = req.test_timeout_seconds
     raw["llm"]["request_timeout_seconds"] = req.request_timeout_seconds
     _secure_write_yaml(USER_CONFIG_PATH, raw)
+
+    llm = settings.config.setdefault("llm", {})
+    llm["test_timeout_seconds"] = req.test_timeout_seconds
+    llm["request_timeout_seconds"] = req.request_timeout_seconds
 
     # 已缓存的 httpx 客户端带着旧超时，全部释放以便按新配置重建
     client = llm_client.get_client()
@@ -556,57 +558,54 @@ def _save_providers_config_to_file() -> None:
 # ===== AI 摘要配置（迭代 2 设置页 UI 补丁）=====
 
 
-class AISummaryConfig(BaseModel):
-    enabled: bool
-    min_word_count: int = 100
-    segment_chars: int | None = None  # 分段摘要段长上限（字符）；None = 未提供，保持现值
 
 
-@router.get("/ai_summary", response_model=AISummaryConfig)
-def get_ai_summary_config() -> AISummaryConfig:
-    """读取 AI 摘能配置。"""
-    cfg = settings.config.get("ingest", {}).get("ai_summary", {}) or {}
-    return AISummaryConfig(
-        enabled=bool(cfg.get("enabled", False)),
-        min_word_count=int(cfg.get("min_word_count", 100)),
-        segment_chars=int(cfg.get("segment_chars", 30000)),
-    )
+class AISummaryConfig(SummaryPolicy):
+    enabled: bool = False
+    min_word_count: int = Field(100, ge=10, le=100000)
 
 
-@router.put("/ai_summary", response_model=AISummaryConfig)
-def update_ai_summary_config(req: AISummaryConfig) -> AISummaryConfig:
-    """更新 AI 摘要配置（写入 config.yaml）。"""
-    if req.min_word_count < 10:
-        raise HTTPException(status_code=400, detail="min_word_count 必须 >= 10")
-    if req.segment_chars is not None and req.segment_chars < 2000:
-        raise HTTPException(status_code=400, detail="segment_chars 必须 >= 2000")
+def _summary_config():
+    cfg = settings.config.get('ingest', {}).get('ai_summary', {}) or {}
+    return AISummaryConfig.model_validate({**summary_policy().model_dump(),
+        'enabled': cfg.get('enabled', False), 'min_word_count': cfg.get('min_word_count', 100)})
+
+
+@router.get('/ai_summary')
+def get_ai_summary_config():
+    from src.core.summary_policy import config_sources
+    result = _summary_config().model_dump()
+    result["sources"] = config_sources()
+    result['effective_read_timeout_seconds'] = effective_policy().read_timeout_seconds
+    result['defaults'] = AISummaryConfig().model_dump()
+    result['schema'] = AISummaryConfig.model_json_schema()['properties']
+    return result
+
+
+@router.put('/ai_summary')
+def update_ai_summary_config(req: AISummaryConfig):
+    # Omitted fields from old clients keep their existing values.
+    from pydantic import ValidationError
+    try:
+        merged = AISummaryConfig.model_validate({**_summary_config().model_dump(),
+                                                **req.model_dump(exclude_unset=True)})
+    except ValidationError as exc:
+        raise HTTPException(422, '; '.join(e['msg'] for e in exc.errors())) from exc
+    from src.core.summary_policy import config_sources
+    sources = config_sources()
+    current = _summary_config().model_dump()
+    blocked = [key for key, value in merged.model_dump().items() if sources[key].endswith('覆盖') and value != current[key]]
+    if blocked:
+        raise HTTPException(409, '这些配置由本地覆盖文件控制，请先调整覆盖文件：' + '、'.join(blocked))
     from src.core.config import USER_CONFIG_PATH
-    config_path = USER_CONFIG_PATH
-    with open(config_path, encoding="utf-8") as f:
+    with open(USER_CONFIG_PATH, encoding='utf-8') as f:
         raw = yaml.safe_load(f) or {}
-    raw.setdefault("ingest", {}).setdefault("ai_summary", {})
-    raw["ingest"]["ai_summary"]["enabled"] = req.enabled
-    raw["ingest"]["ai_summary"]["min_word_count"] = req.min_word_count
-    # 同步内存
-    settings.config.setdefault("ingest", {}).setdefault("ai_summary", {})
-    settings.config["ingest"]["ai_summary"]["enabled"] = req.enabled
-    settings.config["ingest"]["ai_summary"]["min_word_count"] = req.min_word_count
-    segment_chars = req.segment_chars
-    if segment_chars is None:
-        # 请求未带该字段：保持现有值（兼容旧前端）
-        segment_chars = int((raw["ingest"]["ai_summary"].get("segment_chars"))
-                            or settings.config["ingest"]["ai_summary"].get("segment_chars")
-                            or 30000)
-    raw["ingest"]["ai_summary"]["segment_chars"] = segment_chars
-    settings.config["ingest"]["ai_summary"]["segment_chars"] = segment_chars
-    _secure_write_yaml(config_path, raw)
-    logger.info(
-        f"AI 摘要配置: enabled={req.enabled}, min_word_count={req.min_word_count}, "
-        f"segment_chars={segment_chars}"
-    )
-    return AISummaryConfig(
-        enabled=req.enabled, min_word_count=req.min_word_count, segment_chars=segment_chars
-    )
+    cfg = raw.setdefault('ingest', {}).setdefault('ai_summary', {})
+    cfg.update(merged.model_dump())
+    _secure_write_yaml(USER_CONFIG_PATH, raw)
+    settings.config.setdefault('ingest', {}).setdefault('ai_summary', {}).update(merged.model_dump())
+    logger.info('AI 摘要配置已更新；新任务生效')
+    return get_ai_summary_config()
 
 
 # ===== UI 默认知识库 =====
