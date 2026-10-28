@@ -275,6 +275,8 @@ class OpenAIProvider(BaseLLMProvider):
             raise LLMError(f"provider {self.name} stream failed: {e}") from e
         try:
             async for event in stream:
+                if event.type in ("error", "response.failed"):
+                    raise LLMError("模型响应流返回错误")
                 if event.type == "response.output_text.delta" and event.delta:
                     yield event.delta
                 if status is not None and event.type in ("response.completed", "response.incomplete"):
@@ -686,7 +688,6 @@ class AnthropicArchProvider(BaseLLMProvider):
                 json=payload,
             )
             if resp.status_code != 200:
-                err_body = resp.text[:500]
                 resp.raise_for_status()
             data = resp.json()
             if not data.get("content"):
@@ -713,7 +714,6 @@ class AnthropicArchProvider(BaseLLMProvider):
                 timeout=kwargs.get("timeout", network_timeout(self.request_timeout)),
             )
             if resp.status_code != 200:
-                err_body = resp.text[:500]
                 resp.raise_for_status()
             data = resp.json()
             text = ''.join(block.get('text', '') for block in data.get('content', []) if block.get('type') == 'text')
@@ -752,10 +752,10 @@ class AnthropicArchProvider(BaseLLMProvider):
                 timeout=kwargs.get("timeout", network_timeout(self.request_timeout)),
             ) as resp:
                 if resp.status_code != 200:
-                    err_body = await resp.aread()
-                    err_text = err_body.decode("utf-8", errors="replace")[:500]
+                    await resp.aread()
                     resp.raise_for_status()
 
+                completed = False
                 # 解析 SSE 流（data: {...}\n\n 格式）
                 async for line in resp.aiter_lines():
                     if not line or not line.startswith("data: "):
@@ -769,6 +769,16 @@ class AnthropicArchProvider(BaseLLMProvider):
                         continue
                     # Anthropic SSE 事件类型
                     event_type = chunk.get("type", "")
+                    if event_type == "error":
+                        raise LLMError("模型服务返回流内错误，摘要未完成")
+                    if status is not None and event_type == "message_start":
+                        message = chunk.get('message', {})
+                        status['actual_model'] = message.get('model')
+                        status['usage'] = message.get('usage') or {}
+                    if status is not None and event_type == "message_delta":
+                        status.setdefault('usage', {}).update(chunk.get('usage') or {})
+                    if event_type == "message_stop":
+                        completed = True
                     if event_type == "content_block_delta":
                         delta = chunk.get("delta", {})
                         if delta.get("type") == "text_delta":
@@ -779,6 +789,8 @@ class AnthropicArchProvider(BaseLLMProvider):
                         stop = chunk.get("delta", {}).get("stop_reason")
                         if stop and status is not None:
                             status["stop_reason"] = stop
+                if not completed and status is not None and status.get("strict_summary"):
+                    raise LLMError("模型流异常结束：未收到 message_stop")
         except Exception as e:
             logger.warning(f"provider {self.name} stream 失败，交由统一重试策略处理: {e}")
             raise LLMError(f"provider {self.name} stream failed: {e}") from e

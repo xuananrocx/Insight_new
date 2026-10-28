@@ -44,7 +44,7 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
     setBusy(true); setError('')
     try {
       await accountRequest(`/providers${initial ? '/' + initial.id : ''}`, initial ? 'PUT' : 'POST', {
-        name, scope, protocol, base_url: url, models: models.map(m => ({ model_id: m.model_id, display_name: m.display_name })),
+        name, scope, protocol, base_url: url, models: models.map(m => ({ model_id: m.model_id, display_name: m.display_name, context_tokens: m.context_tokens, output_tokens: m.output_tokens })),
         api_key: key || (initial ? null : ''), enabled: initial?.enabled ?? true,
       })
       await refreshApiQueries(qc); onClose(); toast.success('API 配置已保存')
@@ -60,6 +60,9 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
       <div className="space-y-3"><p className="text-sm font-medium">模型列表</p>{models.map((model, i) => <div key={i} className="space-y-2 rounded border p-3">
         <label className="block text-sm">模型 ID<input className={accountInput} value={model.model_id} onChange={e => patch(i, 'model_id', e.target.value)} required maxLength={200} placeholder="服务商提供的准确模型 ID" /></label>
         <label className="block text-sm">显示名称（可选）<input className={accountInput} value={model.display_name} onChange={e => patch(i, 'display_name', e.target.value)} maxLength={80} placeholder="聊天选择器中显示的名称" /></label>
+        <details className="col-span-full text-xs text-muted-foreground"><summary className="cursor-pointer">模型能力（可选，摘要预算使用）</summary><p className="my-2">按服务商文档填写；留空表示未知，不根据模型名称推测。填写值不代表服务商保证。</p><div className="grid gap-3 sm:grid-cols-2">
+          {(['context_tokens', 'output_tokens'] as const).map(key => <label key={key}>{key === 'context_tokens' ? '上下文容量（tokens）' : '最大输出（tokens）'}<input type="number" className={accountInput} value={model[key] ?? ''} min={key === 'context_tokens' ? 4096 : 256} onChange={e => setModels(items => items.map((item, index) => index === i ? { ...item, [key]: e.target.value === '' ? null : Number(e.target.value) } : item))} /></label>)}
+        </div></details>
         <Button type="button" size="sm" variant="ghost" disabled={models.length === 1} onClick={() => setModels(models.filter((_, n) => n !== i))}>移除此模型</Button>
       </div>)}<Button type="button" variant="outline" size="sm" disabled={models.length >= 100} onClick={() => setModels([...models, { model_id: '', display_name: '' }])}>添加模型</Button></div>
       {error && <p role="alert" className="text-sm text-destructive">{error}</p>}

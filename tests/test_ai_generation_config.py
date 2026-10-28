@@ -56,3 +56,24 @@ def test_qa_chat_budget_reads_ai_generation_timeout(config_env):
     assert budget.maximum == 10 and budget.deadline > time.monotonic() + 1100
     settings._config['qa']['ai_generation']['timeout_seconds'] = 5
     assert api_retry.RetryBudget.for_scene('qa_chat').deadline <= time.monotonic() + 30
+
+
+def test_summary_settings_persist_and_keep_legacy_fields(config_env):
+    from src.api.routes_settings import AISummaryConfig, update_ai_summary_config, get_ai_summary_config
+    result = update_ai_summary_config(AISummaryConfig(enabled=True, output_tokens=20000, output_token_limit=40000, read_timeout_seconds=180))
+    assert result['effective_read_timeout_seconds'] == 180
+    update_ai_summary_config(AISummaryConfig(enabled=False, min_word_count=150))
+    saved = yaml.safe_load(config_env.read_text())['ingest']['ai_summary']
+    assert saved['output_tokens'] == 20000 and saved['read_timeout_seconds'] == 180
+    settings._config = yaml.safe_load(config_env.read_text())
+    assert get_ai_summary_config()['output_token_limit'] == 40000
+
+
+def test_summary_config_write_failure_does_not_change_memory(config_env, monkeypatch):
+    before = routes_settings.get_ai_summary_config()
+    def fail(*args):
+        raise OSError('disk full')
+    monkeypatch.setattr(routes_settings, '_secure_write_yaml', fail)
+    with pytest.raises(OSError):
+        routes_settings.update_ai_summary_config(routes_settings.AISummaryConfig(output_tokens=8000))
+    assert routes_settings.get_ai_summary_config() == before

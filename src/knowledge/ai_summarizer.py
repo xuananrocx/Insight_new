@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Any
 
 from src.core import llm_client, vector_store
-from src.core.config import settings
 from src.db import metadata_db
 from src.knowledge.chunker import Chunk
 
@@ -95,8 +94,8 @@ def _segment_chars() -> int:
     文档不超过该值时单次调用全文直出；超过则走章节感知的 map-reduce。
     段长只影响调用粒度，不影响覆盖完整性。
     """
-    cfg = settings.config.get("ingest", {}).get("ai_summary", {})
-    return int(cfg.get("segment_chars", 30000))
+    from src.core.summary_policy import effective_policy
+    return effective_policy().segment_chars
 
 
 def _without_source_overlap(chunks):
@@ -149,58 +148,110 @@ def _split_chunks_by_sections(chunks: list[Chunk], max_chars: int) -> list[list[
     return segments
 
 
-def _checked_chat(client, messages, *, max_tokens, **kwargs):
-    """One bounded recovery for empty/truncated/invalid output, never provider fallback."""
+def _checked_chat(client, messages, *, max_tokens=None, **kwargs):
+    import time
+    from src.core.summary_policy import active_policy, effective_policy
+    from src.core.api_retry import request_deadline
+    p = effective_policy()
+    token = active_policy.set(p)
+    deadline_token = request_deadline.set(min(request_deadline.get() or float('inf'), time.monotonic() + p.step_timeout_seconds))
+    try:
+        return _checked_chat_impl(client, messages, **kwargs)
+    finally:
+        request_deadline.reset(deadline_token)
+        active_policy.reset(token)
+
+
+def _checked_chat_impl(client, messages, **kwargs):
+    """Complete streamed output, with at most one bounded generation recovery."""
+    from src.core.summary_policy import policy
+    from src.core.summary_stream import collect
+    p = policy()
+    max_tokens = p.output_tokens
     for attempt in range(2):
         summary_call_check.get()()
-        try:
-            answer, provider = client.chat(messages, max_tokens=max_tokens, **kwargs)
-            if getattr(answer, "stop_reason", None) in ("max_tokens", "length", "incomplete"):
-                if attempt == 0:
-                    max_tokens = min(8000, max_tokens * 2)
-                    continue
-                raise ValueError("模型输出达到上限，摘要未完整生成")
-            if not answer.strip():
-                raise ValueError("模型返回空文本")
-            return answer, provider
-        except Exception as exc:
-            if attempt == 0 and "模型返回空文本" in str(exc):
-                if "max_tokens" in str(exc) or "length" in str(exc):
-                    max_tokens = min(8000, max_tokens * 2)
+        answer, provider = collect(client, messages, max_tokens=max_tokens, **kwargs)
+        if getattr(answer, 'stop_reason', None) in ('max_tokens', 'length', 'incomplete'):
+            larger = min(p.output_token_limit, max_tokens * 2)
+            if attempt == 0 and larger > max_tokens:
+                max_tokens = larger
                 continue
-            raise
-    raise ValueError("模型未返回完整摘要")
+            raise ValueError(f'模型输出达到额度上限（{max_tokens} tokens），未保存不完整摘要')
+        if not answer.strip():
+            if attempt == 0:
+                continue
+            raise ValueError('模型返回空正文，未保存摘要')
+        return answer, provider
+    raise ValueError('模型未返回完整摘要')
+
+
+def reduce_groups(notes, limit):
+    groups, group, size = [], [], 0
+    for label, note in notes:
+        width = max(1, limit - len(label) - 40)
+        if len(label) + 40 >= limit:
+            raise ValueError('文档名称超过汇总输入预算，请增大分组大小')
+        for offset in range(0, len(note), width):
+            part = note[offset:offset + width]
+            cost = len(label) + len(part) + 40
+            if group and size + cost > limit:
+                groups.append(group)
+                group, size = [], 0
+            group.append((label, part))
+            size += cost
+    if group:
+        groups.append(group)
+    return groups
 
 
 def _reduce_notes(client, notes, kb_id, check, progress):
-    # Bound every reduce input, including large KBs; retain all groups.
-    while sum(len(note) + len(label) + 40 for label, note in notes) > 16000:
-        groups, group, size = [], [], 0
-        for label, note in notes:
-            for offset in range(0, len(note), 12000):
-                part = note[offset:offset + 12000]
-                cost = len(label) + len(part) + 40
-                if group and size + cost > 16000:
-                    groups.append(group)
-                    group, size = [], 0
-                group.append((label, part))
-                size += cost
-        if group:
-            groups.append(group)
+    from src.core.summary_policy import effective_policy, reduce_checkpoint, generation_signature
+    from src.core.api_retry import failure_info
+    p = effective_policy()
+    checkpoint = reduce_checkpoint.get()
+
+    def reduce_group(group, depth=0):
+        check()
+        # A short remainder already fits the target; retain it verbatim.
+        if sum(len(n) + len(label) + 40 for label, n in group) <= 1200:
+            return '\n\n'.join(f'{label}: {note}' for label, note in group)
+        key = json.dumps([generation_signature(), group], ensure_ascii=False, sort_keys=True)
+        cached = checkpoint(key, None) if checkpoint else None
+        if cached is not None:
+            return cached
+        try:
+            answer, _ = _checked_chat(client, [
+                {'role': 'system', 'content': '合并以下笔记为不超过 1200 字的中文概述，保留各来源的关键内容，不编造，不声称未覆盖内容已覆盖。只输出正文。'},
+                {'role': 'user', 'content': '\n\n'.join(f'{label}: {note}' for label, note in group)},
+            ], scene='summarize', log_meta={'kb_id': kb_id})
+        except Exception as exc:
+            _, _, status, _ = failure_info(exc)
+            # Split only gateway timeouts; cancellation/auth/parameter errors never split.
+            if status != 504 or depth >= p.split_depth:
+                raise
+            size = sum(len(n) + len(label) + 40 for label, n in group)
+            children = reduce_groups(group, max(2000, size // 2))
+            if len(children) < 2:
+                raise
+            progress('当前汇总组网关超时，缩小分组后继续')
+            answer = '\n\n'.join(reduce_group(child, depth + 1) for child in children)
+        check()
+        if not answer.strip() or len(answer) > 6000:
+            raise ValueError('分层汇总输出为空或过长，未保存该组')
+        if len(answer) + 40 >= sum(len(n) + len(label) + 40 for label, n in group):
+            raise ValueError('分层汇总未收敛，已保留完成结果')
+        if checkpoint:
+            checkpoint(key, str(answer))
+        return str(answer)
+
+    while sum(len(note) + len(label) + 40 for label, note in notes) > p.reduce_chars:
+        groups = reduce_groups(notes, p.reduce_chars)
         reduced = []
         for i, group in enumerate(groups, 1):
-            check()
-            progress(f"分层汇总 {i}/{len(groups)}")
-            answer, _ = _checked_chat(client, [
-                {"role": "system", "content": "合并以下笔记为不超过 1200 字的中文概述，保留各来源的关键内容，不编造，不声称未覆盖内容已覆盖。只输出正文。"},
-                {"role": "user", "content": "\n\n".join(f"{label}: {note}" for label, note in group)},
-            ], max_tokens=3000, scene="summarize", log_meta={"kb_id": kb_id})
-            check()
-            if len(answer) > 6000:
-                raise ValueError("分层汇总输出过长，已停止以避免无限汇总")
-            reduced.append((f"汇总组 {i}", answer))
+            progress(f'分组汇总 {i}/{len(groups)} · 优先复用已完成结果')
+            reduced.append((f'汇总组 {i}', reduce_group(group)))
         if sum(len(n) + len(label) + 40 for label, n in reduced) >= sum(len(n) + len(label) + 40 for label, n in notes):
-            raise ValueError("分层汇总未收敛，已保留原结果")
+            raise ValueError('分层汇总未收敛，已保留原结果')
         notes = reduced
     return notes
 
@@ -267,7 +318,6 @@ def _map_segment(
                 },
             ],
             temperature=0.1,
-            max_tokens=4000,
             scene="summarize",
             log_meta={"kb_id": kb_id},
         )
@@ -394,7 +444,6 @@ def summarize_and_extract(
         raw_answer, used_provider = _checked_chat(client,
             messages,
             temperature=0.1,  # 摘要要稳定，低温度
-            max_tokens=4000,
             scene="summarize",
             log_meta={"kb_id": kb_id},
         )
@@ -413,8 +462,7 @@ def summarize_and_extract(
         except ValueError:
             check_cancel()
             retry_messages = [*messages, {"role": "user", "content": "请重新生成完整且有效的 JSON 对象，summary 必须为字符串，concepts 必须为列表，不要代码围栏。"}]
-            raw_answer, used_provider = _checked_chat(client, retry_messages, max_tokens=4000,
-                temperature=.1, scene="summarize", log_meta={"kb_id": kb_id})
+            raw_answer, used_provider = _checked_chat(client, retry_messages, temperature=.1, scene="summarize", log_meta={"kb_id": kb_id})
             check_cancel()
             parsed = _parse_llm_response(raw_answer)
     except TaskCancelledError:
@@ -675,7 +723,6 @@ def generate_kb_global_summary(kb_id: str, *, force: bool = False) -> GlobalSumm
         raw_answer, used_provider = _checked_chat(client,
             messages,
             temperature=0.1,
-            max_tokens=4000,
             scene="summarize",
             log_meta={"kb_id": kb_id},
         )

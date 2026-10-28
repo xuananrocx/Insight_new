@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import time
 from collections import Counter
 
 from fastapi import HTTPException
@@ -41,6 +42,8 @@ def cached_overview(file):
 
 def preview(kb_id, full_ids=()):
     from src.knowledge import summary_tasks as jobs
+    from src.core.summary_policy import effective_policy
+    policy = effective_policy()
     jobs.init_schema()
     kb = db.get_kb(kb_id)
     if not kb:
@@ -76,14 +79,52 @@ def preview(kb_id, full_ids=()):
                             if cur.execute('SELECT 1 FROM summary_checkpoints WHERE kb_id=? AND cache_key=?', (kb_id, key)).fetchone():
                                 row['cached_segments'] += 1
                 row['full_calls'] = 1 if n == 1 else n - row['cached_segments'] + math.ceil(n / 8) + 1
-                row['action'] = 'full' if file['id'] in full_ids or row['full_calls'] <= AUTO_CALLS else 'overview'
+                row['action'] = 'full' if file['id'] in full_ids or row['full_calls'] <= policy.auto_full_calls else 'overview'
                 row['estimated_calls'] = row['full_calls'] if row['action'] == 'full' else 1
             except Exception:
                 row.update(action='unavailable', error='无法读取完整索引，请检查文档索引后重试')
         documents.append(row)
-    calls = sum(d['estimated_calls'] for d in documents) + max(1, math.ceil(len(files) / 8))
+    metas = {m['file_id']: m for m in db.list_document_meta_by_kb(kb_id)}
+    known_notes = []
+    for file, doc in zip(files, documents):
+        if doc['action'] == 'reuse':
+            known_notes.append((file['relative_path'], metas[file['id']]['summary']))
+        elif doc['action'] == 'reuse_overview':
+            known_notes.append((file['relative_path'], cached_overview(file)['summary']))
+    # Follow the same grouping and cache keys as execution. A missing group's
+    # output length is unknown, so later layers remain an estimate.
+    from src.core.summary_policy import generation_signature
+    remaining_notes = known_notes if len(known_notes) == len(files) else []
+    group_calls, cached_groups = 0, 0
+    while sum(len(n)+len(label)+40 for label,n in remaining_notes) > policy.reduce_chars:
+        reduced, missing = [], False
+        for i, group in enumerate(summary.reduce_groups(remaining_notes, policy.reduce_chars), 1):
+            if sum(len(n) + len(label) + 40 for label, n in group) <= 1200:
+                reduced.append((f'汇总组 {i}', '\n\n'.join(f'{label}: {note}' for label, note in group)))
+                continue
+            text = json.dumps([generation_signature(), group], ensure_ascii=False, sort_keys=True)
+            key = jobs.digest('reduce-v1:' + jobs.provider_signature() + ':' + text)
+            with db.get_cursor() as cur:
+                row = cur.execute('SELECT note FROM summary_checkpoints WHERE kb_id=? AND cache_key=? AND created_at>=?',
+                                  (kb_id, key, time.time() - policy.checkpoint_retention_days * 86400)).fetchone()
+            if row:
+                cached_groups += 1
+                reduced.append((f'汇总组 {i}', row[0]))
+            else:
+                group_calls += 1
+                missing = True
+        if missing:
+            break
+        if sum(len(n)+len(label)+40 for label,n in reduced) >= sum(len(n)+len(label)+40 for label,n in remaining_notes):
+            break
+        remaining_notes = reduced
+    calls = sum(d['estimated_calls'] for d in documents) + group_calls + 1
+    if len(known_notes) != len(files) and len(files) > 1:
+        calls += math.ceil((len(files) - len(known_notes)) / 8)
     payload = dict(documents=documents, estimated_calls=calls, default_budget=DEFAULT_BUDGET,
-                   blocked=any(d['error'] for d in documents), full_file_ids=sorted(full_ids))
+                   blocked=any(d['error'] for d in documents), full_file_ids=sorted(full_ids),
+                   cached_groups=cached_groups, request_limit=policy.request_limit, request_limit_max=1000,
+                   task_timeout_seconds=policy.task_timeout_seconds, policy=policy.model_dump())
     # Checkpoints change while jobs run; confirmation must describe the current plan.
     payload['token'] = jobs.digest(json.dumps(payload, sort_keys=True) + jobs.provider_signature())
     return payload

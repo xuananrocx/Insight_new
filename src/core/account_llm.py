@@ -54,7 +54,8 @@ class AccountChatClient(LLMClient):
             for p in self._providers.values():
                 client = getattr(p, "_async_client", None)
                 if client is not None:
-                    await client.close()
+                    close = getattr(client, "aclose", None) or client.close
+                    await close()
                     p._async_client = None
             self.close()
 

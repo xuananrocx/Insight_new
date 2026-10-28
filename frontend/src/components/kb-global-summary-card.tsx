@@ -154,6 +154,7 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
         {task && task.state !== 'done' && <div className="mb-3 space-y-2 rounded-lg border p-3 text-xs" aria-live="polite">
           <p>{taskActive ? (task.state === 'queued' ? '等待生成' : task.state === 'cancelling' ? '正在取消' : '正在生成') : task.state === 'failed' ? '生成失败' : task.state === 'interrupted' ? '生成已中断' : '生成已取消'} · 文档 {task.completed}/{task.total} · 复用 {task.reused} 份</p>
           <p className="text-muted-foreground">{task.detail || '检查并复用已有摘要'}{task.model_id ? ` · 模型 ${task.model_id}` : ''}</p>
+          {task.request_count !== undefined && <p className="text-muted-foreground">实际请求 {task.request_count}/{task.request_limit} 次（包含重试）</p>}
           <p className="text-muted-foreground">耗时 {Math.round(task.elapsed_seconds / 60)} 分钟。{taskActive ? '可离开页面，后台继续处理。' : '已有有效摘要保留。'}</p>
           {canManage && taskActive && <button className="rounded border px-2 py-1 disabled:opacity-50" disabled={task.state === 'cancelling' || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>取消生成</button>}
           {canManage && ['failed', 'cancelled', 'interrupted'].includes(task.state) && <button className="rounded border px-2 py-1 disabled:opacity-50" onClick={() => setPreviewKb(kbId)}>预览并继续（复用已完成部分）</button>}

@@ -15,6 +15,9 @@ class _FakeChatClient:
     def __init__(self, answer: str):
         self._answer = answer
 
+    async def chat_stream(self, messages, **kwargs):
+        yield self.chat(messages, **kwargs)
+
     def chat(self, messages, **kwargs):
         return self._answer, "fake-chat-provider"
 

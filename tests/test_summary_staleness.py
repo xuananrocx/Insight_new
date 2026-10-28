@@ -11,6 +11,9 @@ from src.knowledge.ai_summarizer import generate_kb_global_summary
 
 
 class _FakeChatClient:
+    async def chat_stream(self, messages, **kwargs):
+        yield self.chat(messages, **kwargs)
+
     def chat(self, messages, **kwargs):
         return "这是知识库全局摘要内容。" * 10, "fake-chat-provider"
 
