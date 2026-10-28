@@ -1,0 +1,10 @@
+ARG PYTHON_IMAGE
+FROM ${PYTHON_IMAGE}
+RUN apt-get update && apt-get install -y --no-install-recommends libmagic1 libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY requirements-runtime.lock /tmp/requirements-runtime.lock
+RUN python -m pip install --no-cache-dir --no-deps \
+    --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r /tmp/requirements-runtime.lock \
+    && python -m pip check
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

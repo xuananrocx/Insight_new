@@ -65,6 +65,7 @@ def executable(name):
 
 def safe_extract(archive, destination):
     """Model archives must be plain files/directories; no traversal, links or devices."""
+    destination = destination.resolve()
     with tarfile.open(archive) as tar:
         members = tar.getmembers()
         total = 0
@@ -122,11 +123,17 @@ def build_linux(args, output, work, version, revision):
     web = require_pinned_image(args.web_image)
     models = model_source(args, work)
     tag = 'insight:build-' + revision
+    # BuildKit parses a bare sha256 ID in FROM as docker.io/library/sha256:<id>.
+    # Resolve the checked local image through a content-derived tag instead.
+    runtime_tag = 'insight-runtime:build-' + runtime['Id'].split(':')[1]
+    run(['docker', 'tag', runtime['Id'], runtime_tag])
+    if image_info(runtime_tag)['Id'] != runtime['Id']:
+        raise ValueError('Runtime tag differs from pinned image')
     # Tag loaded by the offline package has a content-derived name.
     web_tag = 'insight-nginx:build-' + web['Id'].split(':')[1][:16]
     run(['docker', 'tag', web['Id'], web_tag])
     run(['docker', 'build', '--network', 'none', '-f', 'deploy/linux/Dockerfile',
-         '--build-arg', 'RUNTIME_IMAGE=' + runtime['Id'], '--build-arg', 'REVISION=' + revision,
+         '--build-arg', 'RUNTIME_IMAGE=' + runtime_tag, '--build-arg', 'REVISION=' + revision,
          '--build-arg', 'APP_VERSION=' + version, '-t', tag, '.'])
     actual_version = capture(['docker', 'run', '--rm', '--network', 'none', '--read-only', tag,
                               'python', '-c', 'from src import __version__; print(__version__)'])
@@ -201,7 +208,7 @@ def main():
     parser.add_argument('--linux-package', choices=['full', 'upgrade'], default='upgrade')
     parser.add_argument('--runtime-image', default=os.environ.get('INSIGHT_RUNTIME_IMAGE'))
     parser.add_argument('--web-image', default=os.environ.get('INSIGHT_WEB_IMAGE'))
-    parser.add_argument('--models', type=Path)
+    parser.add_argument('--models', type=Path, default=os.environ.get('INSIGHT_MODELS_DIR'))
     parser.add_argument('--data-schema', default='insight-0.1.1')
     args = parser.parse_args()
     verify_checkout(args.revision)

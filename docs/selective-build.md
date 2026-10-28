@@ -17,6 +17,14 @@ Windows 为 x64 EXE；macOS 为 ARM64 DMG；Linux 为 AMD64 tar.gz。不同架�
 
 ## Linux 构建材料
 
+新增 `linux_bootstrap=true` 路径：在 GitHub Linux AMD64 runner 上准备公开构建材料，无需预先设置仓库变量或 secret。`deploy/linux/ci-materials.json` 固定官方 Python/Nginx 镜像 digest、官方模型提交和逐文件校验值；`requirements-runtime.lock` 固定 Linux Python 依赖，基线来自 176 的只读依赖清单，不包含服务器数据或配置。系统 apt 包仍来自发行版仓库，不承诺逐字节复现。
+
+该路径先构建 CPU 运行时，再下载完整 BGE-Large、BGE-reranker-v2-m3 和 tokenizer，复用现有离线打包程序。下载后验证大小及哈希；候选镜像通过依赖一致性、断网模型推理、健康接口和前端页面检查后才上传。升级包仍不含模型文件。首次准备会有数 GB 下载，须使用独立构建机器，不在业务服务器运行。
+
+候选包的官方模型清单不保证与 176/224 历史模型目录逐文件一致，不能绕过部署校验或直接套用 Compose 升级；现有 host 网络部署仍须另行验收并保留原模型目录。构建成功不等于数据迁移或真实 AI 服务已验收。
+
+使用已准备好的运行时和模型归档时，将 `linux_bootstrap` 设为 `false`，继续使用下述原有配置。
+
 GitHub 托管 runner 不具备本机 Docker 缓存和模型，需要先准备可访问的材料：
 
 | 配置 | 类型 | 内容 |

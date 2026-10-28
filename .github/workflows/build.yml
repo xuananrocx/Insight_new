@@ -18,6 +18,10 @@ on:
         description: Linux AMD64 deployment bundle
         type: boolean
         default: false
+      linux_bootstrap:
+        description: Prepare public pinned Linux materials on runner (no repository secrets needed)
+        type: boolean
+        default: true
       linux_package:
         description: Linux bundle kind
         type: choice
@@ -38,6 +42,7 @@ jobs:
           WINDOWS: ${{ inputs.windows }}
           MACOS: ${{ inputs.macos }}
           LINUX: ${{ inputs.linux }}
+          LINUX_BOOTSTRAP: ${{ inputs.linux_bootstrap }}
           INSIGHT_RUNTIME_IMAGE: ${{ vars.INSIGHT_RUNTIME_IMAGE }}
           INSIGHT_WEB_IMAGE: ${{ vars.INSIGHT_WEB_IMAGE }}
           INSIGHT_MODELS_URL: ${{ secrets.INSIGHT_MODELS_URL }}
@@ -53,7 +58,7 @@ jobs:
           selected = [{'platform': p, 'runner': r} for p, r in runners.items() if env[p.upper()] == 'true']
           if not selected:
               raise SystemExit('Select at least one platform')
-          if env['LINUX'] == 'true':
+          if env['LINUX'] == 'true' and env['LINUX_BOOTSTRAP'] != 'true':
               for key in ('INSIGHT_RUNTIME_IMAGE', 'INSIGHT_WEB_IMAGE'):
                   if not re.fullmatch(r'[^\s]+@sha256:[0-9a-f]{64}', env[key]):
                       raise SystemExit('Configure a digest-pinned registry image: ' + key)
@@ -71,6 +76,10 @@ jobs:
     needs: prepare
     env:
       PYTHONUTF8: '1'
+      INSIGHT_RUNTIME_IMAGE: ${{ vars.INSIGHT_RUNTIME_IMAGE }}
+      INSIGHT_WEB_IMAGE: ${{ vars.INSIGHT_WEB_IMAGE }}
+      INSIGHT_MODELS_URL: ${{ secrets.INSIGHT_MODELS_URL }}
+      INSIGHT_MODELS_SHA256: ${{ vars.INSIGHT_MODELS_SHA256 }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
@@ -99,17 +108,21 @@ jobs:
           choco install nsis --version=3.10 -y --no-progress
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "${env:ProgramFiles(x86)}\NSIS" >> $env:GITHUB_PATH
+      - name: Prepare public Linux build materials
+        if: matrix.platform == 'linux' && inputs.linux_bootstrap
+        run: python scripts/prepare_linux_ci.py --work "$RUNNER_TEMP/insight-materials"
       - name: Build candidate
         shell: bash
         env:
           TARGET_PLATFORM: ${{ matrix.platform }}
           SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
           LINUX_PACKAGE: ${{ inputs.linux_package }}
-          INSIGHT_RUNTIME_IMAGE: ${{ vars.INSIGHT_RUNTIME_IMAGE }}
-          INSIGHT_WEB_IMAGE: ${{ vars.INSIGHT_WEB_IMAGE }}
-          INSIGHT_MODELS_URL: ${{ secrets.INSIGHT_MODELS_URL }}
-          INSIGHT_MODELS_SHA256: ${{ vars.INSIGHT_MODELS_SHA256 }}
         run: python scripts/release_build.py --platform "$TARGET_PLATFORM" --revision "$SOURCE_SHA" --linux-package "$LINUX_PACKAGE" --work "$RUNNER_TEMP/insight-work" --output "$RUNNER_TEMP/insight-output"
+      - name: Smoke test Linux candidate
+        if: matrix.platform == 'linux'
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
+        run: python scripts/smoke_linux_ci.py --image "insight:build-$SOURCE_SHA"
       - uses: actions/upload-artifact@v4
         with:
           name: candidate-${{ matrix.platform }}-${{ needs.prepare.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

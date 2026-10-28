@@ -1,0 +1,142 @@
+{
+  "images": {
+    "python": "docker.io/library/python@sha256:061c190f3d5815b341a18dfe8a45771f8ba68c15a607ea56997fde3009ac4eec",
+    "nginx": "docker.io/library/nginx@sha256:0dcc88822d45581e65ae329f8be769762bf628d3b2bb7d2a077d4aa5c98b30e3"
+  },
+  "models": [
+    {
+      "repo": "BAAI/bge-large-zh-v1.5",
+      "revision": "79e7739b6ab944e86d6171e44d24c997fc1e0116",
+      "target": "embedding",
+      "files": [
+        {
+          "name": "1_Pooling/config.json",
+          "size": 191,
+          "hash": "9bd85925f325e25246d94c4918dc02ab98f2a1b7",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "README.md",
+          "size": 30376,
+          "hash": "8ff328740d1166d0461691bb455cbe5047067f88",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "config.json",
+          "size": 1000,
+          "hash": "03df12a02c65a8ba9552ed63f6f1518575d1f7ef",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "config_sentence_transformers.json",
+          "size": 124,
+          "hash": "dcb0c0d97d09b930d13600b1a773ddb27e441aab",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "modules.json",
+          "size": 349,
+          "hash": "952a9b81c0bfd99800fabf352f69c7ccd46c5e43",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "pytorch_model.bin",
+          "size": 1302220525,
+          "hash": "bf84a56fb045c24e090495195584a3922c3e4204107f0bba8b79c11f67a207f2",
+          "algorithm": "sha256"
+        },
+        {
+          "name": "sentence_bert_config.json",
+          "size": 52,
+          "hash": "ea85692bff64b0d1917833c31ddbca8ab10f5455",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "special_tokens_map.json",
+          "size": 125,
+          "hash": "a8b3208c2884c4efb86e49300fdd3dc877220cdf",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "tokenizer.json",
+          "size": 439124,
+          "hash": "15df791881f91e7963c9e0d704de2f2037baa002",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "size": 394,
+          "hash": "42046bd361a033a24264dc41de1fe6cafd68072f",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "vocab.txt",
+          "size": 109540,
+          "hash": "ca4f9781030019ab9b253c6dcb8c7878b6dc87a5",
+          "algorithm": "git-blob-sha1"
+        }
+      ]
+    },
+    {
+      "repo": "BAAI/bge-reranker-v2-m3",
+      "revision": "953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e",
+      "target": "reranker",
+      "files": [
+        {
+          "name": "README.md",
+          "size": 17229,
+          "hash": "553540879ec61aea21df00434c984c0f760a3fcc",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "config.json",
+          "size": 795,
+          "hash": "9f62673cb00ec41dcec8947b9ed16f6f2eb23ba2",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "model.safetensors",
+          "size": 2271071852,
+          "hash": "d9e3e081faff1eefb84019509b2f5558fd74c1a05a2c7db22f74174fcedb5286",
+          "algorithm": "sha256"
+        },
+        {
+          "name": "sentencepiece.bpe.model",
+          "size": 5069051,
+          "hash": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
+          "algorithm": "sha256"
+        },
+        {
+          "name": "special_tokens_map.json",
+          "size": 964,
+          "hash": "b1879d702821e753ffe4245048eee415d54a9385",
+          "algorithm": "git-blob-sha1"
+        },
+        {
+          "name": "tokenizer.json",
+          "size": 17098273,
+          "hash": "69564b696052886ed0ac63fa393e928384e0f8caada38c1f4864a9bfbf379c15",
+          "algorithm": "sha256"
+        },
+        {
+          "name": "tokenizer_config.json",
+          "size": 1173,
+          "hash": "328a00a9a560aadcf2a3064f917517359eb3cc26",
+          "algorithm": "git-blob-sha1"
+        }
+      ]
+    }
+  ],
+  "tokenizers": [
+    {
+      "url": "https://openaipublic.blob.core.windows.net/encodings/cl100k_base.tiktoken",
+      "sha256": "223921b76ee99bde995b7ff738513eef100fb51d18c93597a113bcffe865b2a7",
+      "cache_key": "9b5ad71b2ce5302211f9c61530b329a4922fc6a4"
+    },
+    {
+      "url": "https://openaipublic.blob.core.windows.net/encodings/o200k_base.tiktoken",
+      "sha256": "446a9538cb6c348e3516120d7c08b09f57c36495e2acfffe59a5bf8b0cfb1a2d",
+      "cache_key": "fb374d419588a4632f3f557e76b4b70aebbca790"
+    }
+  ]
+}

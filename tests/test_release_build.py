@@ -1,5 +1,6 @@
 """Release tooling tests; deliberately independent of application services."""
 import importlib.util
+import hashlib
 import io
 import json
 from pathlib import Path
@@ -18,10 +19,27 @@ def load(name):
 
 build = load('release_build')
 summary = load('release_summary')
+materials = load('prepare_linux_ci')
 SHA = 'a' * 40
 
 
 class BuildGuards(unittest.TestCase):
+    def test_public_download_checks_integrity_and_removes_partial_files(self):
+        with tempfile.TemporaryDirectory() as folder:
+            destination = Path(folder) / 'model.bin'
+            with patch.object(materials.urllib.request, 'urlopen', side_effect=lambda *a, **k: io.BytesIO(b'bad')), \
+                 patch.object(materials.time, 'sleep'):
+                with self.assertRaises(ValueError):
+                    materials.verified_download('https://example.invalid/model', destination, '0' * 64)
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name('model.bin.partial').exists())
+            payload = b'{}'
+            expected = hashlib.sha1(b'blob 2\0' + payload).hexdigest()
+            with patch.object(materials.urllib.request, 'urlopen', return_value=io.BytesIO(payload)):
+                materials.verified_download('https://example.invalid/config', destination,
+                                            expected, 'git-blob-sha1', 2)
+            self.assertEqual(destination.read_bytes(), payload)
+
     def test_only_exact_clean_commit(self):
         for revision in ('main', 'v0.1.1', 'abcdef0'):
             with self.assertRaises(ValueError):
