@@ -65,6 +65,7 @@ def executable(name):
 
 def safe_extract(archive, destination):
     """Model archives must be plain files/directories; no traversal, links or devices."""
+    destination = destination.resolve()
     with tarfile.open(archive) as tar:
         members = tar.getmembers()
         total = 0
@@ -201,7 +202,7 @@ def main():
     parser.add_argument('--linux-package', choices=['full', 'upgrade'], default='upgrade')
     parser.add_argument('--runtime-image', default=os.environ.get('INSIGHT_RUNTIME_IMAGE'))
     parser.add_argument('--web-image', default=os.environ.get('INSIGHT_WEB_IMAGE'))
-    parser.add_argument('--models', type=Path)
+    parser.add_argument('--models', type=Path, default=os.environ.get('INSIGHT_MODELS_DIR'))
     parser.add_argument('--data-schema', default='insight-0.1.1')
     args = parser.parse_args()
     verify_checkout(args.revision)
