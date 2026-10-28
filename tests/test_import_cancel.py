@@ -154,13 +154,13 @@ def test_summary_checks_cancel_after_model_returns(monkeypatch):
     from src.knowledge import ai_summarizer as ai
     from src.core.ingest_state import TaskCancelledError
     returned=False
-    def chat(*args,**kwargs):
+    async def chat_stream(*args,**kwargs):
         nonlocal returned
         returned=True
-        return '{"summary":"summary","concepts":[]}', 'fake'
+        yield '{"summary":"summary","concepts":[]}', 'fake'
     def check():
         if returned: raise TaskCancelledError()
-    monkeypatch.setattr(ai.llm_client,'get_client',lambda:SimpleNamespace(chat=chat))
+    monkeypatch.setattr(ai.llm_client,'get_client',lambda:SimpleNamespace(chat_stream=chat_stream))
     with pytest.raises(TaskCancelledError):
         ai.summarize_and_extract(file_id=1,kb_id='default',file_name='x',chunks=[Chunk('text',{})],
             content_hash='hash',collection_name='none',source_path='none',check_cancel=check)

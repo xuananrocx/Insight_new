@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+from pathlib import Path
 import subprocess
 import time
 import urllib.request
@@ -14,6 +15,21 @@ def main():
     args = parser.parse_args()
     subprocess.run(['docker', 'run', '--rm', '--network', 'none', args.image,
                     'python', '-m', 'pip', 'check'], check=True)
+    tests = Path(__file__).resolve().parents[1] / 'tests'
+    regression_files = [
+        'api_models', 'accounts_access', 'permissions', 'session_organization',
+        'session_kb_switch', 'api_retry', 'batch_upload_stages', 'import_cancel',
+        'reading_indexes', 'ai_generation_config', 'summary_jobs',
+        'summary_staleness', 'summary_stream_policy', 'global_summary_backfill',
+        'summarize_map_reduce', 'deployment_regressions',
+    ]
+    for group in (regression_files, ['default_kb']):
+        subprocess.run(['docker', 'run', '--rm', '--network', 'none',
+                        '--tmpfs', '/data:uid=1002,gid=1002', '-e', 'PYTHONPATH=/app',
+                        '-v', f'{tests}:/validation/tests:ro', args.image,
+                        'python', '-m', 'pytest', '-q', '--asyncio-mode=auto', '-p', 'no:cacheprovider',
+                        *[f'/validation/tests/test_{name}.py' for name in group]],
+                       check=True, timeout=600)
     models = os.environ.get('INSIGHT_MODELS_DIR')
     if models:
         code = """import gc
