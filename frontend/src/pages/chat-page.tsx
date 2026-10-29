@@ -490,7 +490,7 @@ export function ChatPage() {
   if (turns.length === 0) {
     return (
       <>
-        <div className="mx-auto max-w-4xl px-8 py-8">
+        <div className="mx-auto max-w-[820px] px-8 py-8">
           <div className="mb-6 flex items-start justify-between">
             <div>
               <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-tight">
@@ -590,7 +590,7 @@ export function ChatPage() {
   // 会话状态：ChatGPT 风格（输入框底部 + 消息流）
   return (
     <>
-      <div className="flex h-full flex-col">
+      <div className="flex h-full min-h-0 flex-col">
         <ChatSessionHeader key={ctx.activeId} knowledgeBase={currentKb?.name || currentKbLabel}>
           <div className="flex min-w-0 items-center gap-1.5">
             <button type="button" onClick={() => setShowSessionInfo(true)} className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="会话信息" title="会话信息">
@@ -619,8 +619,8 @@ export function ChatPage() {
 
         <div className="relative min-h-0 flex-1">
         <MessageNavigation key={ctx.activeId} turns={turns} viewportRef={viewportRef} contentRef={contentRef} onJump={jumpToTurn} />
-        <div ref={viewportRef} tabIndex={0} aria-label="会话消息" className={`h-full overflow-y-auto overscroll-contain pl-8 pr-[max(0px,calc(2rem-var(--chat-scrollbar-width,0px)))] pb-6 md:pt-6 [overflow-anchor:none] ${turns.length > 1 ? 'pt-12' : 'pt-6'}`}>
-          <div ref={contentRef} className="mx-auto max-w-4xl space-y-5 pb-4">
+        <div ref={viewportRef} tabIndex={0} aria-label="会话消息" className={`h-full overflow-y-auto overscroll-contain px-4 md:pl-8 md:pr-[max(0px,calc(2rem-var(--chat-scrollbar-width,0px)))] pb-6 md:pt-6 [overflow-anchor:none] ${turns.length > 1 ? 'pt-12' : 'pt-6'}`}>
+          <div ref={contentRef} className="mx-auto max-w-[820px] space-y-5 pb-4">
             {turns.map((turn) => {
               const turnSessionId = ctx.activeId
               const streamingTurnId = turnSessionId ? streamingMap[turnSessionId] : undefined
@@ -645,9 +645,9 @@ export function ChatPage() {
         </Button>}
         </div>
 
-        <div className="shrink-0 border-t border-white/10 px-8 py-3">
-          {!canAskKb && <p className="mx-auto mb-3 max-w-4xl text-sm text-muted-foreground">当前知识库已不可用，历史会话保留。请新建对话并选择有权限的知识库。</p>}
-          <form onSubmit={handleSubmit} className="mx-auto max-w-4xl">
+        <div className="shrink-0 px-4 pb-4 pt-2 md:px-8">
+          {!canAskKb && <p className="mx-auto mb-3 max-w-[820px] text-sm text-muted-foreground">当前知识库已不可用，历史会话保留。请新建对话并选择有权限的知识库。</p>}
+          <form onSubmit={handleSubmit} className="mx-auto max-w-[820px]">
             <Card className="p-3">
               <AutosizeTextarea
                 value={input}
@@ -739,6 +739,8 @@ export function ChatPage() {
 
 function TurnCard({ turn, onStop, onRetry, searchResults }: { turn: ChatTurn; onStop?: () => void; onRetry?: () => void; searchResults: React.ReactNode }) {
   const [copied, setCopied] = useState(false)
+  const [layout] = useLocalStorage<string>('amd-chat-layout', 'classic')
+  const bubble = layout === 'bubble'
   const [showThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
   const [showCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
   const [showContext] = useLocalStorage<boolean>('amd-ui-show-context', false)
@@ -762,13 +764,13 @@ function TurnCard({ turn, onStop, onRetry, searchResults }: { turn: ChatTurn; on
   }
 
   return (
-    <article data-turn-id={turn.id} className="min-w-0 space-y-1" aria-label="一轮问答">
-      <div className="chat-bubble min-w-0 rounded-t-xl rounded-b-none border bg-secondary/60 px-5 py-3">
-        <span className="mb-1 block text-[10px] font-medium text-muted-foreground">你</span>
+    <article data-turn-id={turn.id} className={`min-w-0 ${bubble ? 'space-y-5 pb-6' : 'space-y-1'}`} aria-label="一轮问答">
+      <div className={bubble ? "chat-question-bubble ml-auto w-fit min-w-0 max-w-[92%] rounded-2xl border border-border/60 bg-secondary px-4 py-3" : "chat-bubble min-w-0 rounded-t-xl rounded-b-none border bg-secondary/60 px-5 py-3"}>
+        {!bubble && <span className="mb-1 block text-[10px] font-medium text-muted-foreground">你</span>}
         <div className="min-w-0 flex-1 text-[13px] font-medium leading-relaxed [overflow-wrap:anywhere]">{turn.question}</div>
       </div>
 
-      <div className="chat-bubble min-w-0 rounded-t-none rounded-b-xl border bg-card/80 px-5 py-4">
+      <div className={bubble ? "min-w-0 px-1 py-2" : "chat-bubble min-w-0 rounded-t-none rounded-b-xl border bg-card/80 px-5 py-4"}>
         <span className="mb-2 block text-[10px] font-medium text-muted-foreground">{isSearchMode ? '基础检索' : turn.mode === 'deep_ai' ? '深度AI' : '增强AI'}</span>
         <div className="min-w-0 flex-1">
           {isStreaming || (showThinking && stages.length > 0 && !(isSearchMode && (turn.expansion || turn.mode === 'deep'))) ? (

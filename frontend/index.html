@@ -8,14 +8,14 @@
     <script>
       (function () {
         try {
-          var t = localStorage.getItem('amd-ui-theme') || 'stripe-light';
+          var t = localStorage.getItem('amd-ui-theme') || 'minimal';
           var map = {
-            'stripe-light': '',
-            'stripe-dark': 'theme-stripe-dark',
+            'minimal': 'theme-minimal',
+            'stripe-light': 'theme-stripe-light',
             'linear': 'theme-linear',
             'macos': 'theme-macos',
           };
-          var cls = map[t];
+          var cls = map[t] || 'theme-minimal';
           if (cls) document.documentElement.classList.add(cls);
 
           // macOS 主题下的渐变背景选择

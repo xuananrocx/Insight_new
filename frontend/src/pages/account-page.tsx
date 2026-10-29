@@ -29,6 +29,7 @@ export { ProviderSettings } from '@/components/provider-settings'
 
 export function AccountPage() {
   const { user, logout, can } = useAuth()
+  const [chatLayout, setChatLayout] = useLocalStorage<string>('amd-chat-layout', 'classic')
   const [thinking, setThinking] = useLocalStorage('amd-ui-show-thinking', true)
   const [showContext, setShowContext] = useLocalStorage('amd-ui-show-context', false)
   const [citations, setCitations] = useLocalStorage('amd-ui-show-citations', false)
@@ -41,7 +42,7 @@ export function AccountPage() {
       {can('logs.view') && <Card className="p-5"><div className="flex items-center justify-between gap-4 text-sm"><span>在侧边栏显示「系统日志」入口</span><Toggle label="显示系统日志入口" checked={logs} onChange={setLogs} /></div><Link to="/logs" aria-disabled={!logs} title={logs ? undefined : '请先开启侧边栏日志入口'} className={`mt-3 block rounded-md border p-3 text-sm ${logs ? 'hover:bg-accent/30' : 'pointer-events-none opacity-50'}`}>查看系统日志 →</Link></Card>}
     </> },
     { id: 'display', label: '会话显示', description: '思考过程、引用与上下文', content: <>
-    <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>显示上下文使用情况（可展开）</span><Toggle label="显示上下文使用情况" checked={showContext} onChange={setShowContext} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div></Card>
+    <Card className="space-y-4 p-5"><h2 className="font-semibold">显示偏好</h2><div className="flex items-center justify-between gap-4 text-sm"><span>对话布局</span><OptionSelect aria-label="对话布局" value={chatLayout === 'bubble' ? 'bubble' : 'classic'} onValueChange={setChatLayout} options={[{ value: 'classic', label: '经典卡片（默认）' }, { value: 'bubble', label: '气泡' }]} /></div><p className="text-xs text-muted-foreground">经典卡片将问题和回答上下排列；气泡将问题靠右突出，回答保持开放排版。仅调整显示，所有会话即时生效，在当前浏览器按账号保存。</p><div className="flex items-center justify-between gap-4 text-sm"><span>显示上下文使用情况（可展开）</span><Toggle label="显示上下文使用情况" checked={showContext} onChange={setShowContext} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>展示思考过程（默认折叠）</span><Toggle label="展示思考过程" checked={thinking} onChange={setThinking} /></div><div className="flex items-center justify-between gap-4 text-sm"><span>显示引用编号和引用来源</span><Toggle label="显示引用编号和引用来源" checked={citations} onChange={setCitations} /></div></Card>
     </> },
     { id: 'kb', label: '知识库', description: '提问与文档页的默认选择', content: <>
     <PersonalDefaultKbCard />

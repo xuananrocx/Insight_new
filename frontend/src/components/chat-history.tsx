@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useQueryClient } from '@tanstack/react-query'
 import * as Menu from '@radix-ui/react-dropdown-menu'
-import { Plus, Search, Download, Upload, ChevronRight, MoreHorizontal, MessageSquare } from 'lucide-react'
+import { Plus, Search, ChevronRight, MoreHorizontal, Folder, FolderOpen } from 'lucide-react'
 import { toast } from 'sonner'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { api, type SessionSummary } from '@/lib/api'
@@ -12,10 +12,10 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/compone
 import { Button } from '@/components/ui/button'
 import { Select, SelectTrigger, SelectContent, SelectItem, SelectValue } from '@/components/ui/select'
 
-function Actions({ items }: { items: { label: string; run: () => void }[] }) {
+function Actions({ items }: { items: { label: string; run: () => void; disabled?: boolean }[] }) {
   return <Menu.Root modal={false}><Menu.Trigger asChild><button type="button" aria-label="更多操作" className="rounded p-1 text-muted-foreground hover:bg-accent"><MoreHorizontal className="h-3.5 w-3.5" /></button></Menu.Trigger>
     <Menu.Portal><Menu.Content sideOffset={4} className="z-50 min-w-32 rounded-md border bg-popover p-1 text-xs shadow-lg">
-      {items.map(item => <Menu.Item key={item.label} onSelect={item.run} className="cursor-pointer rounded px-3 py-2 outline-none focus:bg-accent">{item.label}</Menu.Item>)}
+      {items.map(item => <Menu.Item key={item.label} disabled={item.disabled} onSelect={item.run} className="cursor-pointer rounded px-3 py-2 outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-40">{item.label}</Menu.Item>)}
     </Menu.Content></Menu.Portal>
   </Menu.Root>
 }
@@ -32,7 +32,7 @@ function saveBlob(blob: Blob, filename: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export function ChatHistory() {
+export function ChatHistory({ onNavigate }: { onNavigate?: () => void }) {
   const ctx = useChatSessionsCtx()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -51,7 +51,7 @@ export function ChatHistory() {
     await Promise.all([qc.invalidateQueries({ queryKey: ['sessions'] }), qc.invalidateQueries({ queryKey: ['session-groups'] }), qc.invalidateQueries({ queryKey: ['session'] })])
   }
   function open(kind: string, id?: string, label = '') { setName(label); setAction({ kind, id, label }) }
-  function newSession(groupId: string | null) { ctx.setNewGroupId(groupId); ctx.clearActive(); navigate('/') }
+  function newSession(groupId: string | null) { ctx.setNewGroupId(groupId); ctx.clearActive(); navigate('/'); onNavigate?.() }
   async function reorder(id: string, direction: 'up' | 'down') {
     try { await api.sessionGroups.update(id, { direction }); await refresh() } catch (error) { toast.error(String(error)) }
   }
@@ -72,18 +72,18 @@ export function ChatHistory() {
     } catch (error) { toast.error(String(error)) } finally { setBusy(false) }
   }
   function item(s: SessionSummary) {
-    return <div key={s.id} className={`flex min-w-0 items-center gap-1 rounded px-2 py-1 ${ctx.activeId === s.id ? 'bg-accent' : 'hover:bg-accent/40'}`}>
-      <button type="button" data-session-select className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { ctx.selectSession(s.id); navigate('/') }}>
-        <MessageSquare className="h-3 w-3 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1"><span className="block truncate text-xs" title={s.title}>{s.title}</span>
-          <span className="block text-[10px] text-muted-foreground">{streaming[s.id] ? '生成中' : new Date(s.updated_at).toLocaleDateString()} · {s.turn_count}轮</span></span>
+    return <div key={s.id} className={`session-row flex min-w-0 items-center gap-1 rounded-md px-2 py-1.5 ${ctx.activeId === s.id ? 'bg-accent' : 'hover:bg-accent/40'}`}>
+      <button type="button" data-session-select className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { ctx.selectSession(s.id); navigate('/'); onNavigate?.() }}>
+        <span className="min-w-0 flex-1 truncate text-[13px]" title={`${s.title} · ${s.turn_count}轮`}>{s.title}</span>
+        <span className="session-time shrink-0 text-[10px] text-muted-foreground">{streaming[s.id] ? '生成中' : new Date(s.updated_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}</span>
       </button>
+      <div className="session-actions">
       <Actions items={[
         { label: '重命名', run: () => open('重命名会话', s.id, s.title) },
         { label: '移动到分组', run: () => { setTarget(s.group_id ?? 'ungrouped'); open('移动到分组', s.id, s.title) } },
         { label: '导出', run: () => { void api.sessions.exportOne(s.id).then(({ blob, filename }) => saveBlob(blob, filename)).catch(error => toast.error(String(error))) } },
         { label: '删除', run: () => open('删除会话', s.id, s.title) },
-      ]} />
+      ]} /></div>
     </div>
   }
   async function handleExportAll() {
@@ -128,26 +128,27 @@ export function ChatHistory() {
   }
 
   return <div className="flex h-full min-h-0 flex-col">
-    <div className="flex shrink-0 items-center justify-between px-2 py-1">
-      <span className="text-[10px] font-semibold text-muted-foreground">会话列表</span>
-      <div className="flex items-center gap-1">
-        <button title="导入会话" disabled={importing} onClick={() => fileInputRef.current?.click()}><Upload className="h-3.5 w-3.5" /></button>
-        <button title="导出全部会话" disabled={exportingAll || !ctx.sessions.length} onClick={() => void handleExportAll()}><Download className="h-3.5 w-3.5" /></button>
-        <Actions items={[{ label: '新建会话', run: () => newSession(null) }, { label: '新建分组', run: () => open('新建分组') }]} />
-      </div>
+    <div className="mx-1 mb-3 flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-muted-foreground"><Search className="h-3.5 w-3.5 shrink-0" /><input aria-label="搜索会话或分组" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索会话或分组…" className="min-w-0 flex-1 bg-transparent text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring" /></div>
+    <div className="flex shrink-0 items-center justify-between px-3 pb-2">
+      <span className="text-[11px] text-muted-foreground">会话</span>
+      <Actions items={[
+        { label: '新建会话', run: () => newSession(null) },
+        { label: '新建分组', run: () => open('新建分组') },
+        { label: importing ? '正在导入…' : '导入会话', disabled: importing, run: () => fileInputRef.current?.click() },
+        { label: exportingAll ? '正在导出…' : '导出全部会话', disabled: exportingAll || !ctx.sessions.length, run: () => void handleExportAll() },
+      ]} />
     </div>
     <input ref={fileInputRef} type="file" accept=".json,.zip" onChange={handleImportFile} className="hidden" />
-    <div className="mx-2 my-1 flex items-center gap-1 rounded bg-muted/40 px-2 py-1"><Search className="h-3 w-3" /><input value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索会话或分组…" className="min-w-0 flex-1 bg-transparent text-xs outline-none" /></div>
     <div aria-label="会话列表" className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-1.5">
       {groups.map(group => {
         const matchesGroup = group.name.toLowerCase().includes(query.trim().toLowerCase())
         const sessions = ctx.sessions.filter(s => (s.group_id ?? 'ungrouped') === group.id && (matchesGroup || s.title.toLowerCase().includes(query.trim().toLowerCase())))
         if (query.trim() && !sessions.length && !matchesGroup) return null
         const closed = !query.trim() && collapsed[group.id]
-        return <div key={group.id} className="mb-2">
-          <div className="flex items-center gap-1">
-            <button className="flex min-w-0 flex-1 items-center gap-1 py-1 text-left text-[11px] text-muted-foreground" onClick={() => setCollapsed({ ...collapsed, [group.id]: !collapsed[group.id] })} aria-expanded={!closed}>
-              <ChevronRight className={`h-3 w-3 shrink-0 ${closed ? '' : 'rotate-90'}`} /><span className="truncate">{group.name}</span><span>{sessions.length}</span>
+        return <div key={group.id} className="mb-3">
+          <div className="group-heading flex items-center gap-1 rounded-md px-1 hover:bg-accent/40">
+            <button className="flex min-w-0 flex-1 items-center gap-2 px-1 py-2 text-left text-xs text-muted-foreground" onClick={() => setCollapsed({ ...collapsed, [group.id]: !collapsed[group.id] })} aria-expanded={!closed}>
+              {closed ? <Folder className="h-4 w-4 shrink-0" /> : <FolderOpen className="h-4 w-4 shrink-0" />}<span className="flex-1 truncate" title={group.name}>{group.name}</span><span className="text-[11px]">{sessions.length}</span><ChevronRight className={`h-3 w-3 shrink-0 ${closed ? '' : 'rotate-90'}`} />
             </button>
             <button title={`在${group.name}中新建会话`} onClick={() => newSession(group.id === 'ungrouped' ? null : group.id)}><Plus className="h-3 w-3" /></button>
             {group.id !== 'ungrouped' && <Actions items={[
@@ -157,7 +158,7 @@ export function ChatHistory() {
               { label: '删除分组', run: () => open('删除分组', group.id, group.name) },
             ]} />}
           </div>
-          {!closed && (sessions.length ? <div className="space-y-1">{sessions.map(item)}</div> : <p className="px-5 py-1 text-[10px] text-muted-foreground">暂无会话</p>)}
+          {!closed && (sessions.length ? <div className="ml-3 space-y-1 border-l border-border/60 pl-2">{sessions.map(item)}</div> : <p className="px-5 py-1 text-[10px] text-muted-foreground">暂无会话</p>)}
         </div>
       })}
     </div>

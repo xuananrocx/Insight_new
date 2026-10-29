@@ -49,8 +49,8 @@ function CodeBlockWithCopy({ text, className }: { text: string; className?: stri
   useEffect(() => () => clearTimeout(timer.current), [])
   const lang = /language-(\w+)/.exec(className || '')?.[1]
   return (
-    <div className="relative overflow-hidden rounded-md bg-muted/40">
-      <div className="flex items-center justify-between bg-background/50 px-3 py-1">
+    <div className="chat-code-block relative overflow-hidden rounded-md bg-muted/40">
+      <div className="chat-code-header flex items-center justify-between bg-background/50 px-3 py-1">
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{lang || 'code'}</span>
         <button
           type="button"

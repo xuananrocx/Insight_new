@@ -1,32 +1,11 @@
+import { THEMES } from '@/lib/themes'
 import { useEffect, useRef, useState } from 'react'
 import { Palette, SunMoon, Check } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
-import { useTheme, type ThemeKey } from '@/hooks/use-theme'
+import { useTheme } from '@/hooks/use-theme'
 import { cn } from '@/lib/utils'
 
-const THEMES: { key: ThemeKey; label: string; preview: string[] }[] = [
-  {
-    key: 'stripe-light',
-    label: 'Stripe 浅色',
-    preview: ['#f6f9fc', '#635bff', '#e3e8ee'],
-  },
-  {
-    key: 'stripe-dark',
-    label: 'Stripe 深色',
-    preview: ['#0f1729', '#7c6fff', '#1a2238'],
-  },
-  {
-    key: 'linear',
-    label: 'Linear 紫黑',
-    preview: ['#101016', '#5e6ad2', '#1c1d24'],
-  },
-  {
-    key: 'macos',
-    label: 'macOS 毛玻璃',
-    preview: ['#0a1628', '#1c75c9', '#354159'],
-  },
-]
 
 export function ThemeToggle({ compact = false }: { compact?: boolean }) {
   const { theme, setTheme } = useTheme()
