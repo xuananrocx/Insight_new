@@ -48,3 +48,11 @@ test('only explicit citations are linked or hidden; array indices survive', () =
     assert.ok(!html.includes('cite:'))
   }
 })
+
+test('repairs quoted CJK bold after prose without touching incomplete or escaped input', () => {
+  const body = '“盘中动态数据订阅”指的是：AMA 已在运行、委托簿正在构建时，再改变实时行情的订阅范围'
+  assert.equal(render(`这里的**${body}**，不是回调本身。`), `<p>这里的<strong>${body}</strong>，不是回调本身。</p>`)
+  for (const input of ['这里的**“未完成', '这里的**“结尾空白 **，后续', '`**“代码”**`', '\\*\\*“转义”\\*\\*']) {
+    assert.equal(render(input), renderToStaticMarkup(React.createElement(Markdown, { remarkPlugins: [remarkGfm] }, input)))
+  }
+})

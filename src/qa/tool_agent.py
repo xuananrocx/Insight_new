@@ -345,7 +345,6 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                   stop_reason=stop_reason, tool_calls=called, evidence_chars=kb.used_chars,
                   reviewed_points=len(review.points), unresolved_points=len(review.snapshot()['unresolved']))
             queue.put_nowait({"type": "sources", "data": sources})
-            stage("agent_answer", "结合资料生成回答", count=len(sources), notes=reason)
             requested_fields = field_search.identifiers(question)
             observed_fields = set(field_search.matches('\n'.join(h['text'] for h in kb.hits), requested_fields))
             missing_fields = [field for field in requested_fields if field not in observed_fields]
@@ -443,6 +442,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     queue.put_nowait({"type": "token", "data": {"text": tail}})
             try:
                 if not answer_streamed:
+                    stage_running("agent_answer", "正在生成回答")
                     await bounded(generate(), max(1, model.deadline - time.monotonic()))
                     if getattr(model, "final_truncated", False):
                         state.update(outcome="partial", reason="模型输出达到输出上限，回答已截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限")
@@ -464,6 +464,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     for i, source in enumerate(sources[:4], 1):
                         parts.append(f"**已找到的原文：{source['source_name']}** 【cite:{i}】\n\n{source['content'][:1000]}\n\n")
                 parts.append("\n\n> 本次回答未完整生成，请结合引用原文核对后重试。")
+            stage("agent_answer", "回答生成结束", status="ok" if state["outcome"] == "success" else "partial")
             # Allow only bounded final validation after the generation budget expires.
             await asyncio.wait_for(asyncio.to_thread(kb.validate_versions), 5)
             if not "".join(parts).strip():

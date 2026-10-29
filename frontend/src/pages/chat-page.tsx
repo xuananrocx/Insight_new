@@ -1,3 +1,4 @@
+import { ChatSessionHeader } from '@/components/chat-session-header'
 import { ApiModelSelect } from '@/components/api-model-select'
 import { accountApi, type ModelSelection } from '@/lib/account-api'
 import { ManagementDialog } from '@/components/management-dialog'
@@ -577,7 +578,7 @@ export function ChatPage() {
   return (
     <>
       <div className="flex h-full flex-col">
-        <div className="chat-session-header flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-border/60 pl-2.5 pr-4 py-2">
+        <ChatSessionHeader key={ctx.activeId} knowledgeBase={currentKb?.name || currentKbLabel}>
           <div className="flex min-w-0 items-center gap-1.5">
             <button type="button" onClick={() => setShowSessionInfo(true)} className="mr-1 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent/30 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label="会话信息" title="会话信息">
               <Info className="h-3.5 w-3.5" aria-hidden="true" />
@@ -593,7 +594,7 @@ export function ChatPage() {
               title={isStreaming(ctx.activeId) ? '请先完成或停止生成' : '换库将新建会话，原会话不动'}
             />
           </div>
-        </div>
+        </ChatSessionHeader>
         {showSessionInfo && <ManagementDialog title="会话信息" onClose={() => setShowSessionInfo(false)} className="max-w-sm">
           <dl className="space-y-2 text-sm">
             <div><dt className="text-xs text-muted-foreground">会话</dt><dd>{title}</dd></div>

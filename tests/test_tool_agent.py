@@ -272,6 +272,11 @@ async def test_stream_arrives_before_generation_finishes_even_with_legacy_verifi
         events.append(event)
         if event['type'] == 'token':
             release.set()
+    running = next(i for i, e in enumerate(events) if e['type'] == 'stage' and e['data']['stage'] == 'agent_answer' and e['data'].get('status') == 'running')
+    first_token = next(i for i, e in enumerate(events) if e['type'] == 'token')
+    assert running < first_token
+    assert any(e['type'] == 'stage' and e['data']['stage'] == 'agent_answer' and e['data'].get('status') == 'ok' for e in events[running + 1:])
+    assert not any(s.get('status') == 'running' for s in events[-1]['data']['trace'])
     assert release.is_set()
     assert calls == [1]
     assert events[-1]['type'] == 'done'

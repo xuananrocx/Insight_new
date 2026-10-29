@@ -25,7 +25,7 @@ export function remarkCjkStrong() {
         if (start === undefined || end === undefined || source.slice(start, end) !== child.value) return [child]
         const pieces: MarkdownNode[] = []
         let cursor = 0
-        const pattern = /(?<!\*)\*\*([^*\n]+[\p{P}\p{S}])\*\*(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])/gu
+        const pattern = /(?<!\*)\*\*((?:[^*\n]+[\p{P}\p{S}](?=\*\*[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])|[“「『（《][^*\n]*[^\s*]))\*\*(?!\*)/gu
         for (const match of child.value.matchAll(pattern)) {
           if (/^\s/u.test(match[1])) continue
           if (match.index! > cursor) pieces.push({ type: 'text', value: child.value.slice(cursor, match.index) })

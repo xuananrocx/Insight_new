@@ -393,7 +393,7 @@
   max-height: min(320px, 40dvh);
   overflow-y: auto;
   overflow-x: hidden;
-  overscroll-behavior-y: contain;
+  overscroll-behavior-y: auto;
   scrollbar-gutter: stable;
 }
 .kb-bounded-list.max-h-40 {
