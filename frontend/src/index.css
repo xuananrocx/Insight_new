@@ -291,7 +291,7 @@
 
   /* Hover 蓝色（方案 F2）：菜单/按钮 hover 时半透明蓝填充 */
   .theme-macos nav a:hover,
-  .theme-macos button:hover {
+  .theme-macos button:not([data-session-select]):hover {
     background-color: rgba(28, 117, 201, 0.28) !important;
   }
 }

@@ -73,7 +73,7 @@ export function ChatHistory() {
   }
   function item(s: SessionSummary) {
     return <div key={s.id} className={`flex min-w-0 items-center gap-1 rounded px-2 py-1 ${ctx.activeId === s.id ? 'bg-accent' : 'hover:bg-accent/40'}`}>
-      <button className="flex min-w-0 flex-1 items-center gap-2 text-left" onClick={() => { ctx.selectSession(s.id); navigate('/') }}>
+      <button type="button" data-session-select className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { ctx.selectSession(s.id); navigate('/') }}>
         <MessageSquare className="h-3 w-3 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1"><span className="block truncate text-xs" title={s.title}>{s.title}</span>
           <span className="block text-[10px] text-muted-foreground">{streaming[s.id] ? '生成中' : new Date(s.updated_at).toLocaleDateString()} · {s.turn_count}轮</span></span>
@@ -157,7 +157,7 @@ export function ChatHistory() {
               { label: '删除分组', run: () => open('删除分组', group.id, group.name) },
             ]} />}
           </div>
-          {!closed && (sessions.length ? sessions.map(item) : <p className="px-5 py-1 text-[10px] text-muted-foreground">暂无会话</p>)}
+          {!closed && (sessions.length ? <div className="space-y-1">{sessions.map(item)}</div> : <p className="px-5 py-1 text-[10px] text-muted-foreground">暂无会话</p>)}
         </div>
       })}
     </div>
