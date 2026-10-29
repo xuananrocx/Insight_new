@@ -600,9 +600,21 @@ def get_kb_document_graph(kb_id: str, min_shared: int = 1) -> dict:
     }
 
 
+@router.get("/{kb_id}/export-preview")
+def preview_export(kb_id: str):
+    if accounts.enabled:
+        permissions.require_resource("kb", kb_id, "export")
+    if not metadata_db.get_kb(kb_id):
+        raise HTTPException(404, "知识库不存在")
+    from src.knowledge.export_plan import inspect_sources
+    return inspect_sources(kb_id)[1]
+
+
 @router.get("/{kb_id}/export")
-def export_kb(kb_id: str) -> Any:
+def export_kb(kb_id: str, allow_partial: bool = False, expected_token: str | None = None) -> Any:
     """导出 KB 为 ZIP Pack（流式下载）。"""
+    if accounts.enabled:
+        permissions.require_resource("kb", kb_id, "export")
     kb = metadata_db.get_kb(kb_id)
     if not kb:
         raise HTTPException(status_code=404, detail=f"知识库不存在: {kb_id}")
@@ -612,7 +624,7 @@ def export_kb(kb_id: str) -> Any:
     os.close(fd)
     tmp = Path(tmp_name)
     try:
-        kb_pack.export_kb_to_zip(kb_id, tmp)
+        kb_pack.export_kb_to_zip(kb_id, tmp, allow_partial=allow_partial, expected_token=expected_token)
         if accounts.enabled:
             permissions.require_resource("kb",kb_id,"export")
             accounts.audit("kb_export",kb_id)
@@ -629,11 +641,13 @@ def export_kb(kb_id: str) -> Any:
         )
     except Exception as e:
         logger.exception(f"导出 KB 失败: {e}")
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise HTTPException(status_code=500, detail=f"导出失败: {e}")
+        tmp.unlink(missing_ok=True)
+        if isinstance(e, HTTPException):
+            raise
+        if isinstance(e, ValueError):
+            raise HTTPException(status_code=409, detail=str(e)) from e
+        raise HTTPException(status_code=500, detail="导出失败，请检查服务日志后重试") from e
+
 
 
 @router.post("/import")

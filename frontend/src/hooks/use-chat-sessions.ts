@@ -10,6 +10,7 @@ export type ThinkingState = {
   status: 'streaming' | 'done' | 'partial' | 'stopped' | 'error' | 'cancelled'
   startedAt: number
   elapsedMs?: number
+  connectionMessage?: string
   warmup?: string
   sources?: QaSource[]
   usedProvider?: string

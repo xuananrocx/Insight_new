@@ -9,9 +9,12 @@ from src.knowledge import reading_index
 @contextmanager
 def timed(kb, phase):
     started=time.monotonic()
+    previous = getattr(kb, 'active_phase', None)
+    kb.active_phase = phase
     try:
         yield
     finally:
+        kb.active_phase = previous
         kb.timings[phase]=kb.timings.get(phase,0)+round((time.monotonic()-started)*1000,3)
 
 

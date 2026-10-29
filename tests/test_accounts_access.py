@@ -556,3 +556,22 @@ def test_personal_preferences_api_and_context_owner_boundary(env, monkeypatch):
     count = len(seen)
     assert env.bob.post('/api/v1/qa/ask_stream', json=request).status_code == 404
     assert len(seen) == count
+
+
+def test_answer_job_read_stop_and_discovery_require_session_owner(env):
+    import json
+    kid = kb(env.alice)
+    sid = session(env.alice, kid)
+    tid = uuid.uuid4().hex
+    payload = {'session_id': sid, 'turn_id': tid, 'state': 'done', 'revision': 1,
+               'answer': 'private answer', 'sources': [], 'trace': [], 'started_at': 1}
+    a.execute('INSERT INTO answer_jobs VALUES (?,?,?,?,?,?)', (sid, tid, 'hash', kid, 'done', json.dumps(payload)))
+    base = f'/api/v1/qa/jobs/{sid}'
+    assert env.alice.get(base).status_code == 200
+    assert env.alice.get(f'{base}/{tid}').json()['answer'] == 'private answer'
+    for suffix in ('', f'/{tid}'):
+        result = env.bob.get(base + suffix)
+        assert result.status_code == 404
+        assert 'private answer' not in result.text
+    assert env.bob.post(f'{base}/{tid}/stop').status_code == 404
+    assert env.alice.post(f'{base}/{tid}/stop').status_code == 200

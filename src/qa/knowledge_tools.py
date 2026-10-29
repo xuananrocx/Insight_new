@@ -253,7 +253,7 @@ class KnowledgeTools:
                 return {**self.public_evidence(prior, i + 1), 'reused': True}
         remaining = self.max_chars - self.used_chars
         if remaining <= 0:
-            return {"error": "evidence_budget", "message": "本轮原文读取容量已用完；此前返回的资料仍有效"}
+            return {"error": "evidence_budget", "message": f"本轮原文读取容量已用完（已使用 {self.used_chars:,} / {self.max_chars:,} 字符）；此前返回的资料仍有效，新提问重新计数"}
         intervals = [(p['reading']['start'], p['reading']['end']) for p in self.hits
                      if located and p['file_id'] == f['id'] and p['content_hash'] == f['content_hash']
                      and p.get('reading_artifact') == hit.get('reading_artifact')

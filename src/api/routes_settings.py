@@ -11,6 +11,7 @@ from src.qa.rag import (
     MAX_SYSTEM_PROMPT_LENGTH,
     ask,
 )
+from src.core import ai_read_limits as read_limits
 from src.core import llm_client
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -367,9 +368,14 @@ def update_llm_timeouts(req: LLMTimeoutsInfo) -> LLMTimeoutsInfo:
 # ===== AI 生成配置（输出上限 / 生成时长 / 深度 AI 上下文，深度与增强 AI 统一卡）=====
 
 
+
+
 class AiGenerationConfig(BaseModel):
     max_tokens: int  # 单次模型调用的输出 token 上限（推理模型含思考部分）
     timeout_seconds: int  # 作答阶段时长预算（秒）
+    job_timeout_seconds: int | None = Field(None, ge=30, le=86400)
+    job_max_concurrent: int | None = Field(None, ge=1, le=64)
+    tool_timeout_seconds: int | None = None
     context_chars: int | None = None  # 深度 AI 单次查阅的原文字符预算；None = 未单独配置
 
 
@@ -378,8 +384,11 @@ def get_ai_generation() -> AiGenerationConfig:
     gen = settings.config.get("qa", {}).get("ai_generation") or {}
     deep = settings.config.get("qa", {}).get("deep_ai") or {}
     return AiGenerationConfig(
+        job_timeout_seconds=int(gen.get("job_timeout_seconds", 3600)),
+        job_max_concurrent=int(gen.get("job_max_concurrent", 4)),
         max_tokens=int(gen.get("max_tokens", deep.get("max_tokens", 81920))),
         timeout_seconds=int(gen.get("timeout_seconds", 600)),
+        tool_timeout_seconds=int(gen.get("tool_timeout_seconds", deep.get("tool_timeout_seconds", read_limits.TOOL_TIMEOUT_DEFAULT))),
         context_chars=int(gen.get("context_chars", deep.get("context_chars", 48000))),
     )
 
@@ -390,17 +399,25 @@ def update_ai_generation(req: AiGenerationConfig) -> AiGenerationConfig:
         raise HTTPException(status_code=400, detail="max_tokens 需在 256 至 10,000,000 之间")
     if not 30 <= req.timeout_seconds <= 86400:
         raise HTTPException(status_code=400, detail="timeout_seconds 需在 30 至 86400 秒之间")
-    if req.context_chars is not None and not 2000 <= req.context_chars <= 1_000_000:
+    if req.context_chars is not None and not read_limits.CONTEXT_MIN <= req.context_chars <= read_limits.CONTEXT_MAX:
         raise HTTPException(status_code=400, detail="context_chars 需在 2,000 至 1,000,000 之间")
-    values = {"max_tokens": req.max_tokens, "timeout_seconds": req.timeout_seconds}
+    if req.tool_timeout_seconds is not None and not read_limits.TOOL_TIMEOUT_MIN <= req.tool_timeout_seconds <= read_limits.TOOL_TIMEOUT_MAX:
+        raise HTTPException(status_code=400, detail="工具查阅超时需在 5 至 600 秒之间")
+    values = dict(settings.config.get("qa", {}).get("ai_generation") or {})
+    values.update(max_tokens=req.max_tokens, timeout_seconds=req.timeout_seconds)
+    for key in ("job_timeout_seconds", "job_max_concurrent"):
+        if getattr(req, key) is not None:
+            values[key] = getattr(req, key)
+    if req.tool_timeout_seconds is not None:
+        values["tool_timeout_seconds"] = req.tool_timeout_seconds
     if req.context_chars is not None:
         values["context_chars"] = req.context_chars
     from src.core.config import USER_CONFIG_PATH
     with open(USER_CONFIG_PATH, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     raw.setdefault("qa", {})["ai_generation"] = values
-    settings.config.setdefault("qa", {})["ai_generation"] = dict(values)
     _secure_write_yaml(USER_CONFIG_PATH, raw)
+    settings.config.setdefault("qa", {})["ai_generation"] = dict(values)
     logger.info(f"AI 生成配置已更新: {values}")
     return get_ai_generation()
 

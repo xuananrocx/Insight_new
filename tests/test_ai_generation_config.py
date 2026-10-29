@@ -77,3 +77,28 @@ def test_summary_config_write_failure_does_not_change_memory(config_env, monkeyp
     with pytest.raises(OSError):
         routes_settings.update_ai_summary_config(routes_settings.AISummaryConfig(output_tokens=8000))
     assert routes_settings.get_ai_summary_config() == before
+
+
+def test_tool_timeout_and_large_context_persist_without_legacy_reset(config_env):
+    result = routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(
+        max_tokens=4096, timeout_seconds=600, context_chars=900000, tool_timeout_seconds=90))
+    assert result.context_chars == 900000 and result.tool_timeout_seconds == 90
+    result = routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(max_tokens=8192, timeout_seconds=600))
+    assert result.context_chars == 900000 and result.tool_timeout_seconds == 90
+    for invalid in (0, 601):
+        with pytest.raises(HTTPException):
+            routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(
+                max_tokens=8192, timeout_seconds=600, tool_timeout_seconds=invalid))
+
+
+def test_job_limits_persist_and_old_client_preserves_them(config_env):
+    from pydantic import ValidationError
+    from src.qa.answer_jobs import limits
+    routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(
+        max_tokens=4096, timeout_seconds=600, job_timeout_seconds=7200, job_max_concurrent=2))
+    assert limits() == (7200, 2)
+    routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(max_tokens=4096, timeout_seconds=300))
+    assert limits() == (7200, 2)
+    for kwargs in ({'job_timeout_seconds': 29}, {'job_timeout_seconds': 86401}, {'job_max_concurrent': 0}, {'job_max_concurrent': 65}):
+        with pytest.raises(ValidationError):
+            routes_settings.AiGenerationConfig(max_tokens=4096, timeout_seconds=600, **kwargs)

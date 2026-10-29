@@ -119,7 +119,9 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
         if stopped.is_set():
             raise PipelineCancelled("请求已取消")
 
-    kb = KnowledgeTools(kb_scope, check_cancel, max_chars=number("context_chars", 48000, 2000, 200000), top_k=top_k, question=question)
+    from src.core import ai_read_limits as read_limits
+    tool_timeout = number("tool_timeout_seconds", read_limits.TOOL_TIMEOUT_DEFAULT, read_limits.TOOL_TIMEOUT_MIN, read_limits.TOOL_TIMEOUT_MAX)
+    kb = KnowledgeTools(kb_scope, check_cancel, max_chars=number("context_chars", read_limits.CONTEXT_DEFAULT, read_limits.CONTEXT_MIN, read_limits.CONTEXT_MAX), top_k=top_k, question=question)
 
     def stage(name, label, started=None, **kwargs):
         data = {"stage": name, "label": label, "duration_ms": round((time.monotonic() - started) * 1000) if started else 0, **kwargs}
@@ -294,7 +296,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                                       notes=result.get('message') or f"记录 {len(review.points)} 项，待解决 {len(review.snapshot()['unresolved'])} 项；摘录已核对，结论未经独立核验")
                             else:
                                 execute = context.execute if context and call.name in conversation_context.HISTORY_LABELS else worker.execute
-                                result = await bounded(asyncio.to_thread(execute, call.name, call.arguments), 25, tools_phase=True)
+                                result = await bounded(asyncio.to_thread(execute, call.name, call.arguments), tool_timeout, tools_phase=True)
                                 if call.name in conversation_context.HISTORY_LABELS and not result.get('error') and not result.get('cached'):
                                     history_reads.append(result)
                             kb.read_refs = dict(worker.read_refs)
@@ -302,13 +304,15 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                                 setattr(kb,attribute,dict(getattr(worker,attribute)))
                             kb.hits, kb.cache, kb.used_chars = worker.hits, worker.cache, worker.used_chars
                         except asyncio.TimeoutError:
-                            result = {"error": "timeout", "message": "本次工具查阅超时，没有返回本次查询结果；此前已返回的资料仍有效"}
+                            active = getattr(worker, 'active_phase', None)
+                            logger.warning('知识库工具超时 tool=%s kb=%s limit_seconds=%s elapsed_seconds=%.3f active_phase=%s completed_phases_ms=%s', call.name, kb_scope, tool_timeout, time.monotonic() - started, active, dict(worker.timings))
+                            result = {"error": "timeout", "message": f"本次工具查阅超时（单次上限 {tool_timeout} 秒，亦受整轮剩余时间限制），未取得结果；此前已返回的资料仍有效"}
                             reason = "部分资料查阅超时，依据已读资料回答并说明缺口"
                         finally:
                             call_stopped.set()
                         repeated = repeated + 1 if result.get("cached") else 0
                         stage("knowledge_tool", call_label, started,
-                              status="partial" if result.get("error") else "ok", count=result_count(result),
+                              status="partial" if result.get("error") else "ok", count=None if result.get("error") else result_count(result),
                               notes=result.get("message") or ("复用本次已读结果" if result.get("cached") else result.get("note") or "已完成"))
                     delta = progress_tracker.observe(result)
                     progress = progress or any(delta[k] for k in ('new_evidence', 'new_navigation', 'new_history'))

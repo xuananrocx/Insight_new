@@ -1,3 +1,4 @@
+import { followAnswerJob, type AnswerSnapshot } from './answer-jobs'
 import type { DeepAiOptions } from '@/hooks/use-deep-ai-options'
 import { apiFetch } from '@/lib/account-api'
 
@@ -334,6 +335,8 @@ export type QaStreamResults = {
 }
 
 export type QaStreamCallbacks = {
+  onSnapshot?: (snapshot: AnswerSnapshot) => void
+  onConnection?: (message: string) => void
   onWarmup?: (data: { step: string; msg: string }) => void
   onStage?: (stage: QaTraceStage) => void
   onSources?: (sources: QaSource[]) => void
@@ -943,6 +946,23 @@ export const api = {
     },
     // 导出 KB：直接触发浏览器下载（返回 ZIP）
     exportUrl: (id: string) => `${API_BASE}/kbs/${id}/export`,
+    exportPreview: (id: string) => request<{ total: number; available: number; excluded: { file_id: number; path: string; reason: string }[]; token: string }>(`/kbs/${encodeURIComponent(id)}/export-preview`, { timeoutMs: 300000 }),
+    downloadPack: async (id: string, name: string, query = '') => {
+      const res = await apiFetch(`${API_BASE}/kbs/${encodeURIComponent(id)}/export${query}`)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(res.status === 403 ? '没有此知识库的导出权限，或权限已被撤销' : typeof body.detail === 'string' ? body.detail : `导出失败（${res.status}）`)
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${name.replace(/[\\/:*?"<>|]/g, '_')}.zip`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    },
     // 导入 KB Pack
     precheckImport: async (file: File): Promise<KbImportPrecheck> => {
       const form = new FormData()
@@ -1066,7 +1086,11 @@ export const api = {
       deepAiOptions?: DeepAiOptions,
       operation: 'ask' | 'expand' = 'ask',
       modelId?: string,
+      resume = false,
     ): Promise<void> => {
+     if (operation === 'ask' && sessionId && turnId) {
+       return followAnswerJob({ question, history, kb_scope: kbScope, provider_id: providerId, model_id: modelId, strict_knowledge: strictKnowledge ?? false, api_retry_count: apiRetryCount, deep_ai_options: deepAiOptions, operation, session_id: sessionId, turn_id: turnId, top_k: topK, mode }, cb, signal, resume)
+     }
      let terminal = false
      try {
       const res = await apiFetch(`${API_BASE}/qa/ask_stream`, {
@@ -1304,11 +1328,11 @@ export const api = {
 
   aiGeneration: {
     get: () =>
-      request<{ max_tokens: number; timeout_seconds: number; context_chars: number | null }>(
+      request<{ max_tokens: number; timeout_seconds: number; context_chars: number | null; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number }>(
         '/settings/ai_generation',
       ),
-    update: (config: { max_tokens: number; timeout_seconds: number; context_chars: number }) =>
-      request<{ max_tokens: number; timeout_seconds: number; context_chars: number }>(
+    update: (config: { max_tokens: number; timeout_seconds: number; context_chars: number; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number }) =>
+      request<{ max_tokens: number; timeout_seconds: number; context_chars: number; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number }>(
         '/settings/ai_generation',
         {
           method: 'PUT',

@@ -373,6 +373,41 @@ async def ask_stream_endpoint(req: AskRequest):
     )
 
 
+@router.post("/jobs")
+async def create_answer_job(req: AskRequest):
+    from src.qa import answer_jobs
+    from src.knowledge import rebuild
+    if not req.session_id or not req.turn_id or req.operation != "ask":
+        raise HTTPException(400, "后台生成需要会话和问题标识")
+    if rebuild.is_rebuilding():
+        raise HTTPException(503, "向量库重建中，请等待完成")
+    return await answer_jobs.create(req)
+
+
+@router.get("/jobs/{session_id}/{turn_id}")
+async def get_answer_job(session_id: str, turn_id: str):
+    from src.qa import answer_jobs
+    return await answer_jobs.read(session_id, turn_id)
+
+
+@router.post("/jobs/{session_id}/{turn_id}/stop")
+async def stop_answer_job(session_id: str, turn_id: str):
+    from src.qa import answer_jobs
+    await answer_jobs.stop(session_id, turn_id)
+    return {"ok": True}
+
+
+@router.get("/jobs/{session_id}")
+async def session_answer_jobs(session_id: str):
+    from src.qa import answer_jobs
+    from src.db import metadata_db
+    await asyncio.to_thread(answer_jobs.check, session_id)
+    def ids():
+        with metadata_db.get_cursor() as c:
+            return [r[0] for r in c.execute("SELECT turn_id FROM answer_jobs WHERE session_id=?", (session_id,))]
+    return {"turn_ids": await asyncio.to_thread(ids)}
+
+
 class SummarizeTitleRequest(BaseModel):
     provider_id: str | None = None
     model_id: str | None = Field(None, max_length=200)

@@ -65,6 +65,7 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
         ) : null}
       </div>
 
+      {isStreaming && thinking.connectionMessage && <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">{thinking.connectionMessage}</p>}
       {showDetails && expanded && thinking.warmup ? (
         <div className="border-t border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning-foreground/90">
           ⚡ {thinking.warmup}

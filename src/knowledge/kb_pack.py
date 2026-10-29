@@ -109,6 +109,7 @@ def export_kb_to_zip(
     kb_id: str,
     output_path: Path,
     progress: ProgressFn | None = None,
+    *, allow_partial: bool = False, expected_token: str | None = None,
 ) -> Path:
     """导出指定 KB 为 ZIP 文件。
 
@@ -119,15 +120,17 @@ def export_kb_to_zip(
     if not kb:
         raise ValueError(f"知识库不存在: {kb_id}")
 
-    files = metadata_db.list_files(kb_id=kb_id, limit=100000)
-    done_files = [f for f in files if f.get("status") == "done"]
-    from src.knowledge.reading_index import fingerprint
-    for file in done_files:
-        path = Path(file['absolute_path'])
-        if not path.is_file():
-            raise ValueError(f"原文件不存在，无法完整导出: {file['relative_path']}")
-        if file.get('content_hash') and fingerprint(path) != file['content_hash']:
-            raise ValueError(f"原文件已变化，请重新入库后导出: {file['relative_path']}")
+    from src.knowledge.export_plan import inspect_sources
+    done_files, export_plan = inspect_sources(kb_id)
+    if expected_token is not None and expected_token != export_plan['token']:
+        raise ValueError('文件状态已变化，请重新预检后导出')
+    if allow_partial and not expected_token:
+        raise ValueError('部分导出需要先预检并确认')
+    if export_plan['excluded'] and not allow_partial:
+        raise ValueError(f"有 {len(export_plan['excluded'])} 个文件无法完整导出，请先预检并选择处理方式")
+    if not done_files and export_plan['total']:
+        raise ValueError('没有可导出的已入库文档')
+    selected_chunks = {cid for f in done_files for cid in json.loads(f.get('chunk_ids_json') or '[]')}
     total_size = sum(f.get("file_size", 0) for f in done_files)
     total_chunks = sum(f.get("chunk_count", 0) for f in done_files)
     collection_name = kb["collection_name"]
@@ -195,6 +198,15 @@ def export_kb_to_zip(
         }
         from src.knowledge.pack_metadata import export_metadata
         manifest['derived_metadata'] = export_metadata(kb_id, done_files)
+        if export_plan['excluded']:
+            # KB-wide conclusions may depend on omitted sources. Retain only
+            # document summaries and let concepts/relations/overview rebuild.
+            derived = manifest['derived_metadata']
+            derived.update(concepts=[], relations=[], global_summary=None)
+            for doc in derived['documents']:
+                doc.update(concepts_extracted=0, concepts_count=0)
+            manifest['export_report'] = export_plan
+            zf.writestr('export-report.json', json.dumps(export_plan, ensure_ascii=False, indent=2))
         zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False, indent=2))
 
         # 2. documents/
@@ -233,6 +245,14 @@ def export_kb_to_zip(
                     embs = res.get("embeddings", [])
                     metas = res.get("metadatas", [])
                     for i, cid in enumerate(ids):
+                        if export_plan['excluded'] and cid not in selected_chunks:
+                            meta = metas[i] if i < len(metas) else {}
+                            matches = [f for f in done_files if
+                                       (meta.get('file_id') == f['id'] or
+                                        (meta.get('content_hash') == f.get('content_hash') and
+                                         meta.get('source_name') == Path(portable_path(f['relative_path'])).name))]
+                            if meta.get('chunk_type') != 'summary' or len(matches) != 1:
+                                continue
                         chunk_obj = {
                             "id": cid,
                             "text": docs[i] if i < len(docs) else "",

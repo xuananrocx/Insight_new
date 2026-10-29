@@ -1,3 +1,4 @@
+import { KbExportButton } from '@/components/kb-export-button'
 import { ManagementDialog } from '@/components/management-dialog'
 import { kbLabel } from '@/lib/kb-label'
 // 知识库管理页
@@ -22,7 +23,6 @@ import {
   FileText,
   Shield,
   Clock,
-  Download,
   Upload,
   Loader2,
   AlertTriangle,
@@ -176,18 +176,6 @@ export default function KbPage() {
   const openDeleteDialog = (kb: KB) => {
     setSelectedKb(kb)
     setShowDeleteDialog(true)
-  }
-
-  // ===== 导出 =====
-  const handleExport = (kb: KB) => {
-    // 用 a 标签触发浏览器原生下载（避免 fetch 大文件占内存）
-    const a = document.createElement('a')
-    a.href = api.kb.exportUrl(kb.id)
-    a.download = ''  // 让后端的 Content-Disposition 决定文件名
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
-    toast.success(`正在导出：${kbLabel(kb)}`)
   }
 
   // ===== 导入 =====
@@ -385,15 +373,7 @@ export default function KbPage() {
                 onClick={(e) => e.stopPropagation()}  /* 阻止冒泡到 Card（避免点按钮触发跳转） */
               >
                 {/* 导出按钮：所有 KB 都能导出（包括 default 和 builtin） */}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  disabled={!kb.capabilities.includes("export")}
-                  onClick={() => handleExport(kb)}
-                  title="导出 Pack"
-                >
-                  <Download className="h-4 w-4" />
-                </Button>
+                <KbExportButton id={kb.id} name={kb.name} allowed={kb.capabilities.includes("export")} compact />
                 {['owner', 'manager'].includes(kb.role || '') && kb.source !== 'builtin' && (
                   <Button
                     variant="ghost"

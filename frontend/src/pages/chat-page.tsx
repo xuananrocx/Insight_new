@@ -1,3 +1,5 @@
+import { apiFetch } from '@/lib/account-api'
+import { answerJobPath } from '@/lib/answer-jobs'
 import { ChatSessionHeader } from '@/components/chat-session-header'
 import { ApiModelSelect } from '@/components/api-model-select'
 import { accountApi, type ModelSelection } from '@/lib/account-api'
@@ -7,7 +9,7 @@ import { MessageNavigation } from '@/components/message-navigation'
 import { useChatScroll } from '@/hooks/use-chat-scroll'
 import { kbLabel, kbMetaSuffix } from '@/lib/kb-label'
 import { useDeepAiOptions } from '@/hooks/use-deep-ai-options'
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useState, useRef } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -219,10 +221,11 @@ export function ChatPage() {
     sessionId: string,
     history: ChatMessage[] | undefined,
     mode: RetrievalMode,
+    resumeTurn?: ChatTurn,
   ) {
     const providerId = selection?.provider_id || undefined
     const modelId = selection?.model_id || undefined
-    const turnId = createUuid()
+    const turnId = resumeTurn?.id ?? createUuid()
     const turn: ChatTurn = {
       id: turnId,
       question,
@@ -243,17 +246,28 @@ export function ChatPage() {
     const accumulatedStages: QaTraceStage[] = []
 
     try {
-      if (['ai', 'deep_ai'].includes(mode)) {
+      if (!resumeTurn && ['ai', 'deep_ai'].includes(mode)) {
         if (!activeProvider || !providerId || !modelId) throw new Error('请选择可用的 API 与模型')
         const saved = await accountApi.selectSessionModel(sessionId, providerId, modelId)
         modelQc.setQueryData(['session-model', sessionId], saved)
         setDraftModel(undefined)
       }
-      await ctx.appendTurn(sessionId, turn)
+      if (!resumeTurn) await ctx.appendTurn(sessionId, turn)
       await api.qa.askStream(
         question,
         history,
         {
+          onConnection: (message) => ctx.updateTurn(sessionId, turnId, t => patchThinking(t, th => ({ ...th, connectionMessage: message }))),
+          onSnapshot: (snapshot) => {
+            accumulated = snapshot.answer
+            accumulatedSources = snapshot.sources
+            accumulatedStages.splice(0, accumulatedStages.length, ...snapshot.trace)
+            ctx.updateTurn(sessionId, turnId, t => ({
+              ...patchThinking(t, th => ({ ...th, partialAnswer: snapshot.answer, stages: snapshot.trace,
+                sources: snapshot.sources, startedAt: snapshot.started_at, elapsedMs: snapshot.finished_at ? snapshot.finished_at - snapshot.started_at : undefined, status: snapshot.state === 'running' ? 'streaming' : snapshot.state === 'cancelled' ? 'cancelled' : snapshot.state === 'done' ? 'done' : 'error' })),
+              answer: snapshot.answer, sources: snapshot.sources, trace: snapshot.trace, error: snapshot.error || undefined,
+            }))
+          },
           onWarmup: (d) => {
             ctx.updateTurn(sessionId, turnId, (t) =>
               patchThinking(t, (th) => ({ ...th, warmup: d.msg })),
@@ -302,18 +316,12 @@ export function ChatPage() {
               usedProvider: data.used_provider,
             }))
             // 持久化（override 防止异步问题；检索模式 answer 为空但 sources 有命中）
-            ctx.persistTurn(sessionId, turnId, {
-              answer: data.answer,
-              sources: data.sources,
-              trace: data.trace,
-              usedProvider: data.used_provider,
-            })
             // 自动总结会话标题（异步，不阻塞主流程）
             // 不能依赖闭包里的 session（stale），要 fetch 最新状态
             void (async () => {
               try {
                 const latest = await api.sessions.get(sessionId)
-                if (latest.title !== '新会话' || !data.answer) return
+                if (resumeTurn || latest.title !== '新会话' || !data.answer) return
                 const result = await api.qa.summarizeTitle(question, data.answer, providerId, sessionId, modelId)
                 if (result.title) {
                   await ctx.renameSession(sessionId, result.title, true)
@@ -334,38 +342,13 @@ export function ChatPage() {
               ...patchThinking(t, (th) => ({ ...th, stages: stripRunningStages(th.stages), status: 'error', elapsedMs: Date.now() - th.startedAt })),
               answer, trace, sources: accumulatedSources, error: message,
             }))
-            void ctx.persistTurn(sessionId, turnId, { answer, trace, sources: accumulatedSources, error: message })
+
             // rebuild 进行中：toast 友好提示，让用户去看进度
             if ((error as any)?.rebuildInProgress) {
               toast.error('向量库重建中，请等待完成后再提问')
             }
           },
-          onCancelled: () => {
-            const trace = [...accumulatedStages, { stage: 'answer_result', label: '已停止回答', status: 'cancelled', notes: '用户已停止生成，保留已收到的内容' }]
-            // 主动 abort（停止按钮/切 KB/删除会话）：保留已生成内容并落库；
-            // 用本地累积值而非 activeSession（中断时会话可能已切走，activeSession 找不到该 turn）
-            ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...patchThinking(t, (th) => ({
-                ...th,
-                stages: stripRunningStages(th.stages),
-                partialAnswer: accumulated,
-                status: 'cancelled',
-                elapsedMs: Date.now() - th.startedAt,
-              })),
-              // 已有部分答案：保留并标记完成；无答案：标记已取消
-              answer: accumulated || t.answer,
-              error: '已停止生成',
-              trace,
-              sources: accumulatedSources,
-            }))
-            void ctx.persistTurn(sessionId, turnId, {
-                answer: accumulated,
-                sources: accumulatedSources,
-                trace,
-                error: '已停止生成',
-                usedProvider: undefined,
-              })
-          },
+
         },
         ac.signal,
         session?.kb_scope ?? selectedKbForNewSession ?? undefined,
@@ -379,11 +362,41 @@ export function ChatPage() {
         deepAiOptions,
         'ask',
         modelId,
+        !!resumeTurn,
       )
+    } catch (error) {
+      toast.error((error as Error).message || '无法开始生成')
+      ctx.updateTurn(sessionId, turnId, t => ({ ...patchThinking(t, th => ({ ...th, status: 'error' })), error: (error as Error).message }))
     } finally {
       useAnswerStreams.getState().end(sessionId)
     }
   }
+
+  const recoveryRef = useRef(new Set<string>())
+  useEffect(() => {
+    if (!session) return
+    const sid = session.id
+    if (recoveryRef.current.has(sid) || useAnswerStreams.getState().streaming[sid]) return
+    let cancelled = false
+    const recover = async () => {
+      if (cancelled || recoveryRef.current.has(sid) || useAnswerStreams.getState().streaming[sid]) return
+      try {
+        const response = await apiFetch(answerJobPath(sid))
+        if (!response.ok) return
+        const { turn_ids: ids } = await response.json() as { turn_ids: string[] }
+        if (cancelled) return
+        recoveryRef.current.add(sid)
+        // Only the latest turn can still run. Older turns are already persisted.
+        const last = session.turns.at(-1)
+        if (last && ids.includes(last.id) && !useAnswerStreams.getState().streaming[sid]) {
+          void handleAsk(last.question, sid, undefined, last.mode ?? session.retrieval_mode ?? 'ai', last)
+        }
+      } catch { /* Retry discovery without creating a generation. */ }
+    }
+    void recover()
+    const timer = setInterval(() => void recover(), 3000)
+    return () => { cancelled = true; clearInterval(timer) }
+  }, [session?.id, session?.turns.length])
 
   function handleStop(sessionId?: string) {
     const sid = sessionId ?? ctx.activeId

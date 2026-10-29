@@ -1,3 +1,4 @@
+import { KbExportButton } from '@/components/kb-export-button'
 import { ManagementDialog } from '@/components/management-dialog'
 import { kbLabel } from '@/lib/kb-label'
 // KB 详情页：单个知识库的元信息 / 统计 / 文档预览 / 绑定的会话
@@ -15,7 +16,6 @@ import {
   HardDrive,
   MessagesSquare,
   Pencil,
-  Download,
   Trash2,
   Shield,
   Clock,
@@ -157,12 +157,7 @@ export default function KbDetailPage() {
             )}
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" asChild disabled={!kb.capabilities.includes("export")}>
-              <a aria-disabled={!kb.capabilities.includes("export")} href={kb.capabilities.includes("export") ? api.kb.exportUrl(kb.id) : undefined}>
-                <Download className="mr-1.5 h-3.5 w-3.5" />
-                导出
-              </a>
-            </Button>
+            <KbExportButton id={kb.id} name={kb.name} allowed={kb.capabilities.includes("export")} />
             {['owner', 'manager'].includes(kb.role || '') && kb.source !== 'builtin' && (
               <Button variant="outline" size="sm" onClick={() => navigate('/kbs')}>
                 <Pencil className="mr-1.5 h-3.5 w-3.5" />
