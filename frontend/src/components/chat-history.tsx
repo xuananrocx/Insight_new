@@ -72,9 +72,9 @@ export function ChatHistory({ onNavigate }: { onNavigate?: () => void }) {
     } catch (error) { toast.error(String(error)) } finally { setBusy(false) }
   }
   function item(s: SessionSummary) {
-    return <div key={s.id} className={`session-row flex min-w-0 items-center gap-1 rounded-md px-2 py-1.5 ${ctx.activeId === s.id ? 'bg-accent' : 'hover:bg-accent/40'}`}>
+    return <div key={s.id} className={`session-row flex min-w-0 items-center gap-1 rounded-md px-2 py-1 ${ctx.activeId === s.id ? 'bg-accent' : 'hover:bg-accent/40'}`}>
       <button type="button" data-session-select className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => { ctx.selectSession(s.id); navigate('/'); onNavigate?.() }}>
-        <span className="min-w-0 flex-1 truncate text-[13px]" title={`${s.title} · ${s.turn_count}轮`}>{s.title}</span>
+        <span className="min-w-0 flex-1 truncate text-[12px]" title={`${s.title} · ${s.turn_count}轮`}>{s.title}</span>
         <span className="session-time shrink-0 text-[10px] text-muted-foreground">{streaming[s.id] ? '生成中' : new Date(s.updated_at).toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}</span>
       </button>
       <div className="session-actions">
@@ -145,7 +145,7 @@ export function ChatHistory({ onNavigate }: { onNavigate?: () => void }) {
         const sessions = ctx.sessions.filter(s => (s.group_id ?? 'ungrouped') === group.id && (matchesGroup || s.title.toLowerCase().includes(query.trim().toLowerCase())))
         if (query.trim() && !sessions.length && !matchesGroup) return null
         const closed = !query.trim() && collapsed[group.id]
-        return <div key={group.id} className="mb-3">
+        return <div key={group.id} className="mb-2">
           <div className="group-heading flex items-center gap-1 rounded-md px-1 hover:bg-accent/40">
             <button className="flex min-w-0 flex-1 items-center gap-2 px-1 py-2 text-left text-xs text-muted-foreground" onClick={() => setCollapsed({ ...collapsed, [group.id]: !collapsed[group.id] })} aria-expanded={!closed}>
               {closed ? <Folder className="h-4 w-4 shrink-0" /> : <FolderOpen className="h-4 w-4 shrink-0" />}<span className="flex-1 truncate" title={group.name}>{group.name}</span><span className="text-[11px]">{sessions.length}</span><ChevronRight className={`h-3 w-3 shrink-0 ${closed ? '' : 'rotate-90'}`} />

@@ -1,4 +1,4 @@
-import { InterfaceSettingsCard } from '@/components/interface-settings-card'
+import { InterfaceSettingsCard, DefaultThemeSettingsCard } from '@/components/interface-settings-card'
 import { SettingsLayout } from '@/components/settings-layout'
 import { useAuth } from '@/hooks/use-auth'
 import { kbLabel } from '@/lib/kb-label'
@@ -586,7 +586,7 @@ export function SettingsPage() {
 
       </> },
       { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
-      { id: 'interface', label: '界面与交互', description: '当前账号在此浏览器中的界面偏好，适用于所有会话。', content: <InterfaceSettingsCard /> },
+      { id: 'interface', label: '界面与交互', description: '系统默认外观与当前账号的界面交互偏好。', content: <><DefaultThemeSettingsCard /><InterfaceSettingsCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>
       {confirmDisable ? (

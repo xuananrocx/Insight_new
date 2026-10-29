@@ -13,6 +13,7 @@ from src.qa.rag import (
 )
 from src.core import ai_read_limits as read_limits
 from src.core import llm_client
+from src.core.interface_settings import ThemeKey, default_theme
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -733,3 +734,25 @@ def update_default_kb_system(req: UpdateDefaultKbRequest) -> DefaultKbInfo:
     _secure_write_yaml(config_path, raw)
     logger.info(f"系统默认知识库配置已更新: kb_id={kb_id}")
     return get_default_kb()
+
+
+class InterfaceSettingsInfo(BaseModel):
+    default_theme: ThemeKey = 'minimal'
+
+
+@router.get("/interface", response_model=InterfaceSettingsInfo)
+def get_interface_settings():
+    return InterfaceSettingsInfo(default_theme=default_theme())
+
+
+@router.put("/interface", response_model=InterfaceSettingsInfo)
+def update_interface_settings(req: InterfaceSettingsInfo):
+    from src.core.config import USER_CONFIG_PATH
+    with open(USER_CONFIG_PATH, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    if not isinstance(raw.get("interface"), dict):
+        raw["interface"] = {}
+    raw["interface"]["default_theme"] = req.default_theme
+    _secure_write_yaml(USER_CONFIG_PATH, raw)
+    settings.config["interface"] = raw["interface"]
+    return req

@@ -52,7 +52,7 @@ function SidebarContent({ collapsed, mobile = false, onToggle, onNavigate }: { c
     <Menu.Trigger asChild><button type="button" aria-label={label} title={collapsed ? label : undefined} className={cn('sidebar-menu-trigger', collapsed && 'is-collapsed', items.some(item => matches(item.to)) && 'bg-accent text-accent-foreground')}>
       <Icon className="h-4 w-4" />{!collapsed && <><span>{label}</span><ChevronRight className="h-3.5 w-3.5 text-muted-foreground" /></>}
     </button></Menu.Trigger>
-    <Menu.Portal><Menu.Content side="right" align="end" sideOffset={28} collisionPadding={12} className="sidebar-popup z-[90] w-60 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg">
+    <Menu.Portal><Menu.Content side="right" align="end" sideOffset={28} collisionPadding={12} className="sidebar-popup space-y-1 z-[90] w-60 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg">
       {items.map((item, index) => <div key={item.to}>
         {item.section && item.section !== items[index - 1]?.section && <>{index > 0 && <Menu.Separator className="mx-2 my-1 h-px bg-border" />}<Menu.Label className="px-3 py-2 text-[11px] font-normal text-muted-foreground">{item.section}</Menu.Label></>}
         <Menu.Item onSelect={() => go(item.to)} className={cn('flex cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-[13px] outline-none focus:bg-accent', matches(item.to) && 'bg-accent/60')}><item.icon className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="flex-1">{item.label}</span>{!!item.count && <span className="rounded-full bg-destructive/10 px-1.5 text-xs text-destructive">{item.count}</span>}</Menu.Item>
@@ -69,7 +69,7 @@ function SidebarContent({ collapsed, mobile = false, onToggle, onNavigate }: { c
       {([{ to: '/kbs', label: '知识库', icon: Library }, { to: '/knowledge', label: '文档', icon: Files }] satisfies Item[]).filter(item => available.includes(item.to)).map(item => <NavLink key={item.to} to={item.to} onClick={onNavigate} title={collapsed ? item.label : undefined} aria-label={item.label} className={({ isActive }) => cn('flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-[13px] hover:bg-accent/60', collapsed && 'justify-center px-0', isActive ? 'bg-accent font-medium' : 'text-foreground/80')}><item.icon className="h-4 w-4 shrink-0" />{!collapsed && item.label}</NavLink>)}
     </nav>
     {!collapsed && <div data-sidebar-history className="min-h-0 flex-1 overflow-hidden px-2"><ChatHistory onNavigate={onNavigate} /></div>}
-    <div className={cn('mt-auto shrink-0 space-y-0.5 border-t border-border/60 px-3 py-2', collapsed && 'px-2')}>
+    <div className={cn('mt-auto shrink-0 space-y-1 border-t border-border/60 px-3 py-2', collapsed && 'px-2')}>
       {menu('工作台', PanelsTopLeft, workItems)}
       {menu('设置', Settings, settingsItems)}
       <div className="pt-1"><AccountMenu collapsed={collapsed} onNavigate={onNavigate} /></div>

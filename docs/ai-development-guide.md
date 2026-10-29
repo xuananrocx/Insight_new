@@ -99,3 +99,9 @@ Linux/macOS：`python3.11 -m venv .venv`、`source .venv/bin/activate`、`python
 - [发布流程](release-process.md)
 - [按平台构建候选包](selective-build.md)
 - [Linux 部署说明](../deploy/linux/README.md)
+
+### 系统默认主题与个人偏好
+
+系统设置 → 界面与交互中的默认主题保存在用户配置 `interface.default_theme`，缺省为 `minimal`。`GET/PUT /api/v1/settings/interface` 沿用 `system.view/system.edit` 权限；公开的 `/api/v1/auth/status` 仅额外返回主题标识供登录页和普通用户使用，不返回配置全文。
+
+主题优先级为当前账号在此浏览器的显式选择 → 系统默认 → 简约灰白。个人主题按账号保存，选择“使用系统默认”会取消个人覆盖。旧的浏览器级主题仅迁移给升级后首个登录账号；历史版本无法区分自动写入与主动选择，因此保留已有值。无需数据库迁移，回退后端时旧前端/接口仍可运行，新前端遇到缺少默认主题字段时使用简约灰白。

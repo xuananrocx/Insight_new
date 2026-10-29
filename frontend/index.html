@@ -8,7 +8,7 @@
     <script>
       (function () {
         try {
-          var t = localStorage.getItem('amd-ui-theme') || 'minimal';
+          var t = localStorage.getItem('amd-ui-theme-rendered') || localStorage.getItem('amd-ui-theme') || 'minimal';
           var map = {
             'minimal': 'theme-minimal',
             'stripe-light': 'theme-stripe-light',

@@ -1,74 +1,68 @@
 import { createContext, useContext, useEffect, useState } from 'react'
-
-export type ThemeKey = 'minimal' | 'stripe-light' | 'linear' | 'macos'
-
-type ThemeProviderProps = {
-  children: React.ReactNode
-  defaultTheme?: ThemeKey
-  storageKey?: string
-}
+import { useQuery } from '@tanstack/react-query'
+import { accountApi, accountKey } from '@/lib/account-api'
+import { normalizeTheme, readThemePreference, type ThemeKey } from '@/lib/theme-preference'
+export type { ThemeKey } from '@/lib/theme-preference'
 
 type ThemeProviderState = {
   theme: ThemeKey
   setTheme: (theme: ThemeKey) => void
+  followsDefault: boolean
+  resetTheme: () => void
 }
+const ThemeProviderContext = createContext<ThemeProviderState | undefined>(undefined)
 
-const THEME_CLASS_MAP: Record<ThemeKey, string> = {
-  'minimal': 'theme-minimal',
-  'stripe-light': 'theme-stripe-light',
-  'linear': 'theme-linear',
-  'macos': 'theme-macos',
-}
-
-const initialState: ThemeProviderState = {
-  theme: 'minimal',
-  setTheme: () => null,
-}
-
-const ThemeProviderContext = createContext<ThemeProviderState>(initialState)
-
-export function ThemeProvider({
-  children,
-  defaultTheme = 'minimal',
-  storageKey = 'amd-ui-theme',
-  ...props
-}: ThemeProviderProps) {
-  const [theme, setThemeState] = useState<ThemeKey>(
-    () => {
-      try {
-        const saved = localStorage.getItem(storageKey)
-        // The retired Stripe dark theme migrates to the neutral theme.
-        if (saved === 'stripe-dark') return 'minimal'
-        return saved === 'minimal' || saved === 'stripe-light' || saved === 'linear' || saved === 'macos' ? saved : defaultTheme
-      } catch { return defaultTheme }
-    },
-  )
+export function ThemeProvider({ children, defaultTheme = 'minimal', storageKey = 'amd-ui-theme' }: {
+  children: React.ReactNode; defaultTheme?: ThemeKey; storageKey?: string
+}) {
+  const [key, setKey] = useState(() => accountKey(storageKey))
+  const read = (currentKey: string) => {
+    try { return readThemePreference(localStorage, currentKey, storageKey) } catch { return null }
+  }
+  const [preference, setPreference] = useState<ThemeKey | null>(() => read(key))
+  const { data } = useQuery({ queryKey: ['appearance-default'], queryFn: accountApi.status, staleTime: 30_000, refetchOnWindowFocus: true })
+  const theme = preference ?? normalizeTheme(data?.default_theme) ?? defaultTheme
 
   useEffect(() => {
-    const root = window.document.documentElement
-    root.classList.remove('theme-minimal', 'theme-stripe-light', 'theme-stripe-dark', 'theme-linear', 'theme-macos')
-    const cls = THEME_CLASS_MAP[theme]
-    if (cls) {
-      root.classList.add(cls)
+    const sync = () => {
+      const currentKey = accountKey(storageKey)
+      setKey(currentKey)
+      setPreference(read(currentKey))
     }
-    try { localStorage.setItem(storageKey, theme) } catch { /* Keep theme usable when storage is unavailable. */ }
-  }, [theme, storageKey])
+    sync()
+    window.addEventListener('insight-theme-account-change', sync)
+    window.addEventListener('storage', sync)
+    return () => {
+      window.removeEventListener('insight-theme-account-change', sync)
+      window.removeEventListener('storage', sync)
+    }
+    // Storage identity changes on sign-in; defaults must never become personal preferences.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey])
 
-  const value = {
-    theme,
-    setTheme: setThemeState,
+  useEffect(() => {
+    const root = document.documentElement
+    root.classList.remove('theme-minimal', 'theme-stripe-light', 'theme-stripe-dark', 'theme-linear', 'theme-macos')
+    root.classList.add(`theme-${theme}`)
+    try { localStorage.setItem('amd-ui-theme-rendered', theme) } catch { /* Cosmetic cache only. */ }
+  }, [theme])
+
+  const setTheme = (next: ThemeKey) => {
+    try { localStorage.setItem(key, next) } catch { /* Keep usable without storage. */ }
+    setPreference(next)
   }
-
-  return (
-    <ThemeProviderContext.Provider {...props} value={value}>
-      {children}
-    </ThemeProviderContext.Provider>
-  )
+  const resetTheme = () => {
+    // Explicit inheritance prevents the legacy preference from being imported again.
+    try { localStorage.setItem(key, 'system') } catch { /* Keep usable without storage. */ }
+    setPreference(null)
+  }
+  return <ThemeProviderContext.Provider value={{ theme, setTheme, followsDefault: preference === null, resetTheme }}>{children}</ThemeProviderContext.Provider>
 }
 
+// The provider and its context hook intentionally share one module.
+// eslint-disable-next-line react-refresh/only-export-components
 export const useTheme = () => {
   const context = useContext(ThemeProviderContext)
-  if (context === undefined)
-    throw new Error('useTheme must be used within a ThemeProvider')
+  if (!context) throw new Error('useTheme must be used within a ThemeProvider')
   return context
 }

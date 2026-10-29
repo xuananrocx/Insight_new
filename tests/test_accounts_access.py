@@ -575,3 +575,22 @@ def test_answer_job_read_stop_and_discovery_require_session_owner(env):
         assert 'private answer' not in result.text
     assert env.bob.post(f'{base}/{tid}/stop').status_code == 404
     assert env.alice.post(f'{base}/{tid}/stop').status_code == 200
+
+
+def test_interface_default_theme_permissions_and_persistence(env, monkeypatch):
+    import yaml
+    from src.core.config import settings, USER_CONFIG_PATH
+    from src.core.interface_settings import default_theme
+    monkeypatch.setitem(settings.config, 'interface', {})
+    assert default_theme() == 'minimal'
+    assert env.alice.put('/api/v1/settings/interface', json={'default_theme': 'linear'}).status_code == 403
+    assert env.admin.put('/api/v1/settings/interface', json={'default_theme': 'invalid'}).status_code == 422
+    assert env.admin.put('/api/v1/settings/interface', json={'default_theme': 'linear'}).status_code == 200
+    assert env.admin.get('/api/v1/settings/interface').json() == {'default_theme': 'linear'}
+    assert yaml.safe_load(USER_CONFIG_PATH.read_text())['interface']['default_theme'] == 'linear'
+    with TestClient(env.app) as anonymous:
+        result = anonymous.get('/api/v1/auth/status').json()
+        assert result['default_theme'] == 'linear'
+        assert set(result) == {'setup_required', 'registration_enabled', 'default_theme'}
+    monkeypatch.setitem(settings.config, 'interface', {'default_theme': 'bad'})
+    assert default_theme() == 'minimal'

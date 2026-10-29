@@ -10,6 +10,7 @@ let generation = new AbortController()
 export function setAccountSession(account: Account) {
   csrf = account.csrf || ''
   accountId = account.id
+  window.dispatchEvent(new Event('insight-theme-account-change'))
 }
 export function accountKey(key: string) { return accountId ? `${key}:${accountId}` : key }
 export function clearAccountRequests() { generation.abort(); generation = new AbortController(); csrf = ''; accountId = '' }
@@ -66,7 +67,7 @@ export async function accountRequest<T>(path: string, method = 'GET', body?: unk
 }
 
 export const accountApi = {
-  status: () => accountRequest<{ setup_required: boolean }>('/auth/status'),
+  status: () => accountRequest<{ setup_required: boolean; default_theme?: string }>('/auth/status'),
   me: () => accountRequest<Account>('/auth/me'),
   login: (username: string, password: string) => accountRequest<Account>('/auth/login', 'POST', { username, password }),
   setup: (username: string, password: string, token: string) => accountRequest('/auth/setup', 'POST', { username, password, token }),

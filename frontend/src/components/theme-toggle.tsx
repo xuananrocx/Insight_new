@@ -8,7 +8,7 @@ import { cn } from '@/lib/utils'
 
 
 export function ThemeToggle({ compact = false }: { compact?: boolean }) {
-  const { theme, setTheme } = useTheme()
+  const { theme, setTheme, followsDefault, resetTheme } = useTheme()
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -54,6 +54,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
           <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
             主题
           </div>
+          <button className="my-1 flex w-full items-center justify-between rounded-md px-2 py-1.5 text-[12px] hover:bg-accent" onClick={() => { resetTheme(); setOpen(false) }}>使用系统默认{followsDefault && <Check className="h-3 w-3" />}</button>
           {THEMES.map((t) => (
             <button
               key={t.key}
@@ -62,8 +63,8 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
                 setOpen(false)
               }}
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-accent',
-                theme === t.key && 'bg-accent/60',
+                'my-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[12px] transition-colors hover:bg-accent',
+                !followsDefault && theme === t.key && 'bg-accent/60',
               )}
             >
               <div className="flex gap-0.5">
@@ -76,7 +77,7 @@ export function ThemeToggle({ compact = false }: { compact?: boolean }) {
                 ))}
               </div>
               <span className="flex-1 text-left">{t.label}</span>
-              {theme === t.key ? <Check className="h-3 w-3 text-primary" /> : null}
+              {!followsDefault && theme === t.key ? <Check className="h-3 w-3 text-primary" /> : null}
             </button>
           ))}
         </div>
