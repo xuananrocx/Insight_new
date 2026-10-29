@@ -1,3 +1,4 @@
+import { InterfaceSettingsCard } from '@/components/interface-settings-card'
 import { SettingsLayout } from '@/components/settings-layout'
 import { useAuth } from '@/hooks/use-auth'
 import { kbLabel } from '@/lib/kb-label'
@@ -427,7 +428,7 @@ export function SettingsPage() {
   const cachedCount = e?.cached_models?.length ?? 0
 
   return (
-    <SettingsLayout title="系统设置" description="管理全局配置。" readOnly={!can('system.edit')} sections={[
+    <SettingsLayout title="系统设置" description="管理全局配置与本地界面偏好。" readOnly={!can('system.edit')} sections={[
       { id: 'retrieval', label: '知识库与检索', description: '默认知识库、向量模型与缓存', content: <>
       <Card className="mb-4 p-5">
         <div className="mb-4 flex items-center gap-2">
@@ -573,6 +574,7 @@ export function SettingsPage() {
 
       </> },
       { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
+      { id: 'interface', label: '界面与交互', description: '当前账号在此浏览器中的界面偏好，适用于所有会话。', content: <InterfaceSettingsCard /> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>
       {confirmDisable ? (
