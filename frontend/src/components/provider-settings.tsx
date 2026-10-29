@@ -13,6 +13,7 @@ import { ManagementDialog } from '@/components/management-dialog'
 import { AccessEditor } from '@/components/access-editor'
 import { useConfirm } from '@/components/confirmation-provider'
 import { ApiModelSelect } from '@/components/api-model-select'
+import { modelEditMessage, type ModelEditImpact } from '@/lib/model-edit'
 
 const providerQueryKey = ['account-providers']
 async function refreshApiQueries(qc: ReturnType<typeof useQueryClient>) {
@@ -30,7 +31,7 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
   const [name, setName] = useState(initial?.name || '')
   const [protocol, setProtocol] = useState(initial?.protocol || 'openai')
   const [url, setUrl] = useState(initial?.base_url || '')
-  const [models, setModels] = useState<ApiModel[]>(initial?.models || [{ model_id: '', display_name: '' }])
+  const [models, setModels] = useState<ApiModel[]>(initial?.models.map(m => ({ ...m, original_model_id: m.model_id })) || [{ model_id: '', display_name: '' }])
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -39,14 +40,22 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
   }
   async function save(event: FormEvent) {
     event.preventDefault()
-    if (initial?.models.some(old => !models.some(m => m.model_id.trim() === old.model_id)) &&
-        !await confirm('移除或修改模型 ID 后，使用这些模型的默认选择、会话及任务将需要重新选择。继续保存？')) return
     setBusy(true); setError('')
     try {
-      await accountRequest(`/providers${initial ? '/' + initial.id : ''}`, initial ? 'PUT' : 'POST', {
-        name, scope, protocol, base_url: url, models: models.map(m => ({ model_id: m.model_id, display_name: m.display_name, context_tokens: m.context_tokens, output_tokens: m.output_tokens })),
+      const body = {
+        name, scope, protocol, base_url: url,
+        models: models.map(m => ({ model_id: m.model_id, original_model_id: m.original_model_id, display_name: m.display_name, context_tokens: m.context_tokens, output_tokens: m.output_tokens })),
         api_key: key || (initial ? null : ''), enabled: initial?.enabled ?? true,
-      })
+        edit_version: initial?.edit_version,
+      }
+      let confirmation_token: string | undefined
+      if (initial) {
+        const impact = await accountRequest<ModelEditImpact>(`/providers/${initial.id}/edit-preview`, 'POST', body)
+        const message = modelEditMessage(impact, scope === 'team')
+        if (message && !await confirm(message)) return
+        confirmation_token = impact.confirmation_token
+      }
+      await accountRequest(`/providers${initial ? '/' + initial.id : ''}`, initial ? 'PUT' : 'POST', { ...body, confirmation_token })
       await refreshApiQueries(qc); onClose(); toast.success('API 配置已保存')
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
@@ -59,7 +68,9 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
       <label className="block text-sm">API 密钥<input className={accountInput} type="password" autoComplete="new-password" value={key} onChange={e => setKey(e.target.value)} maxLength={8192} placeholder={initial?.has_api_key ? '已保存；留空保留原密钥' : '服务无密钥要求时可留空'} /></label>
       <div className="space-y-3"><p className="text-sm font-medium">模型列表</p>{models.map((model, i) => <div key={i} className="space-y-2 rounded border p-3">
         <label className="block text-sm">模型 ID<input className={accountInput} value={model.model_id} onChange={e => patch(i, 'model_id', e.target.value)} required maxLength={200} placeholder="服务商提供的准确模型 ID" /></label>
+        <p className="text-xs text-muted-foreground">修改已有模型 ID 时，确认后同步默认选择与会话；删除后再添加视为不同模型。</p>
         <label className="block text-sm">显示名称（可选）<input className={accountInput} value={model.display_name} onChange={e => patch(i, 'display_name', e.target.value)} maxLength={80} placeholder="聊天选择器中显示的名称" /></label>
+        <p className="text-xs text-muted-foreground">显示名称仅影响展示，不改变实际调用的模型。</p>
         <details className="col-span-full text-xs text-muted-foreground"><summary className="cursor-pointer">模型能力（可选，摘要预算使用）</summary><p className="my-2">按服务商文档填写；留空表示未知，不根据模型名称推测。填写值不代表服务商保证。</p><div className="grid gap-3 sm:grid-cols-2">
           {(['context_tokens', 'output_tokens'] as const).map(key => <label key={key}>{key === 'context_tokens' ? '上下文容量（tokens）' : '最大输出（tokens）'}<input type="number" className={accountInput} value={model[key] ?? ''} min={key === 'context_tokens' ? 4096 : 256} onChange={e => setModels(items => items.map((item, index) => index === i ? { ...item, [key]: e.target.value === '' ? null : Number(e.target.value) } : item))} /></label>)}
         </div></details>

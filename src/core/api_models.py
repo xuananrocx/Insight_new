@@ -84,14 +84,14 @@ def selection_status(selection):
 
 
 def save_preferences(provider_id, model_id, retry_count):
-    if provider_id:
-        provider = a.resolve_provider(provider_id, model_id)
-        model_id = provider["chat_model"]
-    elif model_id:
-        raise HTTPException(422, "选择模型时必须指定 API")
     uid = a.user()["id"]
     with a.db.get_cursor() as cur:
         cur.execute("BEGIN IMMEDIATE")
+        if provider_id:
+            provider = a.resolve_provider(provider_id, model_id)
+            model_id = provider["chat_model"]
+        elif model_id:
+            raise HTTPException(422, "选择模型时必须指定 API")
         cur.execute(
             "UPDATE auth_users SET default_provider=? WHERE id=?", (provider_id, uid)
         )
@@ -118,22 +118,28 @@ def session_selection(session_id):
 
 
 def save_session_selection(session_id, provider_id, model_id):
-    a.require_owner("session", session_id)
-    p = a.resolve_provider(provider_id, model_id)
-    a.execute(
-        """INSERT INTO api_session_selection VALUES (?,?,?) ON CONFLICT(session_id)
-      DO UPDATE SET provider_id=excluded.provider_id,model_id=excluded.model_id""",
-        (session_id, p["id"], p["chat_model"]),
-    )
+    with a.db.get_cursor() as cur:
+        cur.execute("BEGIN IMMEDIATE")
+        a.require_owner("session", session_id)
+        p = a.resolve_provider(provider_id, model_id)
+        cur.execute(
+            """INSERT INTO api_session_selection VALUES (?,?,?) ON CONFLICT(session_id)
+            DO UPDATE SET provider_id=excluded.provider_id,model_id=excluded.model_id""",
+            (session_id, p["id"], p["chat_model"]),
+        )
+        cur.connection.commit()
     return session_selection(session_id)
 
 
 def freeze_session_default(session_id):
-    pref = preferences()
-    a.execute(
-        "INSERT OR IGNORE INTO api_session_selection VALUES (?,?,?)",
-        (session_id, pref["provider_id"], pref["model_id"]),
-    )
+    with a.db.get_cursor() as cur:
+        cur.execute("BEGIN IMMEDIATE")
+        pref = preferences()
+        cur.execute(
+            "INSERT OR IGNORE INTO api_session_selection VALUES (?,?,?)",
+            (session_id, pref["provider_id"], pref["model_id"]),
+        )
+        cur.connection.commit()
 
 
 def record_test(provider, kind, status, message):
