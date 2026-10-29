@@ -474,3 +474,15 @@
 .theme-minimal .chat-code-block pre { padding: 7px 17px 18px; line-height: 1.9; }
 .theme-minimal .chat-code-block pre code { color: #363b44; }
 .theme-minimal .chat-question-bubble { background: #e9eae8; border-color: #d9dcd8; color: #303438; }
+
+.theme-minimal[data-accent="blue"] { --primary: 213.51 34.53% 43.73%; --ring: 213.51 34.53% 43.73%; --primary-foreground: 0 0% 100%; }
+
+.theme-minimal[data-accent="slate"] { --primary: 206.47 17.00% 39.22%; --ring: 206.47 17.00% 39.22%; --primary-foreground: 0 0% 100%; }
+
+.theme-minimal[data-accent="terracotta"] { --primary: 14.61 46.18% 48.82%; --ring: 14.61 46.18% 48.82%; --primary-foreground: 22.50 100.00% 98.43%; }
+
+.theme-minimal[data-accent="moss"] { --primary: 136.15 12.87% 39.61%; --ring: 136.15 12.87% 39.61%; --primary-foreground: 0 0% 100%; }
+
+.theme-minimal[data-accent="stone"] { --primary: 30.00 11.11% 42.35%; --ring: 30.00 11.11% 42.35%; --primary-foreground: 0 0% 100%; }
+
+.theme-minimal[data-accent="terracotta"] .text-primary { color: #a34f36; }

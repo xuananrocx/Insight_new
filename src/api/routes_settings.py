@@ -13,7 +13,7 @@ from src.qa.rag import (
 )
 from src.core import ai_read_limits as read_limits
 from src.core import llm_client
-from src.core.interface_settings import ThemeKey, default_theme
+from src.core.interface_settings import ThemeKey, default_theme, AccentKey, default_accent
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -738,11 +738,12 @@ def update_default_kb_system(req: UpdateDefaultKbRequest) -> DefaultKbInfo:
 
 class InterfaceSettingsInfo(BaseModel):
     default_theme: ThemeKey = 'minimal'
+    default_accent: AccentKey | None = None
 
 
 @router.get("/interface", response_model=InterfaceSettingsInfo)
 def get_interface_settings():
-    return InterfaceSettingsInfo(default_theme=default_theme())
+    return InterfaceSettingsInfo(default_theme=default_theme(), default_accent=default_accent())
 
 
 @router.put("/interface", response_model=InterfaceSettingsInfo)
@@ -753,6 +754,8 @@ def update_interface_settings(req: InterfaceSettingsInfo):
     if not isinstance(raw.get("interface"), dict):
         raw["interface"] = {}
     raw["interface"]["default_theme"] = req.default_theme
+    if req.default_accent is not None:
+        raw["interface"]["default_accent"] = req.default_accent
     _secure_write_yaml(USER_CONFIG_PATH, raw)
     settings.config["interface"] = raw["interface"]
-    return req
+    return get_interface_settings()

@@ -586,11 +586,25 @@ def test_interface_default_theme_permissions_and_persistence(env, monkeypatch):
     assert env.alice.put('/api/v1/settings/interface', json={'default_theme': 'linear'}).status_code == 403
     assert env.admin.put('/api/v1/settings/interface', json={'default_theme': 'invalid'}).status_code == 422
     assert env.admin.put('/api/v1/settings/interface', json={'default_theme': 'linear'}).status_code == 200
-    assert env.admin.get('/api/v1/settings/interface').json() == {'default_theme': 'linear'}
+    assert env.admin.get('/api/v1/settings/interface').json() == {'default_theme': 'linear', 'default_accent': 'graphite'}
     assert yaml.safe_load(USER_CONFIG_PATH.read_text())['interface']['default_theme'] == 'linear'
     with TestClient(env.app) as anonymous:
         result = anonymous.get('/api/v1/auth/status').json()
         assert result['default_theme'] == 'linear'
-        assert set(result) == {'setup_required', 'registration_enabled', 'default_theme'}
+        assert set(result) == {'setup_required', 'registration_enabled', 'default_theme', 'default_accent'}
     monkeypatch.setitem(settings.config, 'interface', {'default_theme': 'bad'})
     assert default_theme() == 'minimal'
+
+
+def test_default_accent_validation_permissions_and_legacy_update(env, monkeypatch):
+    from src.core.config import settings, USER_CONFIG_PATH
+    import yaml
+    monkeypatch.setitem(settings.config, 'interface', {})
+    endpoint = '/api/v1/settings/interface'
+    assert env.alice.put(endpoint, json={'default_theme': 'minimal', 'default_accent': 'moss'}).status_code == 403
+    assert env.admin.put(endpoint, json={'default_accent': 'invalid'}).status_code == 422
+    response = env.admin.put(endpoint, json={'default_theme': 'minimal', 'default_accent': 'terracotta'})
+    assert response.json()['default_accent'] == 'terracotta'
+    assert yaml.safe_load(USER_CONFIG_PATH.read_text())['interface']['default_accent'] == 'terracotta'
+    assert env.admin.put(endpoint, json={'default_theme': 'linear'}).json()['default_accent'] == 'terracotta'
+    assert env.alice.get('/api/v1/auth/status').json()['default_accent'] == 'terracotta'

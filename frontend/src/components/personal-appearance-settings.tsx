@@ -1,3 +1,4 @@
+import { PersonalAccentPicker } from '@/components/accent-picker'
 import { useAuth } from '@/hooks/use-auth'
 import { DEFAULT_MENU_ORDER, MENU_LABELS, normalizeMenuOrder, visibleMenuOrder } from '@/lib/navigation'
 import { Palette, PanelLeft, ChevronUp, ChevronDown } from 'lucide-react'
@@ -97,6 +98,7 @@ export function AppearanceSettingsCard() {
           <span className="text-sm">主题</span>
           <ThemeToggle />
         </div>
+        {theme === 'minimal' && <PersonalAccentPicker />}
         {theme === 'macos' ? (
           <div>
             <div className="mb-2 flex items-center justify-between">

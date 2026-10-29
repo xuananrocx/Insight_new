@@ -26,11 +26,12 @@ class Setup(Credentials):
 
 @router.get("/auth/status")
 def status():
-    from src.core.interface_settings import default_theme
+    from src.core.interface_settings import default_theme, default_accent
     return {
         "setup_required": not bool(a.rows("SELECT 1 FROM auth_users LIMIT 1")),
         "registration_enabled": False,
         "default_theme": default_theme(),
+        "default_accent": default_accent(),
     }
 
 

@@ -1,3 +1,4 @@
+import { ACCENT_COLORS } from '@/lib/accent-colors'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import { ChevronRight, ChevronsUpDown, LogOut, ShieldCheck, SunMoon } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -8,7 +9,7 @@ import { cn } from '@/lib/utils'
 
 export function AccountMenu({ collapsed = false, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
   const { user, logout } = useAuth()
-  const { theme, setTheme, followsDefault, resetTheme } = useTheme()
+  const { theme, setTheme, followsDefault, resetTheme, accent, setAccent, resetAccent, followsDefaultAccent } = useTheme()
   const navigate = useNavigate()
   const roles = user.roles.filter(role => role.enabled).map(role => role.name).join('、') || '无启用角色'
   const initial = Array.from(user.username.trim())[0]?.toLocaleUpperCase() || '?'
@@ -23,12 +24,19 @@ export function AccountMenu({ collapsed = false, onNavigate }: { collapsed?: boo
       <Menu.Separator className="mx-2 my-1 h-px bg-border" />
       <Menu.Sub>
         <Menu.SubTrigger className={cn(itemClass, 'data-[state=open]:bg-accent')}><SunMoon className="h-4 w-4" /><span>外观</span><span className="ml-auto text-xs text-muted-foreground">{THEMES.find(t => t.key === theme)?.label}</span><ChevronRight className="h-3.5 w-3.5" /></Menu.SubTrigger>
-        <Menu.Portal><Menu.SubContent sideOffset={8} collisionPadding={12} className="sidebar-popup z-[100] w-52 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg">
+        <Menu.Portal><Menu.SubContent sideOffset={8} collisionPadding={12} className="sidebar-popup z-[100] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto w-52 rounded-xl border bg-popover p-1.5 text-popover-foreground shadow-lg">
           <Menu.RadioGroup value={followsDefault ? 'system' : theme} onValueChange={value => { if (value === 'system') resetTheme(); else { const selected = THEMES.find(t => t.key === value); if (selected) setTheme(selected.key) } }}>
             <Menu.RadioItem value="system" className={itemClass}><span className="flex w-4 justify-center"><Menu.ItemIndicator>✓</Menu.ItemIndicator></span>使用系统默认</Menu.RadioItem>
             <Menu.Separator className="mx-2 my-1 h-px bg-border" />
             {THEMES.map(t => <Menu.RadioItem key={t.key} value={t.key} className={itemClass}><span className="flex w-4 justify-center"><Menu.ItemIndicator>✓</Menu.ItemIndicator></span>{t.label}</Menu.RadioItem>)}
           </Menu.RadioGroup>
+          {theme === 'minimal' && <>
+            <Menu.Separator className="mx-2 my-1 h-px bg-border" /><Menu.Label className="px-3 py-1 text-xs text-muted-foreground">强调色</Menu.Label>
+            <Menu.RadioGroup value={followsDefaultAccent ? 'system' : accent} onValueChange={value => { if (value === 'system') resetAccent(); else { const c = ACCENT_COLORS.find(c => c.key === value); if (c) setAccent(c.key) } }}>
+              <Menu.RadioItem value="system" className={itemClass}>使用系统默认颜色<Menu.ItemIndicator className="ml-auto">✓</Menu.ItemIndicator></Menu.RadioItem>
+              {ACCENT_COLORS.map(c => <Menu.RadioItem key={c.key} value={c.key} className={itemClass} onSelect={e => e.preventDefault()}><span className="h-3.5 w-3.5 rounded-full" style={{ background: c.hex }} />{c.label}<Menu.ItemIndicator className="ml-auto">✓</Menu.ItemIndicator></Menu.RadioItem>)}
+            </Menu.RadioGroup>
+          </>}
         </Menu.SubContent></Menu.Portal>
       </Menu.Sub>
       <Menu.Separator className="mx-2 my-1 h-px bg-border" />

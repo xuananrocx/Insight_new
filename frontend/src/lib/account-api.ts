@@ -67,7 +67,7 @@ export async function accountRequest<T>(path: string, method = 'GET', body?: unk
 }
 
 export const accountApi = {
-  status: () => accountRequest<{ setup_required: boolean; default_theme?: string }>('/auth/status'),
+  status: () => accountRequest<{ setup_required: boolean; default_theme?: string; default_accent?: string }>('/auth/status'),
   me: () => accountRequest<Account>('/auth/me'),
   login: (username: string, password: string) => accountRequest<Account>('/auth/login', 'POST', { username, password }),
   setup: (username: string, password: string, token: string) => accountRequest('/auth/setup', 'POST', { username, password, token }),
