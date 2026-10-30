@@ -278,7 +278,7 @@ async def run(job, req, timeout):
                                 for s in snap["trace"]
                                 if not (
                                     s.get("stage") == data.get("stage")
-                                    and s.get("status") == "running"
+                                    and (s.get("status") == "running" or str(data.get("stage", "")).startswith("web_search_"))
                                 )
                             ]
                             snap["trace"].append(data)

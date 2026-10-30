@@ -1,10 +1,11 @@
-import { createContext, useContext, useEffect, useState, type ReactNode, type FormEvent } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode, type FormEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Button } from '@/components/ui/button'
 import { InsightLogo } from '@/components/insight-logo'
 import { accountApi, clearAccountRequests, setAccountSession, type Account } from '@/lib/account-api'
+import { createAccountRefresher } from '@/lib/account-refresh'
 
-const AuthContext = createContext<{ user: Account; can: (permission: string) => boolean; logout: () => Promise<void> } | null>(null)
+const AuthContext = createContext<{ user: Account; can: (permission: string) => boolean; logout: () => Promise<void>; refreshAccount: () => Promise<void> } | null>(null)
 export const accountInput = 'w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/30'
 
 export function useAuth() {
@@ -37,6 +38,29 @@ export function PasswordForm({ onDone }: { onDone: () => void }) {
 export function AuthBoundary({ children }: { children: ReactNode }) {
   const qc = useQueryClient()
   const [user, setUser] = useState<Account | null>(null)
+  const currentUser = useRef<Account | null>(null)
+  const refreshQueue = useRef<ReturnType<typeof createAccountRefresher> | null>(null)
+  const updateUser = useCallback((account: Account | null) => {
+    currentUser.current = account
+    setUser(account)
+  }, [])
+  const refreshAccount = useCallback(() => {
+    if (!refreshQueue.current) {
+      refreshQueue.current = createAccountRefresher(
+        () => accountApi.me(),
+        () => currentUser.current,
+        async account => {
+          clearAccountRequests('权限或 API 配置已更新，本次请求已取消，请重新操作')
+          setAccountSession(account)
+          currentUser.current = account
+          await qc.cancelQueries()
+          qc.clear()
+          if (currentUser.current === account) setUser(account)
+        },
+      )
+    }
+    return refreshQueue.current()
+  }, [qc])
   const [loading, setLoading] = useState(true)
   const [setup, setSetup] = useState(false)
   const [username, setUsername] = useState('')
@@ -46,6 +70,7 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false)
 
   function resetPage() {
+    updateUser(null)
     clearAccountRequests(); qc.clear()
     window.location.replace('/')
   }
@@ -63,57 +88,51 @@ export function AuthBoundary({ children }: { children: ReactNode }) {
         setSetup(s.setup_required)
         if (!s.setup_required) {
           const me = await accountApi.me().catch(() => null)
-          if (alive && me) { setAccountSession(me); setUser(me) }
+          if (alive && me) { setAccountSession(me); updateUser(me) }
         }
       } catch (err) { if (alive) setError((err as Error).message) }
       finally { if (alive) setLoading(false) }
     }
     void load()
     return () => { alive = false }
-  }, [])
+  }, [updateUser])
   useEffect(() => {
-    const expire = () => { clearAccountRequests(); qc.clear(); setUser(null); setError('登录已失效，请重新登录'); window.location.replace('/') }
+    const expire = () => { updateUser(null); clearAccountRequests(); qc.clear(); setError('登录已失效，请重新登录'); window.location.replace('/') }
     const storage = (e: StorageEvent) => { if (e.key === 'insight-auth-change') expire() }
     window.addEventListener('insight-session-expired', expire)
     window.addEventListener('storage', storage)
     return () => { window.removeEventListener('insight-session-expired', expire); window.removeEventListener('storage', storage) }
-  }, [qc])
+  }, [qc, updateUser])
 
   useEffect(() => {
     if (!user) return
-    let alive = true
     let running = false
     const refresh = async () => {
       if (running) return
       running = true
       try {
-        const me = await accountApi.me()
-        if (!alive) return
-        if (me.permission_revision !== user.permission_revision) {
-          clearAccountRequests(); setAccountSession(me)
-          await qc.cancelQueries(); qc.clear(); setUser(me)
-        }
+        await refreshAccount()
       } catch { /* Authentication expiry is handled by apiFetch. */ }
       finally { running = false }
     }
     const timer = window.setInterval(refresh, 10000)
     window.addEventListener('focus', refresh)
     window.addEventListener('insight-permissions-changed', refresh)
-    return () => { alive = false; clearInterval(timer); window.removeEventListener('focus', refresh); window.removeEventListener('insight-permissions-changed', refresh) }
-  }, [user, qc])
+    return () => { clearInterval(timer); window.removeEventListener('focus', refresh); window.removeEventListener('insight-permissions-changed', refresh) }
+  }, [user, refreshAccount])
 
   async function submit(e: FormEvent) {
     e.preventDefault(); setBusy(true); setError('')
     try {
       if (setup) { await accountApi.setup(username, password, token); setSetup(false); setToken('') }
       const account = await accountApi.login(username, password)
-      qc.clear(); setAccountSession(account); setUser(account); setPassword('')
+      qc.clear(); setAccountSession(account); updateUser(account); setPassword('')
       localStorage.setItem('insight-auth-change', String(Date.now()))
     } catch (err) { setError((err as Error).message) } finally { setBusy(false) }
   }
 
   if (loading) return <div className="grid min-h-screen place-items-center text-muted-foreground">正在连接 Insight…</div>
-  if (user && !user.must_change_password) return <AuthContext.Provider value={{ user, logout, can: permission => user.permissions.includes(permission) }}>{children}</AuthContext.Provider>
+  if (user && !user.must_change_password) return <AuthContext.Provider value={{ user, logout, refreshAccount, can: permission => user.permissions.includes(permission) }}>{children}</AuthContext.Provider>
   return <div className="grid min-h-screen place-items-center bg-muted/30 p-6">
     <div className="w-full max-w-md rounded-xl border bg-background p-8 shadow-sm">
       <div className="mb-6">

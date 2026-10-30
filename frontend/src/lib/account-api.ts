@@ -1,5 +1,5 @@
 export type Account = { roles: { id: string; name: string; enabled: boolean }[]; permissions: string[]; is_super: boolean; permission_revision: number; display_name?: string; note?: string; last_login?: number; created_at?: number; password_reset_at?: number;  id: string; username: string; role: 'admin' | 'member'; disabled: boolean; must_change_password: boolean; default_provider: string | null; csrf?: string }
-export type ApiModel = { original_model_id?: string; context_tokens?: number | null; output_tokens?: number | null; model_id: string; display_name: string; connection_status?: string | null; connection_message?: string | null; connection_checked_at?: number | null; tools_status?: string | null; tools_message?: string | null; tools_checked_at?: number | null }
+export type ApiModel = { web_search?: 'off' | 'anthropic' | 'responses'; original_model_id?: string; context_tokens?: number | null; output_tokens?: number | null; model_id: string; display_name: string; connection_status?: string | null; connection_message?: string | null; connection_checked_at?: number | null; tools_status?: string | null; tools_message?: string | null; tools_checked_at?: number | null }
 export type ModelSelection = { provider_id: string | null; model_id: string | null; valid: boolean; reason?: string | null; provider_name?: string; model_label?: string; retry_count?: number }
 export type Provider = { edit_version?: string; id: string; name: string; scope: 'personal' | 'team'; protocol: string; base_url: string; chat_model: string; enabled: boolean; has_api_key: boolean; manageable: boolean; usable: boolean; grantable: boolean; models: ApiModel[] }
 export type Member = { id: string; username: string; role?: string }
@@ -13,7 +13,7 @@ export function setAccountSession(account: Account) {
   window.dispatchEvent(new Event('insight-theme-account-change'))
 }
 export function accountKey(key: string) { return accountId ? `${key}:${accountId}` : key }
-export function clearAccountRequests() { generation.abort(); generation = new AbortController(); csrf = ''; accountId = '' }
+export function clearAccountRequests(message = '登录状态已变化，本次请求已取消，请刷新页面后重试') { generation.abort(new DOMException(message, 'AbortError')); generation = new AbortController(); csrf = ''; accountId = '' }
 
 export async function apiFetch(input: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
@@ -57,8 +57,8 @@ export function accountErrorMessage(value: unknown, status: number): string {
   return [...new Set(messages)].join('；') || fallback
 }
 
-export async function accountRequest<T>(path: string, method = 'GET', body?: unknown): Promise<T> {
-  const res = await apiFetch(`/api/v1${path}`, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
+export async function accountRequest<T>(path: string, method = 'GET', body?: unknown, signal?: AbortSignal): Promise<T> {
+  const res = await apiFetch(`/api/v1${path}`, { method, signal, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) })
   if (!res.ok) {
     const value = await res.json().catch(() => ({}))
     throw new Error(accountErrorMessage(value, res.status))

@@ -7,13 +7,13 @@ import { useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { ManagementDialog } from '@/components/management-dialog'
 import { Toggle } from '@/components/ui/toggle-switch'
 import { AccessEditor, PreviewPanel, actionNames, type Preview } from '@/components/access-editor'
 import { accountInput, useAuth } from '@/hooks/use-auth'
 import { accountApi, accountRequest, type Account } from '@/lib/account-api'
 import { ProviderSettings } from '@/pages/account-page'
+import { TeamApiStats } from '@/components/team-api-stats'
 
 type MemberScope = { roles: string[]; users: string[] }
 type Role = { id: string; name: string; description: string; permissions: string[]; enabled: boolean; protected: boolean; users_count: number; member_scope?: MemberScope | null }
@@ -21,7 +21,7 @@ type Capability = { key: string; group: string; label: string; requires?: string
 type Resource = { id: string; name: string; kind: 'kb' | 'api'; scope: string; enabled: boolean; owner?: { id: string; username: string } }
 const error = (e: unknown) => toast.error((e as Error).message)
 function Page({ title, description, children }: { title: string; description: string; children: ReactNode }) {
-  return <div className="mx-auto max-w-6xl space-y-5 p-4 md:p-8"><div><p className="mb-1 text-xs text-muted-foreground">系统管理</p><h1 className="text-2xl font-semibold">{title}</h1><p className="mt-2 text-sm text-muted-foreground">{description}</p></div>{children}</div>
+  return <div className="mx-auto max-w-[932px] space-y-5 p-4 md:p-8"><div><p className="mb-1 text-xs text-muted-foreground">系统管理</p><h1 className="text-2xl font-semibold">{title}</h1><p className="mt-2 text-sm text-muted-foreground">{description}</p></div>{children}</div>
 }
 function RoleChoices({ roles, ids, onChange, disabled = false }: { roles: Role[]; ids: string[]; onChange: (ids: string[]) => void; disabled?: boolean }) {
   const { user } = useAuth()
@@ -187,8 +187,13 @@ function ResourcePolicy({ resource }: { resource: Resource }) {
 
 export function TeamApiPage() {
   const { can } = useAuth()
-  const stats = useQuery({ queryKey: ['team-api-stats'], queryFn: () => accountRequest<{ id: string; name: string; calls: number; token_input: number; token_output: number; failures: number }[]>('/admin/api-stats'), enabled: can('api.stats') })
-  return <Page title="团队 API" description="配置管理、使用授权和调用统计分别控制。包括管理员在内，调用团队 API 都需要明确授权；服务地址不设域名白名单。"><ProviderSettings team />{can('api.stats') && <Card className="space-y-3 p-5"><h2 className="font-semibold">团队调用统计</h2><p className="text-xs text-muted-foreground">仅显示汇总，不含用户问题和回答。统计基于升级后保留且启用了记录的调用日志；当前调用链暂未采集 Token 用量。</p>{stats.error && <p className="text-destructive">{stats.error.message}</p>}{stats.data?.map(s => <p className="text-sm" key={s.id}>{s.name}：{s.calls} 次调用 · {s.failures} 次失败</p>)}</Card>}</Page>
+  const [tab, setTab] = useState('config')
+  const [statsOpened, setStatsOpened] = useState(false)
+  return <Page title="团队 API" description="配置管理、使用授权和调用统计分别控制。包括管理员在内，调用团队 API 都需要明确授权；服务地址不设域名白名单。">
+    <div className="flex gap-2 border-b pb-3" role="tablist" aria-label="团队 API 分类"><Button role="tab" aria-selected={tab === 'config'} variant={tab === 'config' ? 'secondary' : 'ghost'} onClick={() => setTab('config')}>API 配置</Button>{can('api.stats') && <Button role="tab" aria-selected={tab === 'stats'} variant={tab === 'stats' ? 'secondary' : 'ghost'} onClick={() => { setStatsOpened(true); setTab('stats') }}>调用统计</Button>}</div>
+    <div hidden={tab !== 'config'}><ProviderSettings team /></div>
+    {can('api.stats') && <div hidden={tab !== 'stats'}>{statsOpened && <TeamApiStats />}</div>}
+  </Page>
 }
 
 type AuditRecord = { id: number; actor: string | null; username: string | null; action: string; action_label: string; target: string; details: string[]; created_at: number }

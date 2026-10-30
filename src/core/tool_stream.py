@@ -55,6 +55,8 @@ class Assembly:
                     block['text']=block.get('text','')+token
                 elif delta.get('type')=='input_json_delta':
                     self.partial[index]=self.partial.get(index,'')+delta.get('partial_json','')
+                elif delta.get('type')=='citations_delta':
+                    block.setdefault('citations', []).append(delta['citation'])
                 elif delta.get('type')=='thinking_delta':
                     block['thinking']=block.get('thinking','')+delta.get('thinking','')
                 elif delta.get('type')=='signature_delta':

@@ -79,6 +79,7 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
   const timing = duration == null ? '' : ` · ${(duration / 1000).toFixed(1)}s`
   const partial = isStreaming ? thinking.partialAnswer?.trim() : ''
   const statusLabel = thinking.status === 'done' ? '已完成' : thinking.status === 'partial' ? '部分完成' : thinking.status === 'error' ? '未完成' : '已停止'
+  const webSources = Array.from(new Map(thinking.stages.flatMap(s => s.web_sources ?? []).map(s => [s.url, s])).values())
   const latestStage = thinking.stages.at(-1)?.label
   const label = isStreaming
     ? <><span className="inline-block w-[5em] whitespace-nowrap align-bottom">{thinking.connectionMessage ? '恢复连接中' : showDetails ? <span key={phraseIndex} className="inline-block animate-in fade-in duration-300 motion-reduce:animate-none">{thinkingPhrases[phraseIndex]}</span> : '生成中'}</span>{showDetails && latestStage ? ` · ${latestStage}` : ''}{timing}</>
@@ -111,6 +112,8 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
           </button>
         ) : null}
       </div>
+
+      {webSources.length > 0 && <details className="border-t border-border/30 px-3 py-2 text-xs"><summary className="cursor-pointer text-muted-foreground">网页来源 · {webSources.length}</summary><ul className="mt-2 max-h-40 space-y-1 overflow-y-auto">{webSources.map(source => <li key={source.url}>{/^https?:\/\//i.test(source.url) && <a href={source.url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{source.title}</a>}<span className="ml-2 text-[10px] text-muted-foreground">{source.cited ? '回答引用' : '搜索结果'}</span></li>)}</ul></details>}
 
       {isStreaming && thinking.connectionMessage && <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">{thinking.connectionMessage}</p>}
       {showDetails && expanded && thinking.warmup ? (

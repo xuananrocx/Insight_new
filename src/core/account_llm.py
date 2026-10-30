@@ -24,6 +24,7 @@ class AccountChatClient(LLMClient):
         }[provider["protocol"]]
         label = f"{provider['name']} · {provider['chat_model']}"
         impl = cls(label, cfg, cfg["api_key"])
+        impl.web_search_mode = provider.get("web_search", "off")
         self._providers = {label: impl}
         self._chat_chain = [label]
 

@@ -667,3 +667,18 @@ def api_stats():
       COALESCE(SUM(l.token_output),0) token_output,COALESCE(SUM(CASE WHEN l.success=0 THEN 1 ELSE 0 END),0) failures,
       AVG(l.duration_ms) avg_duration_ms FROM auth_providers p LEFT JOIN permission_call_usage c ON p.id=c.provider_id
       LEFT JOIN ai_call_logs l ON l.id=c.log_id WHERE p.scope='team' GROUP BY p.id,p.name""")
+
+
+@router.get('/admin/api-stats/users')
+def api_user_stats(days: int = 7, provider_id: str = '', model: str = '', search: str = '',
+                   include_tests: bool = False, sort: Literal['calls', 'failures', 'recent'] = 'calls',
+                   page: int = 1, page_size: int = 20, user_key: str | None = None):
+    p.require('api.stats')
+    if days not in (1, 7, 30, 90) or page < 1 or page_size not in (20, 50) or max(map(len, (provider_id, model, search, user_key or ''))) > 200:
+        raise HTTPException(422, '统计筛选参数无效')
+    from src.core.team_api_stats import query
+    result = query(days=days, provider_id=provider_id, model=model, search=search,
+                   include_tests=include_tests, sort=sort, page=page, page_size=page_size, user_key=user_key)
+    result['providers'] = a.rows("SELECT id,name FROM auth_providers WHERE scope='team' ORDER BY name,id")
+    result['models'] = a.rows("SELECT DISTINCT m.model_id FROM api_models m JOIN auth_providers p ON p.id=m.provider_id WHERE p.scope='team' AND (?='' OR p.id=?) ORDER BY m.model_id LIMIT 200", (provider_id, provider_id))
+    return result

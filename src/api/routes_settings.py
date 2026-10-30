@@ -372,6 +372,7 @@ def update_llm_timeouts(req: LLMTimeoutsInfo) -> LLMTimeoutsInfo:
 
 
 class AiGenerationConfig(BaseModel):
+    web_search_enabled: bool | None = None
     max_tokens: int  # 单次模型调用的输出 token 上限（推理模型含思考部分）
     timeout_seconds: int  # 作答阶段时长预算（秒）
     job_timeout_seconds: int | None = Field(None, ge=30, le=86400)
@@ -385,6 +386,7 @@ def get_ai_generation() -> AiGenerationConfig:
     gen = settings.config.get("qa", {}).get("ai_generation") or {}
     deep = settings.config.get("qa", {}).get("deep_ai") or {}
     return AiGenerationConfig(
+        web_search_enabled=bool(gen.get("web_search_enabled", False)),
         job_timeout_seconds=int(gen.get("job_timeout_seconds", 3600)),
         job_max_concurrent=int(gen.get("job_max_concurrent", 4)),
         max_tokens=int(gen.get("max_tokens", deep.get("max_tokens", 81920))),
@@ -406,6 +408,8 @@ def update_ai_generation(req: AiGenerationConfig) -> AiGenerationConfig:
         raise HTTPException(status_code=400, detail="工具查阅超时需在 5 至 600 秒之间")
     values = dict(settings.config.get("qa", {}).get("ai_generation") or {})
     values.update(max_tokens=req.max_tokens, timeout_seconds=req.timeout_seconds)
+    if req.web_search_enabled is not None:
+        values["web_search_enabled"] = req.web_search_enabled
     for key in ("job_timeout_seconds", "job_max_concurrent"):
         if getattr(req, key) is not None:
             values[key] = getattr(req, key)

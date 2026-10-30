@@ -1,3 +1,4 @@
+import { Toggle } from '@/components/ui/toggle-switch'
 import { InterfaceSettingsCard, DefaultThemeSettingsCard } from '@/components/interface-settings-card'
 import { SettingsLayout } from '@/components/settings-layout'
 import { useAuth } from '@/hooks/use-auth'
@@ -130,15 +131,16 @@ function AiGenerationConfigCard() {
     toolTimeout: number
     jobTimeout: number
     jobMax: number
+    webSearch: boolean
   } | null>(null)
   const [confirmLargeTokens, setConfirmLargeTokens] = useState(false)
   // 服务端数据加载前不渲染表单；用户编辑后以 draft 为准
   const form = draft ?? (data
-    ? { maxTokens: data.max_tokens, timeoutSeconds: data.timeout_seconds, contextChars: data.context_chars ?? 48000, toolTimeout: data.tool_timeout_seconds ?? 25, jobTimeout: data.job_timeout_seconds ?? 3600, jobMax: data.job_max_concurrent ?? 4 }
+    ? { maxTokens: data.max_tokens, timeoutSeconds: data.timeout_seconds, contextChars: data.context_chars ?? 48000, toolTimeout: data.tool_timeout_seconds ?? 25, jobTimeout: data.job_timeout_seconds ?? 3600, jobMax: data.job_max_concurrent ?? 4, webSearch: data.web_search_enabled ?? false }
     : null)
 
   const saveMutation = useMutation({
-    mutationFn: (values: { maxTokens: number; timeoutSeconds: number; contextChars: number; toolTimeout: number; jobTimeout: number; jobMax: number }) =>
+    mutationFn: (values: { maxTokens: number; timeoutSeconds: number; contextChars: number; toolTimeout: number; jobTimeout: number; jobMax: number; webSearch: boolean }) =>
       api.aiGeneration.update({
         max_tokens: values.maxTokens,
         timeout_seconds: values.timeoutSeconds,
@@ -146,6 +148,7 @@ function AiGenerationConfigCard() {
         tool_timeout_seconds: values.toolTimeout,
         job_timeout_seconds: values.jobTimeout,
         job_max_concurrent: values.jobMax,
+        web_search_enabled: values.webSearch,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings', 'ai_generation'] })
@@ -209,6 +212,7 @@ function AiGenerationConfigCard() {
       </div>
       <div className="mt-4 border-t pt-3">
         <div className="mb-2 text-[12px] font-medium text-muted-foreground">深度 AI 专项</div>
+        <div className="mb-4"><label className="flex items-center justify-between text-sm">启用联网搜索<Toggle label="启用联网搜索" checked={form.webSearch} onChange={webSearch => setDraft({ ...form, webSearch })} /></label><p className="mt-1 text-xs text-muted-foreground">仅深度 AI 使用。模型需单独配置服务端搜索能力，由 AI 自主决定是否搜索。关闭后新提问不提供搜索工具。</p></div>
         <div className="mb-4"><label className="mb-1.5 block text-[13px] font-medium">单次工具查阅超时（秒）</label><input type="number" min={5} max={600} value={form.toolTimeout} onChange={e => setDraft({ ...form, toolTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">默认 25 秒，可设 5–600 秒。用于检索、目录与原文读取等工具，不是 API 网络超时；开启整轮时限时仍受剩余时间限制。保存后新提问生效。</p></div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>

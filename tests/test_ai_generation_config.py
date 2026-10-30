@@ -21,6 +21,16 @@ def config_env(monkeypatch, tmp_path):
 def test_get_returns_defaults_without_config(config_env):
     value = routes_settings.get_ai_generation()
     assert value.max_tokens == 81920 and value.timeout_seconds == 600 and value.context_chars == 48000
+    assert value.web_search_enabled is False
+
+
+def test_web_search_switch_survives_legacy_update(config_env):
+    routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(
+        max_tokens=81920, timeout_seconds=600, web_search_enabled=True))
+    routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(
+        max_tokens=81920, timeout_seconds=600))
+    assert routes_settings.get_ai_generation().web_search_enabled is True
+    assert yaml.safe_load(config_env.read_text())['qa']['ai_generation']['web_search_enabled'] is True
 
 
 def test_get_prefers_ai_generation_over_legacy_deep_ai(config_env):

@@ -278,6 +278,7 @@ export type QaTraceCandidate = {
 }
 
 export type QaTraceStage = {
+  web_sources?: { url: string; title: string; cited: boolean }[]
   stage: string
   label: string
   count?: number
@@ -1328,11 +1329,11 @@ export const api = {
 
   aiGeneration: {
     get: () =>
-      request<{ max_tokens: number; timeout_seconds: number; context_chars: number | null; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number }>(
+      request<{ max_tokens: number; timeout_seconds: number; context_chars: number | null; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number; web_search_enabled?: boolean }>(
         '/settings/ai_generation',
       ),
-    update: (config: { max_tokens: number; timeout_seconds: number; context_chars: number; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number }) =>
-      request<{ max_tokens: number; timeout_seconds: number; context_chars: number; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number }>(
+    update: (config: { max_tokens: number; timeout_seconds: number; context_chars: number; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number; web_search_enabled?: boolean }) =>
+      request<{ max_tokens: number; timeout_seconds: number; context_chars: number; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number; web_search_enabled?: boolean }>(
         '/settings/ai_generation',
         {
           method: 'PUT',

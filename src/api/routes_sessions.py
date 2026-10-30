@@ -88,6 +88,9 @@ def _trim_trace(trace: list[dict] | None) -> list[dict]:
             "duration_ms": st.get("duration_ms"),
             "notes": st.get("notes"),
         }
+        if isinstance(st.get('web_sources'), list):
+            from src.core.web_search import public_sources
+            item['web_sources'] = public_sources(st['web_sources'])
         if st.get('stage') == 'conversation_context' and isinstance(st.get('context'), dict):
             item['context'] = {k: v for k, v in st['context'].items() if k in {
                 'candidate_turns', 'recent_turns', 'summary_turns', 'summary_version', 'preferences_loaded',

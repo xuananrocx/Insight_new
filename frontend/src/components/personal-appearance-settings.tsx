@@ -18,7 +18,7 @@ export function SidebarSettingsCard() {
     DEFAULT_MENU_ORDER,
   )
 
-  const visibleOrder = visibleMenuOrder(menuOrder, can, showLogs).filter(path => ['/review', '/stats', '/ai-logs', '/logs'].includes(path))
+  const visibleOrder = visibleMenuOrder(menuOrder, can, showLogs).filter(path => ['/review', '/stats', '/ai-logs', '/logs', '/admin/knowledge-access'].includes(path))
   const move = (idx: number, dir: 'up' | 'down') => {
     const target = dir === 'up' ? idx - 1 : idx + 1
     if (target < 0 || target >= visibleOrder.length) return
