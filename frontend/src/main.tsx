@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider defaultTheme="stripe-light" storageKey="amd-ui-theme">
+      <ThemeProvider defaultTheme="minimal" storageKey="amd-ui-theme">
         <BrowserRouter>
           <App />
         </BrowserRouter>

@@ -1,0 +1,7 @@
+"""Shared validation and runtime limits for deep AI reading."""
+CONTEXT_DEFAULT = 48000
+CONTEXT_MIN = 2000
+CONTEXT_MAX = 1_000_000
+TOOL_TIMEOUT_DEFAULT = 25
+TOOL_TIMEOUT_MIN = 5
+TOOL_TIMEOUT_MAX = 600

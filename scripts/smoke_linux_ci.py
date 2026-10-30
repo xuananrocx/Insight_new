@@ -22,6 +22,7 @@ def main():
         'reading_indexes', 'ai_generation_config', 'summary_jobs',
         'summary_staleness', 'summary_stream_policy', 'global_summary_backfill',
         'summarize_map_reduce', 'deployment_regressions',
+        'answer_jobs', 'export_plan', 'model_availability', 'tool_agent',
     ]
     for group in (regression_files, ['default_kb']):
         subprocess.run(['docker', 'run', '--rm', '--network', 'none',

@@ -1,3 +1,4 @@
+import { InterfaceSettingsCard, DefaultThemeSettingsCard } from '@/components/interface-settings-card'
 import { SettingsLayout } from '@/components/settings-layout'
 import { useAuth } from '@/hooks/use-auth'
 import { kbLabel } from '@/lib/kb-label'
@@ -126,19 +127,25 @@ function AiGenerationConfigCard() {
     maxTokens: number
     timeoutSeconds: number
     contextChars: number
+    toolTimeout: number
+    jobTimeout: number
+    jobMax: number
   } | null>(null)
   const [confirmLargeTokens, setConfirmLargeTokens] = useState(false)
   // 服务端数据加载前不渲染表单；用户编辑后以 draft 为准
   const form = draft ?? (data
-    ? { maxTokens: data.max_tokens, timeoutSeconds: data.timeout_seconds, contextChars: data.context_chars ?? 48000 }
+    ? { maxTokens: data.max_tokens, timeoutSeconds: data.timeout_seconds, contextChars: data.context_chars ?? 48000, toolTimeout: data.tool_timeout_seconds ?? 25, jobTimeout: data.job_timeout_seconds ?? 3600, jobMax: data.job_max_concurrent ?? 4 }
     : null)
 
   const saveMutation = useMutation({
-    mutationFn: (values: { maxTokens: number; timeoutSeconds: number; contextChars: number }) =>
+    mutationFn: (values: { maxTokens: number; timeoutSeconds: number; contextChars: number; toolTimeout: number; jobTimeout: number; jobMax: number }) =>
       api.aiGeneration.update({
         max_tokens: values.maxTokens,
         timeout_seconds: values.timeoutSeconds,
         context_chars: values.contextChars,
+        tool_timeout_seconds: values.toolTimeout,
+        job_timeout_seconds: values.jobTimeout,
+        job_max_concurrent: values.jobMax,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings', 'ai_generation'] })
@@ -196,20 +203,26 @@ function AiGenerationConfigCard() {
           <p className="mt-1 text-[11px] text-muted-foreground">作答阶段的最长生成时间，建议 300-1800 秒</p>
         </div>
       </div>
+      <div className="mt-4 grid grid-cols-1 gap-4 border-t pt-3 sm:grid-cols-2">
+        <div><label className="mb-1.5 block text-[13px] font-medium">后台生成总时限（秒）</label><input type="number" min={30} max={86400} value={form.jobTimeout} onChange={e => setDraft({ ...form, jobTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">默认 3600 秒，包含查阅与作答。刷新或关闭页面不会停止；服务重启保留部分回答，但不自动重试。新提问生效。</p></div>
+        <div><label className="mb-1.5 block text-[13px] font-medium">后台生成并发上限</label><input type="number" min={1} max={64} value={form.jobMax} onChange={e => setDraft({ ...form, jobMax: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">全站同时生成数量，默认 4；同一会话最多 1 个。达到上限时提示稍后重试，不自动排队。</p></div>
+      </div>
       <div className="mt-4 border-t pt-3">
         <div className="mb-2 text-[12px] font-medium text-muted-foreground">深度 AI 专项</div>
+        <div className="mb-4"><label className="mb-1.5 block text-[13px] font-medium">单次工具查阅超时（秒）</label><input type="number" min={5} max={600} value={form.toolTimeout} onChange={e => setDraft({ ...form, toolTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">默认 25 秒，可设 5–600 秒。用于检索、目录与原文读取等工具，不是 API 网络超时；开启整轮时限时仍受剩余时间限制。保存后新提问生效。</p></div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
             <label className="mb-1.5 block text-[13px] font-medium">查阅上下文（字符）</label>
             <input
               type="number"
               min={2000}
+              max={1000000}
               value={form.contextChars}
               onChange={(e) => setDraft({ ...form, contextChars: Number(e.target.value) })}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
             />
             <p className="mt-1 text-[11px] text-muted-foreground">
-              单次提问可读取的原文总字符预算，建议 20000-80000
+              单次提问可读取的原文总字符预算，建议 20000-80000；范围 2,000–1,000,000，搜索摘录和原文共用此预算。
             </p>
           </div>
         </div>
@@ -427,7 +440,7 @@ export function SettingsPage() {
   const cachedCount = e?.cached_models?.length ?? 0
 
   return (
-    <SettingsLayout title="系统设置" description="管理全局配置。" readOnly={!can('system.edit')} sections={[
+    <SettingsLayout title="系统设置" description="管理全局配置与本地界面偏好。" readOnly={!can('system.edit')} sections={[
       { id: 'retrieval', label: '知识库与检索', description: '默认知识库、向量模型与缓存', content: <>
       <Card className="mb-4 p-5">
         <div className="mb-4 flex items-center gap-2">
@@ -573,6 +586,7 @@ export function SettingsPage() {
 
       </> },
       { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
+      { id: 'interface', label: '界面与交互', description: '系统默认外观与当前账号的界面交互偏好。', content: <><DefaultThemeSettingsCard /><InterfaceSettingsCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>
       {confirmDisable ? (

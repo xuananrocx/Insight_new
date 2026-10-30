@@ -5,6 +5,9 @@
  * - 会话列表用 streaming 渲染"生成中"徽标
  */
 import { create } from 'zustand'
+import { apiFetch } from '@/lib/account-api'
+import { answerJobPath } from '@/lib/answer-jobs'
+import { toast } from 'sonner'
 
 // AbortController 不参与渲染，放模块级 Map（zustand 里只存可序列化状态）
 const aborters = new Map<string, AbortController>()
@@ -17,7 +20,7 @@ type AnswerStreamsState = {
   abort: (sessionId: string) => void
 }
 
-export const useAnswerStreams = create<AnswerStreamsState>((set) => ({
+export const useAnswerStreams = create<AnswerStreamsState>((set, get) => ({
   streaming: {},
   start: (sessionId, turnId, ac) => {
     aborters.get(sessionId)?.abort()  // 同会话若有旧流，兜底停掉
@@ -34,7 +37,12 @@ export const useAnswerStreams = create<AnswerStreamsState>((set) => ({
     })
   },
   abort: (sessionId) => {
-    aborters.get(sessionId)?.abort()
+    const tid = get().streaming[sessionId]
+    if (!tid) return
+    void apiFetch(`${answerJobPath(sessionId, tid)}/stop`, { method: 'POST' }).then(async res => {
+      if (!res.ok) throw new Error('停止失败，请重试')
+      // Keep the subscriber alive to display the authoritative final snapshot.
+    }).catch(error => toast.error(error.message || '停止失败，请重试'))
   },
 }))
 

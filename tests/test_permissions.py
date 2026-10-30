@@ -245,9 +245,11 @@ def test_separate_download_export_and_stale_preview(env, monkeypatch):
     fid = db.get_file_by_path("sample.txt", kb_id=kid)["id"]
     path = f"/api/v1/knowledge/download/{fid}?kb_id={kid}"
     assert env.bob.get(path).status_code == 403
+    assert env.bob.get(f"/api/v1/kbs/{kid}/export-preview").status_code == 403
     assert env.bob.get(f"/api/v1/kbs/{kid}/export").status_code == 403
     grant(env.alice, "kb", kid, env.bob_id, ["query", "download"])
     assert env.bob.get(path).text == "owned content"
+    assert env.bob.get(f"/api/v1/kbs/{kid}/export-preview").status_code == 403
     assert env.bob.get(f"/api/v1/kbs/{kid}/export").status_code == 403
     # Stored paths outside the KB root are not downloadable even when granted.
     db.upsert_file(

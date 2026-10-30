@@ -1,3 +1,4 @@
+import { PersonalAccentPicker } from '@/components/accent-picker'
 import { useAuth } from '@/hooks/use-auth'
 import { DEFAULT_MENU_ORDER, MENU_LABELS, normalizeMenuOrder, visibleMenuOrder } from '@/lib/navigation'
 import { Palette, PanelLeft, ChevronUp, ChevronDown } from 'lucide-react'
@@ -17,7 +18,7 @@ export function SidebarSettingsCard() {
     DEFAULT_MENU_ORDER,
   )
 
-  const visibleOrder = visibleMenuOrder(menuOrder, can, showLogs)
+  const visibleOrder = visibleMenuOrder(menuOrder, can, showLogs).filter(path => ['/review', '/stats', '/ai-logs', '/logs'].includes(path))
   const move = (idx: number, dir: 'up' | 'down') => {
     const target = dir === 'up' ? idx - 1 : idx + 1
     if (target < 0 || target >= visibleOrder.length) return
@@ -37,7 +38,7 @@ export function SidebarSettingsCard() {
         <span className="text-[14px] font-medium">侧边栏</span>
       </div>
       <p className="mb-3 text-[12px] text-muted-foreground">
-        仅展示当前可见的主菜单，调整其显示顺序。改动立即生效，关闭浏览器后仍保留。
+        调整工作台二级菜单的显示顺序。顶部导航与底部账号入口保持固定；侧栏宽度可拖动分界线调整，双击恢复默认。偏好在当前浏览器中按账号保存。
       </p>
       <div className="space-y-1">
         {visibleOrder.map((path, idx) => {
@@ -97,6 +98,7 @@ export function AppearanceSettingsCard() {
           <span className="text-sm">主题</span>
           <ThemeToggle />
         </div>
+        {theme === 'minimal' && <PersonalAccentPicker />}
         {theme === 'macos' ? (
           <div>
             <div className="mb-2 flex items-center justify-between">

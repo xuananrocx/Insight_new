@@ -124,7 +124,7 @@ async def authorize(request: Request):
     if path.startswith("/api/v1/qa/"):
         if params.get("session_id") or data.get("session_id"):
             a.require_owner("session", data.get("session_id") or params["session_id"])
-        if path.endswith(("/ask", "/ask_stream")):
+        if (path.endswith(("/ask", "/ask_stream")) or (path == "/api/v1/qa/jobs" and method == "POST")):
             kb = data.get("kb_scope", "default")
             a.require_kb(kb)
             a.active_kb.set(kb)
@@ -154,6 +154,8 @@ async def authorize(request: Request):
                     # Only initialize legacy sessions; explicit request overrides
                     # must not race with or overwrite a newer saved selection.
                     a.execute("INSERT OR IGNORE INTO api_session_selection VALUES (?,?,?)", (sid, frozen["id"], frozen["chat_model"]))
+        elif path.startswith("/api/v1/qa/jobs/"):
+            return  # Job endpoints validate owner, KB access and task state.
         elif path.endswith("/summarize-title"):
             a.bind_provider(data.get("provider_id"), model_id=data.get("model_id"))
         else:
@@ -175,7 +177,7 @@ async def authorize(request: Request):
         if kb:
             if "/members" in template:
                 p.manage_resource("kb", kb)
-            elif template.endswith("/export"):
+            elif template.endswith(("/export", "/export-preview")):
                 p.require_resource("kb", kb, "export")
             elif method == "DELETE" and template.endswith("/{kb_id}"):
                 a.require_kb(kb, "owner")

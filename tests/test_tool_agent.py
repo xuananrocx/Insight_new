@@ -272,6 +272,11 @@ async def test_stream_arrives_before_generation_finishes_even_with_legacy_verifi
         events.append(event)
         if event['type'] == 'token':
             release.set()
+    running = next(i for i, e in enumerate(events) if e['type'] == 'stage' and e['data']['stage'] == 'agent_answer' and e['data'].get('status') == 'running')
+    first_token = next(i for i, e in enumerate(events) if e['type'] == 'token')
+    assert running < first_token
+    assert any(e['type'] == 'stage' and e['data']['stage'] == 'agent_answer' and e['data'].get('status') == 'ok' for e in events[running + 1:])
+    assert not any(s.get('status') == 'running' for s in events[-1]['data']['trace'])
     assert release.is_set()
     assert calls == [1]
     assert events[-1]['type'] == 'done'
@@ -1352,3 +1357,26 @@ def test_search_more_than_eight_pages_without_skipping(knowledge):
     third = kb.execute('continue_search', {'cursor': second['next_cursor']})
     assert len(third['evidence']) == 1 and third['next_cursor'] is None
     assert len({e['text'] for page in (first, second, third) for e in page['evidence']}) == 31
+
+
+@pytest.mark.asyncio
+async def test_configured_reading_limits_reach_runtime(knowledge, monkeypatch):
+    settings._config['qa']['ai_generation'] = {'context_chars': 800000, 'tool_timeout_seconds': 90}
+    model = Model()
+    monkeypatch.setattr(tool_agent, 'create_tool_chat', lambda *a, **k: model)
+    original_tools = tool_agent.KnowledgeTools
+    budgets = []
+    def tools(*args, **kwargs):
+        budgets.append(kwargs['max_chars'])
+        return original_tools(*args, **kwargs)
+    monkeypatch.setattr(tool_agent, 'KnowledgeTools', tools)
+    original_wait = asyncio.wait_for
+    timeouts = []
+    async def wait(awaitable, timeout):
+        timeouts.append(timeout)
+        return await original_wait(awaitable, timeout)
+    monkeypatch.setattr(asyncio, 'wait_for', wait)
+    events = [e async for e in tool_agent.ask_stream('question', [], 'kb')]
+    assert events[-1]['type'] == 'done'
+    assert budgets and set(budgets) == {800000}
+    assert 90 in timeouts

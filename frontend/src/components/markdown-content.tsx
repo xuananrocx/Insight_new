@@ -1,6 +1,8 @@
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { copyText } from '@/lib/clipboard'
 import { Check, Copy } from 'lucide-react'
 import { remarkCitations } from '@/lib/remark-citations'
 import { remarkCjkStrong } from '@/lib/remark-cjk-strong'
@@ -42,16 +44,31 @@ export function MarkdownContent({ content, citationCount = 0, citationPrefix = '
 
 function CodeBlockWithCopy({ text, className }: { text: string; className?: string }) {
   const [copied, setCopied] = useState(false)
+  const [copying, setCopying] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
   const lang = /language-(\w+)/.exec(className || '')?.[1]
   return (
-    <div className="relative overflow-hidden rounded-md bg-muted/40">
-      <div className="flex items-center justify-between bg-background/50 px-3 py-1">
+    <div className="chat-code-block relative overflow-hidden rounded-md bg-muted/40">
+      <div className="chat-code-header flex items-center justify-between bg-background/50 px-3 py-1">
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{lang || 'code'}</span>
         <button
-          onClick={() => {
-            navigator.clipboard.writeText(text)
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
+          type="button"
+          disabled={copying}
+          aria-label={copied ? '代码已复制' : '复制代码'}
+          onClick={async () => {
+            setCopying(true)
+            clearTimeout(timer.current)
+            setCopied(false)
+            try {
+              await copyText(text)
+              setCopied(true)
+              timer.current = setTimeout(() => setCopied(false), 2000)
+            } catch {
+              toast.error('复制失败，请选中代码手动复制，或检查浏览器剪贴板权限')
+            } finally {
+              setCopying(false)
+            }
           }}
           className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >

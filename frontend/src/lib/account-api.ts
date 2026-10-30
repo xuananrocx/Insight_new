@@ -1,7 +1,7 @@
 export type Account = { roles: { id: string; name: string; enabled: boolean }[]; permissions: string[]; is_super: boolean; permission_revision: number; display_name?: string; note?: string; last_login?: number; created_at?: number; password_reset_at?: number;  id: string; username: string; role: 'admin' | 'member'; disabled: boolean; must_change_password: boolean; default_provider: string | null; csrf?: string }
-export type ApiModel = { context_tokens?: number | null; output_tokens?: number | null; model_id: string; display_name: string; connection_status?: string | null; connection_message?: string | null; connection_checked_at?: number | null; tools_status?: string | null; tools_message?: string | null; tools_checked_at?: number | null }
+export type ApiModel = { original_model_id?: string; context_tokens?: number | null; output_tokens?: number | null; model_id: string; display_name: string; connection_status?: string | null; connection_message?: string | null; connection_checked_at?: number | null; tools_status?: string | null; tools_message?: string | null; tools_checked_at?: number | null }
 export type ModelSelection = { provider_id: string | null; model_id: string | null; valid: boolean; reason?: string | null; provider_name?: string; model_label?: string; retry_count?: number }
-export type Provider = { id: string; name: string; scope: 'personal' | 'team'; protocol: string; base_url: string; chat_model: string; enabled: boolean; has_api_key: boolean; manageable: boolean; usable: boolean; grantable: boolean; models: ApiModel[] }
+export type Provider = { edit_version?: string; id: string; name: string; scope: 'personal' | 'team'; protocol: string; base_url: string; chat_model: string; enabled: boolean; has_api_key: boolean; manageable: boolean; usable: boolean; grantable: boolean; models: ApiModel[] }
 export type Member = { id: string; username: string; role?: string }
 
 let csrf = ''
@@ -10,6 +10,7 @@ let generation = new AbortController()
 export function setAccountSession(account: Account) {
   csrf = account.csrf || ''
   accountId = account.id
+  window.dispatchEvent(new Event('insight-theme-account-change'))
 }
 export function accountKey(key: string) { return accountId ? `${key}:${accountId}` : key }
 export function clearAccountRequests() { generation.abort(); generation = new AbortController(); csrf = ''; accountId = '' }
@@ -66,7 +67,7 @@ export async function accountRequest<T>(path: string, method = 'GET', body?: unk
 }
 
 export const accountApi = {
-  status: () => accountRequest<{ setup_required: boolean }>('/auth/status'),
+  status: () => accountRequest<{ setup_required: boolean; default_theme?: string; default_accent?: string }>('/auth/status'),
   me: () => accountRequest<Account>('/auth/me'),
   login: (username: string, password: string) => accountRequest<Account>('/auth/login', 'POST', { username, password }),
   setup: (username: string, password: string, token: string) => accountRequest('/auth/setup', 'POST', { username, password, token }),

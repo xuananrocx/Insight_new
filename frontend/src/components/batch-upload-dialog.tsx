@@ -330,7 +330,7 @@ export function BatchUploadDialog({
       }}
     >
       <DialogContent
-        className="max-w-2xl"
+        className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-2xl flex-col gap-3 overflow-hidden"
         aria-describedby={undefined}
         onEscapeKeyDown={(e) => {
           // Radix 默认 Esc 会关 Dialog，这里统一走 onOpenChange（转后台语义）
@@ -338,13 +338,13 @@ export function BatchUploadDialog({
           onClose()
         }}
       >
-        <DialogTitle>批量导入到 · {kbName}</DialogTitle>
-        <DialogDescription>
+        <DialogTitle className="shrink-0 break-words">批量导入到 · {kbName}</DialogTitle>
+        <DialogDescription className="shrink-0">
           支持选择多个文件或整个文件夹（含子目录），同名文件可跳过或覆盖。
         </DialogDescription>
 
         {phase === 'idle' ? (
-          <div className="space-y-4">
+          <div className="flex min-h-0 flex-col overflow-hidden"><div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain pr-1">
             {/* 选择文件 / 选择文件夹 */}
             <div className="grid grid-cols-2 gap-3">
               <input
@@ -567,8 +567,9 @@ export function BatchUploadDialog({
               </span>
             </label>
 
+            </div>
             {/* 底部按钮 */}
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t pt-3 mt-3">
               <Button variant="outline" size="sm" onClick={onClose}>
                 取消
               </Button>
@@ -586,7 +587,7 @@ export function BatchUploadDialog({
 
         {/* 分批传输中 */}
         {phase === 'uploading' ? (
-          <div className="space-y-4">
+          <div className="flex min-h-0 flex-col overflow-hidden"><div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain pr-1">
             <div className="flex items-center gap-2 text-[13px]">
               {runner.phase === 'error' ? (
                 <AlertTriangle className="h-4 w-4 text-warning" />
@@ -621,7 +622,8 @@ export function BatchUploadDialog({
                 <div className="break-all">{runner.error}</div>
               </div>
             ) : null}
-            <div className="flex justify-end gap-2">
+            </div>
+            <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t pt-3 mt-3">
               <Button
                 variant="outline"
                 size="sm"
@@ -810,7 +812,7 @@ function BatchProgressView({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="flex min-h-0 flex-col overflow-hidden"><div className="min-h-0 space-y-4 overflow-y-auto overscroll-contain pr-1">
       {/* 进度条 */}
       <div>
         <div className="mb-2 flex items-center justify-between text-[12px]">
@@ -992,8 +994,9 @@ function BatchProgressView({
         </div>
       ) : null}
 
+      </div>
       {/* 底部按钮 */}
-      <div className="flex justify-end gap-2">
+      <div className="mt-3 flex shrink-0 flex-wrap justify-end gap-2 border-t pt-3">
         {isCompleted || task.status === 'cancelled' ? (
           <Button size="sm" onClick={onClose}>
             完成

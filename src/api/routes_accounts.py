@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field, model_validator
-from src.core import accounts as a, permissions as perm, api_models
+from src.core import accounts as a, permissions as perm, api_models, provider_edits
 
 router = APIRouter(prefix="/api/v1", tags=["accounts"])
 
@@ -26,9 +26,12 @@ class Setup(Credentials):
 
 @router.get("/auth/status")
 def status():
+    from src.core.interface_settings import default_theme, default_accent
     return {
         "setup_required": not bool(a.rows("SELECT 1 FROM auth_users LIMIT 1")),
         "registration_enabled": False,
+        "default_theme": default_theme(),
+        "default_accent": default_accent(),
     }
 
 
@@ -167,6 +170,7 @@ def revoke_kb(kb_id: str, uid: str):
 
 
 class ModelInput(BaseModel):
+    original_model_id: str | None = Field(None, min_length=1, max_length=200)
     model_id: str = Field(min_length=1, max_length=200)
     display_name: str = Field("", max_length=80)
     context_tokens: int | None = Field(None, ge=4096, le=10000000)
@@ -175,6 +179,10 @@ class ModelInput(BaseModel):
     @model_validator(mode="after")
     def normalize(self):
         self.model_id = self.model_id.strip()
+        if self.original_model_id is not None:
+            self.original_model_id = self.original_model_id.strip()
+            if not self.original_model_id:
+                raise ValueError("原模型 ID 不能为空")
         self.display_name = self.display_name.strip()
         if not self.model_id:
             raise ValueError("模型 ID 不能为空")
@@ -182,6 +190,8 @@ class ModelInput(BaseModel):
 
 
 class ProviderInput(BaseModel):
+    edit_version: str | None = Field(None, pattern=r'^[0-9a-f]{64}$')
+    confirmation_token: str | None = Field(None, pattern=r'^[0-9a-f]{64}$')
     name: str = Field(min_length=1, max_length=80)
     scope: Literal["personal", "team"] = "personal"
     protocol: Literal["openai", "anthropic", "anthropic-arch"] = "openai"
@@ -222,6 +232,9 @@ def providers():
             continue
         if not personal and not (usable or perm.has("api.view")):
             continue
+        if perm.has("api.personal" if personal else "api.manage"):
+            with a.db.get_cursor() as cur:
+                provider['edit_version'] = provider_edits.edit_version(cur, provider)
         provider["has_api_key"] = bool(
             a.cipher().decrypt(provider.pop("secret").encode())
         )
@@ -235,7 +248,7 @@ def providers():
     return {"items": items, "default_provider": u["default_provider"], "selection": api_models.selection_status(api_models.preferences())}
 
 
-def save_provider(req: ProviderInput, pid: str | None = None):
+def save_provider(req: ProviderInput, pid: str | None = None, *, preview=False):
     u = a.user()
     old = manageable(pid) if pid else None
     if req.scope == "team":
@@ -284,6 +297,23 @@ def save_provider(req: ProviderInput, pid: str | None = None):
     pid = pid or uuid.uuid4().hex
     with a.db.get_cursor() as cur:
         cur.execute("BEGIN IMMEDIATE")
+        renames = {}
+        if old:
+            latest = cur.execute('SELECT * FROM auth_providers WHERE id=?', (pid,)).fetchone()
+            if latest is None or dict(latest) != old:
+                raise HTTPException(409, 'API 配置已变化，请重新打开编辑窗口')
+            if req.edit_version and req.edit_version != provider_edits.edit_version(cur, old):
+                raise HTTPException(409, 'API 或模型配置已变化，请重新打开编辑窗口')
+            renames, impact, confirmation = provider_edits.plan(cur, old, req, catalog)
+            if preview:
+                return {**impact, 'confirmation_token': confirmation}
+            if renames and not req.edit_version:
+                raise HTTPException(409, '修改模型 ID 前请重新打开编辑窗口并确认影响范围')
+            if (renames or (req.edit_version and impact['deletions'])) and req.confirmation_token != confirmation:
+                raise HTTPException(409, '模型修改的影响范围已变化，请重新预览并确认后保存')
+            compatibility_model = renames.get(compatibility_model, compatibility_model)
+        elif any(m.original_model_id is not None for m in catalog):
+            raise HTTPException(422, '新增 API 不能指定原模型 ID')
         if old:
             cur.execute("""INSERT OR IGNORE INTO api_preferences(user_id,model_id)
               SELECT id,? FROM auth_users WHERE default_provider=?""", (old["chat_model"], pid))
@@ -293,19 +323,27 @@ def save_provider(req: ProviderInput, pid: str | None = None):
             cur.execute("INSERT INTO auth_providers VALUES (?,?,?,?,?,?,?,?,?)",
                         (pid, u["id"] if req.scope == "personal" else None, req.scope, req.name, req.protocol,
                          req.base_url.strip().rstrip("/"), compatibility_model, secret, int(req.enabled)))
-        placeholders = ",".join("?" for _ in ids)
-        cur.execute(f"DELETE FROM api_models WHERE provider_id=? AND model_id NOT IN ({placeholders})", (pid, *ids))
         for model in catalog:
             cur.execute("""INSERT INTO api_models(provider_id,model_id,display_name,revision) VALUES (?,?,?,?)
               ON CONFLICT(provider_id,model_id) DO UPDATE SET display_name=excluded.display_name""",
                         (pid, model.model_id, model.display_name, time.time_ns()))
-            if 'context_tokens' in model.model_fields_set or 'output_tokens' in model.model_fields_set:
-                previous = cur.execute('SELECT context_tokens,output_tokens FROM api_model_limits WHERE provider_id=? AND model_id=?', (pid, model.model_id)).fetchone()
+            if model.original_model_id in renames or 'context_tokens' in model.model_fields_set or 'output_tokens' in model.model_fields_set:
+                previous = cur.execute('SELECT context_tokens,output_tokens FROM api_model_limits WHERE provider_id=? AND model_id=?', (pid, model.original_model_id if model.original_model_id in renames else model.model_id)).fetchone()
                 context = model.context_tokens if 'context_tokens' in model.model_fields_set else (previous[0] if previous else None)
                 output = model.output_tokens if 'output_tokens' in model.model_fields_set else (previous[1] if previous else None)
                 if context and output and output >= context:
                     raise HTTPException(422, '模型输出上限必须小于上下文容量')
                 cur.execute('INSERT OR REPLACE INTO api_model_limits VALUES (?,?,?,?)', (pid, model.model_id, context, output))
+
+        if old:
+            # Materialize implicit compatibility selections before changing their identity.
+            for source, target in renames.items():
+                if source == old['chat_model']:
+                    cur.execute("UPDATE api_preferences SET model_id=? WHERE (model_id IS NULL OR model_id='') AND user_id IN (SELECT id FROM auth_users WHERE default_provider=?)", (source, pid))
+                    cur.execute("UPDATE api_session_selection SET model_id=? WHERE provider_id=? AND (model_id IS NULL OR model_id='')", (source, pid))
+            provider_edits.migrate_selections(cur, pid, renames)
+        placeholders = ",".join("?" for _ in ids)
+        cur.execute(f"DELETE FROM api_models WHERE provider_id=? AND model_id NOT IN ({placeholders})", (pid, *ids))
 
         if old and any((old["protocol"] != req.protocol, old["base_url"] != req.base_url.strip().rstrip("/"), req.api_key is not None)):
             cur.execute("""UPDATE api_models SET revision=revision+1,connection_status=NULL,connection_message=NULL,connection_checked_at=NULL,
@@ -324,6 +362,11 @@ def create_provider(req: ProviderInput):
 @router.put("/providers/{pid}")
 def update_provider(pid: str, req: ProviderInput):
     return save_provider(req, pid)
+
+
+@router.post("/providers/{pid}/edit-preview")
+def preview_provider_edit(pid: str, req: ProviderInput):
+    return save_provider(req, pid, preview=True)
 
 
 @router.delete("/providers/{pid}")

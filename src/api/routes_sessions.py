@@ -321,7 +321,9 @@ def update_session(session_id: str, req: UpdateSessionRequest) -> dict:
 
 
 @router.delete("/{session_id}", status_code=204, response_model=None)
-def delete_session(session_id: str) -> None:
+async def delete_session(session_id: str) -> None:
+    from src.qa import answer_jobs
+    await answer_jobs.stop(session_id)
     ok = metadata_db.delete_session(session_id)
     if not ok:
         raise HTTPException(status_code=404, detail="会话不存在")
@@ -329,6 +331,9 @@ def delete_session(session_id: str) -> None:
 
 @router.post("/{session_id}/turns", response_model=TurnModel, status_code=201)
 def add_turn(session_id: str, req: AddTurnRequest) -> dict:
+    with metadata_db.get_cursor() as c:
+        if c.execute("SELECT 1 FROM answer_jobs WHERE session_id=? AND state='running'", (session_id,)).fetchone():
+            raise HTTPException(409, "该会话正在生成，请先停止或等待完成")
     if not metadata_db.get_session(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
 
@@ -383,6 +388,12 @@ def update_turn(session_id: str, turn_id: str, req: UpdateTurnRequest) -> dict:
     # 只更新用户显式传入的字段（pydantic exclude_unset=True）
     update_fields = req.model_dump(exclude_unset=True)
 
+    from src.qa import answer_jobs
+    if answer_jobs.managed(session_id, turn_id):
+        # Server is the sole writer for generated content, including terminal turns.
+        if any(k not in ('liked', 'updated_at') for k in update_fields):
+            raise HTTPException(409, "此回答由后台任务保存，请刷新获取最新内容")
+
     # sources 和 trace 需要序列化为 JSON 字符串
     if "sources" in update_fields:
         turn = metadata_db.get_turn(session_id, turn_id)
@@ -413,14 +424,16 @@ def update_turn(session_id: str, turn_id: str, req: UpdateTurnRequest) -> dict:
 
 
 @router.delete("/{session_id}/turns/{turn_id}", status_code=204, response_model=None)
-def delete_turn(session_id: str, turn_id: str) -> None:
+async def delete_turn(session_id: str, turn_id: str) -> None:
+    from src.qa import answer_jobs
+    await answer_jobs.stop(session_id, turn_id)
     ok = metadata_db.delete_turn(session_id, turn_id)
     if not ok:
         raise HTTPException(status_code=404, detail="turn 不存在")
 
 
 @router.delete("/{session_id}/turns", status_code=200, response_model=None)
-def clear_all_turns(session_id: str) -> dict:
+async def clear_all_turns(session_id: str) -> dict:
     """清空某会话所有 turns（用于切 KB 时旧 turns 失效）。
 
     场景：用户在 KB-A 上有几轮问答 → 切到 KB-B → 旧的 turns 答案跟新 KB 没关系，
@@ -428,6 +441,8 @@ def clear_all_turns(session_id: str) -> dict:
     """
     if not metadata_db.get_session(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
+    from src.qa import answer_jobs
+    await answer_jobs.stop(session_id)
     deleted = metadata_db.delete_all_turns(session_id)
     logger.info(f"clear_all_turns sid={session_id} deleted={deleted}")
     return {"deleted": deleted}

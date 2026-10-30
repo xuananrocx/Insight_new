@@ -146,6 +146,8 @@ def _on_startup() -> None:
     settings.ensure_data_dirs()
     # 初始化数据库 + schema 迁移
     metadata_db.init_db()
+    from src.qa import answer_jobs
+    answer_jobs.initialize()
     accounts.init_auth()
     from src.knowledge import index_tasks
     index_tasks.recover()
@@ -500,6 +502,8 @@ def _debug_llm_chat_source():
 
 @app.on_event('shutdown')
 async def stop_conversation_summary_tasks():
+    from src.qa import answer_jobs
+    await answer_jobs.shutdown()
     from src.qa.conversation_context import shutdown
     await shutdown()
     from src.knowledge import index_tasks

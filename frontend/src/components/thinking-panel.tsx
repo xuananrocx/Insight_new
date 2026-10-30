@@ -8,7 +8,25 @@ import { MarkdownContent } from './markdown-content'
 export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitations = true }: { thinking: ThinkingState; onStop?: () => void; showDetails?: boolean; showCitations?: boolean }) {
   const [elapsedMs, setElapsedMs] = useState(0)
   const [expanded, setExpanded] = useState(false)
+  const stepsViewport = useRef<HTMLDivElement>(null)
+  const stepsContent = useRef<HTMLDivElement>(null)
+  const following = useRef(true)
   const previousStatus = useRef(thinking.status)
+
+  useEffect(() => {
+    if (!expanded || !showDetails) return
+    const viewport = stepsViewport.current
+    const content = stepsContent.current
+    if (!viewport || !content) return
+    following.current = true
+    const follow = () => {
+      if (following.current) viewport.scrollTop = viewport.scrollHeight
+    }
+    follow()
+    const observer = new ResizeObserver(follow)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [expanded, showDetails, thinking.stages.length > 0])
 
   useEffect(() => {
     // Collapse once on successful completion; subsequent manual expansion stays open.
@@ -65,6 +83,7 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
         ) : null}
       </div>
 
+      {isStreaming && thinking.connectionMessage && <p role="status" className="px-3 pb-2 text-xs text-muted-foreground">{thinking.connectionMessage}</p>}
       {showDetails && expanded && thinking.warmup ? (
         <div className="border-t border-warning/30 bg-warning/10 px-3 py-1.5 text-[11px] text-warning-foreground/90">
           ⚡ {thinking.warmup}
@@ -72,10 +91,17 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
       ) : null}
 
       {showDetails && expanded && thinking.stages.length > 0 ? (
-        <div className="border-t border-border/30 px-3 py-2">
+        <div ref={stepsViewport} role="region" aria-label="思考步骤" tabIndex={0}
+          onScroll={event => {
+            const el = event.currentTarget
+            following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 32
+          }}
+          className="max-h-[min(360px,45vh)] overflow-y-auto border-t border-border/30 px-3 py-2 [overflow-anchor:none]">
+          <div ref={stepsContent}>
           {thinking.stages.map((stage, i) => (
             <StageRow key={`${stage.stage}-${i}`} stage={stage} />
           ))}
+          </div>
         </div>
       ) : null}
 

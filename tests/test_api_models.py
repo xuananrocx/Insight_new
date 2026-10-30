@@ -41,6 +41,8 @@ def update(client, pid, **changes):
     p = next(
         p for p in client.get("/api/v1/providers").json()["items"] if p["id"] == pid
     )
+    # This helper exercises clients predating explicit edit/preview support.
+    p.pop('edit_version', None)
     return client.put(
         f"/api/v1/providers/{pid}", json={**p, "api_key": None, **changes}
     )

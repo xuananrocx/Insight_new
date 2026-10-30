@@ -129,6 +129,10 @@ def init_db() -> None:
         # v0：首次建表（CREATE IF NOT EXISTS 保证幂等）
         cur.executescript(
             """
+            CREATE TABLE IF NOT EXISTS answer_jobs (
+                session_id TEXT NOT NULL, turn_id TEXT NOT NULL, fingerprint TEXT NOT NULL,
+                kb_id TEXT NOT NULL, state TEXT NOT NULL, snapshot TEXT NOT NULL,
+                PRIMARY KEY(session_id,turn_id));
             CREATE TABLE IF NOT EXISTS knowledge_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 relative_path TEXT NOT NULL,
@@ -1796,7 +1800,9 @@ def delete_session(session_id: str) -> bool:
         except Exception:
             pass  # 老 DB 没有 ai_call_logs 表，忽略
         cur.execute("DELETE FROM sessions WHERE id=?", (session_id,))
-        return cur.rowcount > 0
+        deleted = cur.rowcount > 0
+        cur.execute("DELETE FROM answer_jobs WHERE session_id=?", (session_id,))
+        return deleted
 
 
 def add_turn(
@@ -1921,6 +1927,7 @@ def delete_turn(session_id: str, turn_id: str) -> bool:
             (session_id, turn_id),
         )
         deleted = cur.rowcount > 0
+        cur.execute("DELETE FROM answer_jobs WHERE session_id=? AND turn_id=?", (session_id, turn_id))
         if deleted:
             cur.execute(
                 "UPDATE sessions SET turn_count = MAX(0, turn_count - 1) WHERE id=?",
@@ -1940,6 +1947,7 @@ def delete_all_turns(session_id: str) -> int:
             (session_id,),
         )
         deleted = cur.rowcount
+        cur.execute("DELETE FROM answer_jobs WHERE session_id=?", (session_id,))
         if deleted > 0:
             cur.execute(
                 "UPDATE sessions SET turn_count=0 WHERE id=?",
