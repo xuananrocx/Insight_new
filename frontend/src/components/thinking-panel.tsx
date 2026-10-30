@@ -6,9 +6,38 @@ import type { ThinkingState } from '@/hooks/use-chat-sessions'
 import { StageRow } from './stage-row'
 import { MarkdownContent } from './markdown-content'
 
+const thinkingPhrases = ['抽丝剥茧中', '寻找头绪中', '奋力思考中', '认真琢磨中', '串联线索中', '脑力运转中', '细细推敲中', '整理思路中', '答案酝酿中'] as const
+
+function shuffledPhrases(previous?: number): number[] {
+  const order = thinkingPhrases.map((_, index) => index).slice(3)
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[order[i], order[j]] = [order[j], order[i]]
+  }
+  // Keep the boundary between two shuffled rounds from repeating a phrase.
+  if (order[0] === previous) {
+    const j = 1 + Math.floor(Math.random() * (order.length - 1))
+    ;[order[0], order[j]] = [order[j], order[0]]
+  }
+  return order
+}
+
 export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitations = true }: { thinking: ThinkingState; onStop?: () => void; showDetails?: boolean; showCitations?: boolean }) {
   const [elapsedMs, setElapsedMs] = useState(0)
   const [expanded, setExpanded] = useState(false)
+  const [rotation, setRotation] = useState(() => ({ order: [0, 1, 2, ...shuffledPhrases()], index: 0 }))
+  const phraseIndex = rotation.order[rotation.index]
+  const rotatePhrases = thinking.status === 'streaming' && !thinking.connectionMessage && showDetails
+
+  // Pausing retains the shuffled round. Real stages and timing updates never reset it.
+  useEffect(() => {
+    if (!rotatePhrases) return
+    const id = setTimeout(() => setRotation(current => {
+      if (current.index + 1 < current.order.length) return { ...current, index: current.index + 1 }
+      return { order: shuffledPhrases(current.order[current.index]), index: 0 }
+    }), 7000 + Math.floor(Math.random() * 4001))
+    return () => clearTimeout(id)
+  }, [rotatePhrases, rotation])
   const stepsViewport = useRef<HTMLDivElement>(null)
   const stepsContent = useRef<HTMLDivElement>(null)
   const following = useRef(true)
@@ -52,7 +81,7 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
   const statusLabel = thinking.status === 'done' ? '已完成' : thinking.status === 'partial' ? '部分完成' : thinking.status === 'error' ? '未完成' : '已停止'
   const latestStage = thinking.stages.at(-1)?.label
   const label = isStreaming
-    ? `${showDetails ? '思考中' : '生成中'}${showDetails && latestStage ? ` · ${latestStage}` : ''}${timing}`
+    ? <><span className="inline-block w-[5em] whitespace-nowrap align-bottom">{thinking.connectionMessage ? '恢复连接中' : showDetails ? <span key={phraseIndex} className="inline-block animate-in fade-in duration-300 motion-reduce:animate-none">{thinkingPhrases[phraseIndex]}</span> : '生成中'}</span>{showDetails && latestStage ? ` · ${latestStage}` : ''}{timing}</>
     : `思考过程 · ${statusLabel}${timing}`
 
   return (
