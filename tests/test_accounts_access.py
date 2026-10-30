@@ -588,10 +588,15 @@ def test_interface_default_theme_permissions_and_persistence(env, monkeypatch):
     assert env.admin.put('/api/v1/settings/interface', json={'default_theme': 'linear'}).status_code == 200
     assert env.admin.get('/api/v1/settings/interface').json() == {'default_theme': 'linear', 'default_accent': 'graphite'}
     assert yaml.safe_load(USER_CONFIG_PATH.read_text())['interface']['default_theme'] == 'linear'
-    with TestClient(env.app) as anonymous:
+    # Like the fixture clients, exercise the endpoint without application lifespan:
+    # exiting a lifespan shuts down shared task workers needed by later tests.
+    anonymous = TestClient(env.app)
+    try:
         result = anonymous.get('/api/v1/auth/status').json()
         assert result['default_theme'] == 'linear'
         assert set(result) == {'setup_required', 'registration_enabled', 'default_theme', 'default_accent'}
+    finally:
+        anonymous.close()
     monkeypatch.setitem(settings.config, 'interface', {'default_theme': 'bad'})
     assert default_theme() == 'minimal'
 
