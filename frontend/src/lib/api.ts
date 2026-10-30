@@ -1327,6 +1327,11 @@ export const api = {
     }),
   },
 
+  webSearch: {
+    get: () => request<{ enabled: boolean }>('/settings/web_search'),
+    update: (enabled: boolean) => request<{ enabled: boolean }>('/settings/web_search', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  },
+
   aiGeneration: {
     get: () =>
       request<{ max_tokens: number; timeout_seconds: number; context_chars: number | null; tool_timeout_seconds: number; job_timeout_seconds?: number; job_max_concurrent?: number; web_search_enabled?: boolean }>(

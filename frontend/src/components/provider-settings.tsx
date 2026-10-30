@@ -1,3 +1,4 @@
+import { api } from '@/lib/api'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -107,6 +108,7 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
   const qc = useQueryClient()
   const confirm = useConfirm()
   const { can, refreshAccount } = useAuth()
+  const webStatus = useQuery({ queryKey: ['web-search-status'], queryFn: api.webSearch.get })
   const providers = useQuery({ queryKey: providerQueryKey, queryFn: accountApi.providers })
   const [form, setForm] = useState<{ scope: 'personal' | 'team'; initial?: Provider } | null>(null)
   const [busy, setBusy] = useState(false)
@@ -172,7 +174,7 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
       {providers.data && !providers.data.selection.valid && <p role="alert" className="text-sm text-destructive">{providers.data.selection.reason}</p>}
     </Card>}
     {(failure || providers.error) && <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">{failure || providers.error?.message}</p>}
-    <p className="text-xs text-muted-foreground">联网搜索需同时启用系统总开关与模型配置；点击状态可查看检测详情。</p>
+    <p className="text-xs text-muted-foreground">联网搜索需同时启用系统总开关与模型配置；检测不受系统开关影响，点击状态可查看详情。</p>
     {groups.map(group => <Card key={group.title} className="space-y-4 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">{group.title}</h2>
         {group.canCreate && <Button size="sm" onClick={() => setForm({ scope: team ? 'team' : 'personal' })}>新增 API</Button>}</div>
@@ -208,8 +210,8 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
             <div className="min-w-0 flex-1"><p className="flex min-h-8 items-center break-all text-sm font-normal leading-5">{m.display_name || m.model_id}</p>{m.display_name && <p className="break-all text-xs text-muted-foreground">{m.model_id}</p>}
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5"><TestResult model={m} kind="connection" /><TestResult model={m} kind="tools" />
                 {webTest?.providerId === p.id && webTest.modelId === m.model_id
-                  ? <CompactStatus label="联网" value={webTest.status === 'pending' ? '测试中…' : webTest.status === 'success' ? '通过' : webTest.status === 'cancelled' ? '已中止' : webTest.status === 'unconfirmed' ? '未通过' : '未完成'} passed={webTest.status === 'success'} detail={`${webTest.message}\n本次页面测试结果，刷新后不保留`} onClick={() => setShowWebTest(true)} />
-                  : <CompactStatus label="联网" value={m.web_search && m.web_search !== 'off' ? '已配置' : '未启用'} detail={m.web_search && m.web_search !== 'off' ? '已配置服务端搜索方式，尚无本次页面的测试结果。配置不代表检测通过；实际问答还需开启系统总开关。' : '此模型未启用联网搜索，可在 API 编辑窗口配置。'} />}
+                  ? <CompactStatus label="联网" value={webTest.status === 'pending' ? '测试中…' : !m.web_search || m.web_search === 'off' ? '未配置' : webStatus.data ? webStatus.data.enabled ? '已启用' : '已配置·系统未开启' : '系统状态未知'} detail={`${webTest.message}\n${webStatus.data ? webStatus.data.enabled ? '系统总开关已开启' : '系统总开关未开启，问答中不生效' : '系统开关状态未知'}\n检测不受系统开关影响；本次检测结果刷新后不保留`} onClick={() => setShowWebTest(true)} />
+                  : <CompactStatus label="联网" value={m.web_search && m.web_search !== 'off' ? webStatus.data ? webStatus.data.enabled ? '已启用' : '已配置·系统未开启' : '系统状态未知' : '未配置'} detail={m.web_search && m.web_search !== 'off' ? '已配置服务端搜索方式，尚无本次页面的测试结果。配置不代表检测通过；实际问答还需开启系统总开关。' : '此模型未启用联网搜索，可在 API 编辑窗口配置。'} />}
               </div>
             </div>
             <div className="flex shrink-0 items-start">

@@ -371,6 +371,26 @@ def update_llm_timeouts(req: LLMTimeoutsInfo) -> LLMTimeoutsInfo:
 
 
 
+class WebSearchConfig(BaseModel):
+    enabled: bool
+
+
+@router.get("/web_search", response_model=WebSearchConfig)
+def get_web_search_config():
+    return WebSearchConfig(enabled=bool(settings.config.get("qa", {}).get("ai_generation", {}).get("web_search_enabled", False)))
+
+
+@router.put("/web_search", response_model=WebSearchConfig)
+def update_web_search_config(req: WebSearchConfig):
+    from src.core.config import USER_CONFIG_PATH
+    with open(USER_CONFIG_PATH, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    raw.setdefault("qa", {}).setdefault("ai_generation", {})["web_search_enabled"] = req.enabled
+    _secure_write_yaml(USER_CONFIG_PATH, raw)
+    settings.config.setdefault("qa", {}).setdefault("ai_generation", {})["web_search_enabled"] = req.enabled
+    return get_web_search_config()
+
+
 class AiGenerationConfig(BaseModel):
     web_search_enabled: bool | None = None
     max_tokens: int  # 单次模型调用的输出 token 上限（推理模型含思考部分）

@@ -118,6 +118,29 @@ function LLMTimeoutsCard() {
 }
 
 
+function WebSearchConfigCard() {
+  const qc = useQueryClient()
+  const { can } = useAuth()
+  const status = useQuery({ queryKey: ['web-search-status'], queryFn: api.webSearch.get })
+  const save = useMutation({
+    mutationFn: api.webSearch.update,
+    onSuccess: data => {
+      qc.setQueryData(['web-search-status'], data)
+      void qc.invalidateQueries({ queryKey: ['settings', 'ai_generation'] })
+      toast.success(data.enabled ? '联网搜索已开启' : '联网搜索已关闭')
+    },
+    onError: (error: Error) => toast.error(`保存失败，未生效：${error.message}`),
+  })
+  return <Card className="p-5">
+    <div className="flex items-center justify-between gap-4">
+      <div><h3 className="text-sm font-medium">联网搜索</h3><p role="status" className="mt-1 text-xs text-muted-foreground">{save.isPending ? '正在保存…' : status.isError ? '状态读取失败，请重试' : !status.data ? '正在读取…' : status.data.enabled ? '已开启 · 切换即时保存' : '已关闭 · 切换即时保存'}</p></div>
+      <Toggle label="启用联网搜索" checked={save.isPending ? save.variables : status.data?.enabled ?? false} disabled={!can('system.edit') || !status.data || save.isPending} onChange={enabled => save.mutate(enabled)} />
+    </div>
+    {status.isError && <Button variant="outline" size="sm" onClick={() => void status.refetch()}>重试</Button>}
+    <p className="mt-3 text-xs text-muted-foreground">仅对新发起的深度 AI 提问生效；模型还需配置联网能力，由 AI 自主决定是否搜索。联网能力检测不受此开关影响。</p>
+  </Card>
+}
+
 function AiGenerationConfigCard() {
   const qc = useQueryClient()
   const { data } = useQuery({
@@ -131,16 +154,15 @@ function AiGenerationConfigCard() {
     toolTimeout: number
     jobTimeout: number
     jobMax: number
-    webSearch: boolean
   } | null>(null)
   const [confirmLargeTokens, setConfirmLargeTokens] = useState(false)
   // 服务端数据加载前不渲染表单；用户编辑后以 draft 为准
   const form = draft ?? (data
-    ? { maxTokens: data.max_tokens, timeoutSeconds: data.timeout_seconds, contextChars: data.context_chars ?? 48000, toolTimeout: data.tool_timeout_seconds ?? 25, jobTimeout: data.job_timeout_seconds ?? 3600, jobMax: data.job_max_concurrent ?? 4, webSearch: data.web_search_enabled ?? false }
+    ? { maxTokens: data.max_tokens, timeoutSeconds: data.timeout_seconds, contextChars: data.context_chars ?? 48000, toolTimeout: data.tool_timeout_seconds ?? 25, jobTimeout: data.job_timeout_seconds ?? 3600, jobMax: data.job_max_concurrent ?? 4 }
     : null)
 
   const saveMutation = useMutation({
-    mutationFn: (values: { maxTokens: number; timeoutSeconds: number; contextChars: number; toolTimeout: number; jobTimeout: number; jobMax: number; webSearch: boolean }) =>
+    mutationFn: (values: { maxTokens: number; timeoutSeconds: number; contextChars: number; toolTimeout: number; jobTimeout: number; jobMax: number }) =>
       api.aiGeneration.update({
         max_tokens: values.maxTokens,
         timeout_seconds: values.timeoutSeconds,
@@ -148,7 +170,6 @@ function AiGenerationConfigCard() {
         tool_timeout_seconds: values.toolTimeout,
         job_timeout_seconds: values.jobTimeout,
         job_max_concurrent: values.jobMax,
-        web_search_enabled: values.webSearch,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['settings', 'ai_generation'] })
@@ -212,7 +233,6 @@ function AiGenerationConfigCard() {
       </div>
       <div className="mt-4 border-t pt-3">
         <div className="mb-2 text-[12px] font-medium text-muted-foreground">深度 AI 专项</div>
-        <div className="mb-4"><label className="flex items-center justify-between text-sm">启用联网搜索<Toggle label="启用联网搜索" checked={form.webSearch} onChange={webSearch => setDraft({ ...form, webSearch })} /></label><p className="mt-1 text-xs text-muted-foreground">仅深度 AI 使用。模型需单独配置服务端搜索能力，由 AI 自主决定是否搜索。关闭后新提问不提供搜索工具。</p></div>
         <div className="mb-4"><label className="mb-1.5 block text-[13px] font-medium">单次工具查阅超时（秒）</label><input type="number" min={5} max={600} value={form.toolTimeout} onChange={e => setDraft({ ...form, toolTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">默认 25 秒，可设 5–600 秒。用于检索、目录与原文读取等工具，不是 API 网络超时；开启整轮时限时仍受剩余时间限制。保存后新提问生效。</p></div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
@@ -589,7 +609,7 @@ export function SettingsPage() {
       </Card>
 
       </> },
-      { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
+      { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><WebSearchConfigCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
       { id: 'interface', label: '界面与交互', description: '系统默认外观与当前账号的界面交互偏好。', content: <><DefaultThemeSettingsCard /><InterfaceSettingsCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>

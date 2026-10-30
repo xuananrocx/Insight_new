@@ -486,3 +486,24 @@
 .theme-minimal[data-accent="stone"] { --primary: 30.00 11.11% 42.35%; --ring: 30.00 11.11% 42.35%; --primary-foreground: 0 0% 100%; }
 
 .theme-minimal[data-accent="terracotta"] .text-primary { color: #a34f36; }
+
+/* Only menu and select triggers: preserve restored focus, suppress pointer-only rings.
+   Inputs, dialog focus traps and other controls retain their existing styles. */
+button[aria-haspopup="menu"]:focus-visible {
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+:root[data-menu-focus-input="pointer"] button[aria-haspopup="menu"]:focus {
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+  outline: none;
+}
+
+/* Select restores focus after choosing an option, just like dropdown menus. */
+:root[data-menu-focus-input="pointer"] button[role="combobox"]:focus {
+  --tw-ring-shadow: 0 0 #0000;
+  --tw-ring-offset-shadow: 0 0 #0000;
+  outline: none;
+}

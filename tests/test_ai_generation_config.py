@@ -112,3 +112,29 @@ def test_job_limits_persist_and_old_client_preserves_them(config_env):
     for kwargs in ({'job_timeout_seconds': 29}, {'job_timeout_seconds': 86401}, {'job_max_concurrent': 0}, {'job_max_concurrent': 65}):
         with pytest.raises(ValidationError):
             routes_settings.AiGenerationConfig(max_tokens=4096, timeout_seconds=600, **kwargs)
+
+
+def test_independent_web_switch_persists_without_changing_other_fields(config_env):
+    routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(max_tokens=4096, timeout_seconds=300))
+    routes_settings.update_web_search_config(routes_settings.WebSearchConfig(enabled=True))
+    saved = yaml.safe_load(config_env.read_text())
+    assert saved['app']['name'] == 'Insight'
+    assert saved['qa']['ai_generation'] == {'max_tokens': 4096, 'timeout_seconds': 300, 'web_search_enabled': True}
+    settings._config = saved
+    assert routes_settings.get_web_search_config().enabled is True
+    routes_settings.update_ai_generation(routes_settings.AiGenerationConfig(max_tokens=8192, timeout_seconds=600))
+    assert routes_settings.get_web_search_config().enabled is True
+    routes_settings.update_web_search_config(routes_settings.WebSearchConfig(enabled=False))
+    assert yaml.safe_load(config_env.read_text())['qa']['ai_generation']['web_search_enabled'] is False
+
+
+def test_independent_web_switch_write_failure_keeps_saved_state(config_env, monkeypatch):
+    routes_settings.update_web_search_config(routes_settings.WebSearchConfig(enabled=True))
+    before = config_env.read_text()
+    def fail(*args):
+        raise OSError('disk full')
+    monkeypatch.setattr(routes_settings, '_secure_write_yaml', fail)
+    with pytest.raises(OSError):
+        routes_settings.update_web_search_config(routes_settings.WebSearchConfig(enabled=False))
+    assert routes_settings.get_web_search_config().enabled is True
+    assert config_env.read_text() == before
