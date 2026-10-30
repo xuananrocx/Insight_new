@@ -46,3 +46,22 @@ test('detaching a page does not invoke cancellation or error callbacks', async (
   globalThis.jobFetch = async () => { controller.abort(); throw new DOMException('abort', 'AbortError') }
   await followAnswerJob({ session_id: 's', turn_id: 't' }, { onCancelled: () => assert.fail(), onError: () => assert.fail() }, controller.signal, true)
 })
+
+test('legacy server duration uses HTTP server time, never the browser clock', async () => {
+  const controller = new AbortController()
+  globalThis.jobFetch = async () => Response.json({ ...snap(0, 'running', ''), started_at: 100000 }, {
+    headers: { Date: new Date(102000).toUTCString() },
+  })
+  let elapsed
+  await followAnswerJob({ session_id: 's', turn_id: 'legacy' }, { onSnapshot: s => {
+    elapsed = s.elapsed_ms
+    controller.abort()
+  } }, controller.signal)
+  assert.equal(elapsed, 2000)
+})
+test('finished server duration survives completion callback unchanged', async () => {
+  globalThis.jobFetch = async () => Response.json({ ...snap(5, 'done', 'ok'), started_at: 1000, finished_at: 400000, elapsed_ms: 2200 })
+  let elapsed
+  await followAnswerJob({ session_id: 's', turn_id: 'done' }, { onDone: s => { elapsed = s.elapsed_ms } })
+  assert.equal(elapsed, 2200)
+})

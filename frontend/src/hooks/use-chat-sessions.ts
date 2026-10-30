@@ -9,6 +9,8 @@ export type ThinkingState = {
   partialAnswer: string
   status: 'streaming' | 'done' | 'partial' | 'stopped' | 'error' | 'cancelled'
   startedAt: number
+  timerAnchor?: number
+  timerBase?: number
   elapsedMs?: number
   connectionMessage?: string
   warmup?: string

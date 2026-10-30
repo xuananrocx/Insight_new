@@ -1,3 +1,4 @@
+import { elapsedAnswer, snapshotTiming } from '@/lib/answer-timing'
 import { apiFetch } from '@/lib/account-api'
 import { answerJobPath } from '@/lib/answer-jobs'
 import { ChatSessionHeader } from '@/components/chat-session-header'
@@ -41,6 +42,7 @@ import { SearchTurnResults } from '@/components/search-turn-results'
 import { useChatSessionsCtx } from '@/hooks/chat-session-context'
 import { useLocalStorage } from '@/hooks/use-local-storage'
 import { useApiRetryCount } from '@/hooks/use-api-retry-count'
+import { useAuth } from '@/hooks/use-auth'
 import { type ChatTurn, type ThinkingState } from '@/hooks/use-chat-sessions'
 import { api, type ChatMessage, type RetrievalMode, type QaSource, type QaTraceStage, type KB } from '@/lib/api'
 import { useAnswerStreams, abortAnswerStream } from '@/stores/answer-streams'
@@ -109,6 +111,37 @@ function KbPicker({
         ))}
       </SelectContent>
     </Select>
+  )
+}
+
+function NewChatGreeting() {
+  const { user } = useAuth()
+  const [hour, setHour] = useState(() => new Date().getHours())
+
+  useEffect(() => {
+    const update = () => setHour(new Date().getHours())
+    const timer = window.setInterval(update, 1000)
+    window.addEventListener('focus', update)
+    document.addEventListener('visibilitychange', update)
+    return () => {
+      window.clearInterval(timer)
+      window.removeEventListener('focus', update)
+      document.removeEventListener('visibilitychange', update)
+    }
+  }, [])
+
+  const greeting = hour >= 5 && hour < 11 ? '上午好'
+    : hour >= 11 && hour < 14 ? '中午好'
+    : hour >= 14 && hour < 18 ? '下午好' : '晚上好'
+  const name = user?.display_name?.trim() || user?.username?.trim()
+
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-6 gap-y-1">
+      <h1 className="break-words text-[22px] font-semibold tracking-tight">
+        {greeting}{name ? `，${name}` : ''}
+      </h1>
+      <p className="text-[13px] text-muted-foreground">今天想了解些什么？</p>
+    </div>
   )
 }
 
@@ -236,6 +269,8 @@ export function ChatPage() {
         partialAnswer: '',
         status: 'streaming',
         startedAt: Date.now(),
+        timerAnchor: performance.now(),
+        timerBase: 0,
       },
     }
     const ac = new AbortController()
@@ -264,7 +299,7 @@ export function ChatPage() {
             accumulatedStages.splice(0, accumulatedStages.length, ...snapshot.trace)
             ctx.updateTurn(sessionId, turnId, t => ({
               ...patchThinking(t, th => ({ ...th, partialAnswer: snapshot.answer, stages: snapshot.trace,
-                sources: snapshot.sources, startedAt: snapshot.started_at, elapsedMs: snapshot.finished_at ? snapshot.finished_at - snapshot.started_at : undefined, status: snapshot.state === 'running' ? 'streaming' : snapshot.state === 'cancelled' ? 'cancelled' : snapshot.state === 'done' ? 'done' : 'error' })),
+                sources: snapshot.sources, ...snapshotTiming(snapshot.elapsed_ms, th), status: snapshot.state === 'running' ? 'streaming' : snapshot.state === 'cancelled' ? 'cancelled' : snapshot.state === 'done' ? 'done' : 'error' })),
               answer: snapshot.answer, sources: snapshot.sources, trace: snapshot.trace, error: snapshot.error || undefined,
             }))
           },
@@ -308,7 +343,7 @@ export function ChatPage() {
                 ...th,
                 stages: stripRunningStages(th.stages),
                 status: data.outcome === 'partial' || data.verification === 'partial' ? 'partial' : 'done',
-                elapsedMs: Date.now() - th.startedAt,
+                elapsedMs: th.status === 'streaming' ? elapsedAnswer(th) : th.elapsedMs,
               })),
               answer: data.answer || '',
               sources: data.sources || [],
@@ -339,7 +374,7 @@ export function ChatPage() {
               stage: 'answer_result', label: '回答未完成', status: 'error', notes: message,
             }]
             ctx.updateTurn(sessionId, turnId, (t) => ({
-              ...patchThinking(t, (th) => ({ ...th, stages: stripRunningStages(th.stages), status: 'error', elapsedMs: Date.now() - th.startedAt })),
+              ...patchThinking(t, (th) => ({ ...th, stages: stripRunningStages(th.stages), status: 'error', elapsedMs: th.status === 'streaming' ? elapsedAnswer(th) : th.elapsedMs })),
               answer, trace, sources: accumulatedSources, error: message,
             }))
 
@@ -492,15 +527,10 @@ export function ChatPage() {
       <>
         <div className="mx-auto max-w-[820px] px-8 py-8">
           <div className="mb-6 flex items-start justify-between">
-            <div>
-              <h1 className="flex items-center gap-2 text-[22px] font-semibold tracking-tight">
-                {title}
-              </h1>
-              <p className="mt-1 text-[13px] text-muted-foreground">
-                基于 RAG 的智能问答 · 让 AI 基于知识库回答
-              </p>
+            <div className="min-w-0 flex-1 pr-3">
+              <NewChatGreeting />
               {/* 空状态下显示当前选择的 KB：警示琥珀胶囊，提醒发问前核对 */}
-              <div className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              <div className="mt-4 flex items-center gap-1.5 text-[11px] text-muted-foreground">
                 <Library className="h-3 w-3 shrink-0" />
                 <span className="shrink-0 font-medium">知识库：</span>
                 <KbPicker
@@ -517,7 +547,7 @@ export function ChatPage() {
             <Button
               variant="ghost"
               size="sm"
-              className="gap-1.5 text-[12px] text-muted-foreground"
+              className="shrink-0 gap-1.5 text-[12px] text-muted-foreground"
               onClick={() => setShowStats(!showStats)}
             >
               <BarChart3 className="h-3.5 w-3.5" />

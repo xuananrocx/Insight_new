@@ -13,11 +13,13 @@ function focusReturnTarget() {
 }
 
 /** Shared shell for management forms, including nested permission previews. */
-export function ManagementDialog({ title, onClose, busy = false, className, children }: {
+export function ManagementDialog({ title, onClose, busy = false, className, fixedHeight = false, navigation, children }: {
   title: string
   onClose: () => void
   busy?: boolean
   className?: string
+  fixedHeight?: boolean
+  navigation?: ReactNode
   children: ReactNode
 }) {
   const opener = useRef(focusReturnTarget())
@@ -42,7 +44,7 @@ export function ManagementDialog({ title, onClose, busy = false, className, chil
   }, [])
   return <Dialog open onOpenChange={open => { if (!open && !busy) onClose() }}>
     <DialogContent
-      className={cn('flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-3xl flex-col gap-4 overflow-hidden p-4 sm:p-6', className)}
+      className={cn('flex max-h-[90dvh] w-[calc(100%-2rem)] max-w-3xl flex-col gap-4 overflow-hidden p-4 sm:p-6', fixedHeight && 'h-[min(680px,90dvh)]', className)}
       style={position}
       aria-describedby={undefined}
       data-management-dialog
@@ -61,7 +63,8 @@ export function ManagementDialog({ title, onClose, busy = false, className, chil
         <DialogTitle className="min-w-0 break-words text-base leading-snug">{title}</DialogTitle>
         <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" aria-label="关闭弹窗" disabled={busy} onClick={onClose}><X className="h-4 w-4" /></Button>
       </div>
-      <div className="min-h-0 min-w-0 space-y-4 overflow-y-auto overscroll-contain break-words pr-1">{children}</div>
+      {navigation && <div className="shrink-0">{navigation}</div>}
+      <div className="min-h-0 min-w-0 flex-1 space-y-4 overflow-y-auto overscroll-contain break-words pr-1 [scrollbar-gutter:stable]">{children}</div>
     </DialogContent>
   </Dialog>
 }

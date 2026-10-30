@@ -1,3 +1,4 @@
+import { elapsedAnswer } from '@/lib/answer-timing'
 import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, Files, Loader2, Sparkles, Square } from 'lucide-react'
 
@@ -38,12 +39,11 @@ export function ThinkingPanel({ thinking, onStop, showDetails = true, showCitati
 
   useEffect(() => {
     if (thinking.status !== 'streaming') return
-    const start = thinking.startedAt
-    const tick = () => setElapsedMs(Date.now() - start)
+    const tick = () => setElapsedMs(elapsedAnswer(thinking))
     tick()
     const id = setInterval(tick, 100)
     return () => clearInterval(id)
-  }, [thinking.status, thinking.startedAt])
+  }, [thinking.status, thinking.startedAt, thinking.timerAnchor, thinking.timerBase])
 
   const isStreaming = thinking.status === 'streaming'
   const duration = isStreaming ? elapsedMs : thinking.elapsedMs

@@ -23,6 +23,22 @@ _live: dict[tuple[str, str], dict] = {}
 _lock = asyncio.Lock()
 
 
+def update_elapsed(job):
+    """Elapsed duration uses one clock; never compare server/client timestamps."""
+    snap = job["snapshot"]
+    if "clock_start" in job:
+        snap["elapsed_ms"] = max(0, int((time.monotonic() - job["clock_start"]) * 1000))
+    elif "elapsed_ms" not in snap:
+        end = snap.get("finished_at", int(time.time() * 1000))
+        snap["elapsed_ms"] = max(0, end - snap["started_at"])
+
+
+def response_snapshot(job):
+    if job["snapshot"]["state"] == "running" or "elapsed_ms" not in job["snapshot"]:
+        update_elapsed(job)
+    return json.loads(json.dumps(job["snapshot"]))
+
+
 def limits():
     cfg = settings.config.get("qa", {}).get("ai_generation", {})
     return (
@@ -52,6 +68,7 @@ def initialize():
 
 def mark_interrupted(job):
     snap = job["snapshot"]
+    update_elapsed(job)
     snap.update(
         state="interrupted",
         error="服务重启，生成中断；已保留部分回答",
@@ -153,6 +170,7 @@ def copy_job(job):
 async def checkpoint(job):
     # SQLite work cannot be cancelled mid-thread: drain it before a final save,
     # otherwise an older checkpoint could overwrite a cancelled/completed answer.
+    update_elapsed(job)
     task = asyncio.create_task(asyncio.to_thread(save, copy_job(job)))
     try:
         await asyncio.shield(task)
@@ -173,7 +191,7 @@ async def create(req):
         if existing:
             if existing["fingerprint"] and existing["fingerprint"] != fingerprint:
                 raise HTTPException(409, "此问题已创建生成任务，请恢复任务或新建问题")
-            return existing["snapshot"]
+            return response_snapshot(_live.get(key) or existing)
         if turn.get("answer"):
             raise HTTPException(409, "此问题已有回答，请新建问题重新生成")
         if any(k[0] == req.session_id for k in _live):
@@ -193,6 +211,7 @@ async def create(req):
             sources=[],
             trace=[],
             started_at=int(time.time() * 1000),
+            elapsed_ms=0,
             error=None,
         )
         job = dict(
@@ -201,6 +220,7 @@ async def create(req):
             kb_id=req.kb_scope,
             fingerprint=fingerprint,
             snapshot=snap,
+            clock_start=time.monotonic(),
         )
 
         def insert():
@@ -215,7 +235,7 @@ async def create(req):
         job["task"] = asyncio.create_task(run(job, req, timeout))
         # Install the worker cleanup before exposing it to stop/shutdown.
         await asyncio.sleep(0)
-        return dict(snap)
+        return response_snapshot(job)
 
 
 async def run(job, req, timeout):
@@ -334,7 +354,7 @@ async def read(session_id, turn_id):
     await asyncio.to_thread(check, session_id, job["kb_id"] if job else None)
     if not job:
         raise HTTPException(404, "生成任务不存在")
-    return json.loads(json.dumps(job["snapshot"]))
+    return response_snapshot(job)
 
 
 async def stop(session_id, turn_id=None):
@@ -364,6 +384,7 @@ async def stop(session_id, turn_id=None):
                     sources=[],
                     trace=[],
                     started_at=int(time.time() * 1000),
+                    elapsed_ms=0,
                     error="已停止生成",
                 )
 
