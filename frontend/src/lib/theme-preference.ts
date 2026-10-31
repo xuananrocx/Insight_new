@@ -1,7 +1,8 @@
-export type ThemeKey = 'minimal' | 'stripe-light' | 'linear' | 'macos'
+export type ThemeKey = 'minimal' | 'stripe-light' | 'everforest' | 'macos'
 export function normalizeTheme(value: unknown): ThemeKey | null {
+  if (value === 'linear') return 'everforest'
   if (value === 'stripe-dark') return 'minimal'
-  return value === 'minimal' || value === 'stripe-light' || value === 'linear' || value === 'macos' ? value : null
+  return value === 'minimal' || value === 'stripe-light' || value === 'everforest' || value === 'macos' ? value : null
 }
 
 // Claim the old browser-wide preference only once, rather than copying it to every account.

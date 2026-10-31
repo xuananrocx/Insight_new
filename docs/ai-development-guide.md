@@ -107,3 +107,7 @@ Linux/macOS：`python3.11 -m venv .venv`、`source .venv/bin/activate`、`python
 主题优先级为当前账号在此浏览器的显式选择 → 系统默认 → 简约灰白。个人主题按账号保存，选择“使用系统默认”会取消个人覆盖。旧的浏览器级主题仅迁移给升级后首个登录账号；历史版本无法区分自动写入与主动选择，因此保留已有值。无需数据库迁移，回退后端时旧前端/接口仍可运行，新前端遇到缺少默认主题字段时使用简约灰白。
 
 灰白主题强调色由 `interface.default_accent` 控制，缺省 `graphite`；仅接受 graphite、blue、slate、terracotta、moss、stone。个人强调色以 `amd-ui-accent:<账号ID>` 保存在浏览器，独立于主题选择，清除个人颜色后跟随系统值。旧客户端省略颜色字段时不会覆盖已保存颜色；无需数据库迁移。
+
+### Everforest 主题兼容
+
+Everforest 森林替换 Linear 紫黑，采用 Everforest Dark Medium 配色与较大控件圆角。前端个人偏好和首屏缓存中的 `linear` 映射到 `everforest`；后端继续接受旧 `linear` 值，读取时返回 `everforest`。新主题可作为系统默认，个人优先级不变，不做数据库迁移。回退到旧版本前，将系统默认主题改为旧版本支持的主题；新个人偏好在旧客户端可能回退为默认主题。

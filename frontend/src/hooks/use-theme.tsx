@@ -51,7 +51,7 @@ export function ThemeProvider({ children, defaultTheme = 'minimal', storageKey =
 
   useEffect(() => {
     const root = document.documentElement
-    root.classList.remove('theme-minimal', 'theme-stripe-light', 'theme-stripe-dark', 'theme-linear', 'theme-macos')
+    root.classList.remove('theme-minimal', 'theme-stripe-light', 'theme-stripe-dark', 'theme-linear', 'theme-everforest', 'theme-macos')
     root.classList.add(`theme-${theme}`)
     root.dataset.accent = accent
     try { localStorage.setItem('amd-ui-theme-rendered', theme) } catch { /* Cosmetic cache only. */ }

@@ -12,9 +12,9 @@ export const THEMES: { key: ThemeKey; label: string; preview: string[] }[] = [
     preview: ['#f6f9fc', '#635bff', '#e3e8ee'],
   },
   {
-    key: 'linear',
-    label: 'Linear 紫黑',
-    preview: ['#101016', '#5e6ad2', '#1c1d24'],
+    key: 'everforest',
+    label: 'Everforest 森林',
+    preview: ['#2d353b', '#a7c080', '#232a2e'],
   },
   {
     key: 'macos',

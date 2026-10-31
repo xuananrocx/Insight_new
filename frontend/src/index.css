@@ -75,42 +75,33 @@
     --sidebar-bg: 0 0% 100%;
   }
 
-  /* ===== Linear Purple ===== */
-  .theme-linear {
+  /* Everforest Dark Medium — sainnhe/everforest palette. */
+  .theme-everforest {
     color-scheme: dark;
-    --background: 220 13% 6%;
-    --foreground: 60 6% 90%;
-
-    --card: 220 13% 9%;
-    --card-foreground: 60 6% 90%;
-
-    --popover: 220 13% 9%;
-    --popover-foreground: 60 6% 90%;
-
-    --primary: 232 60% 68%;
-    --primary-foreground: 220 13% 6%;
-
-    --secondary: 220 13% 13%;
-    --secondary-foreground: 60 6% 90%;
-
-    --muted: 220 13% 13%;
-    --muted-foreground: 60 4% 60%;
-
-    --accent: 232 60% 18%;
-    --accent-foreground: 60 6% 95%;
-
-    --destructive: 0 62% 50%;
-    --destructive-foreground: 0 0% 100%;
-
-    --success: 152 60% 50%;
-    --warning: 35 92% 60%;
-    --warning-foreground: 36 95% 70%;
-
-    --border: 220 13% 17%;
-    --input: 220 13% 17%;
-    --ring: 232 60% 68%;
-
-    --sidebar-bg: 220 13% 9%;
+    --radius: 1rem;
+    --background: 205.71 13.46% 20.39%;
+    --foreground: 40.98 31.78% 74.71%;
+    --card: 198.75 13.33% 23.53%;
+    --card-foreground: 40.98 31.78% 74.71%;
+    --popover: 198.75 13.33% 23.53%;
+    --popover-foreground: 40.98 31.78% 74.71%;
+    --primary: 83.44 33.68% 62.75%;
+    --primary-foreground: 201.82 13.58% 15.88%;
+    --secondary: 198.75 11.59% 27.06%;
+    --secondary-foreground: 40.98 31.78% 74.71%;
+    --muted: 198.75 11.59% 27.06%;
+    --muted-foreground: 135.00 6.52% 63.92%;
+    --accent: 141.43 9.59% 28.63%;
+    --accent-foreground: 40.98 31.78% 74.71%;
+    --destructive: 358.85 67.53% 69.80%;
+    --destructive-foreground: 201.82 13.58% 15.88%;
+    --success: 134.75 32.62% 63.33%;
+    --warning: 39.78 56.10% 67.84%;
+    --warning-foreground: 39.78 56.10% 67.84%;
+    --border: 201.18 10.69% 31.18%;
+    --input: 161.54 7.03% 36.27%;
+    --ring: 83.44 33.68% 62.75%;
+    --sidebar-bg: 201.82 13.58% 15.88%;
   }
 
   /* ===== macOS Glass ===== */
@@ -409,9 +400,9 @@
   --chat-text: #d2dbe2;
   --chat-emphasis: #e3e9ee;
 }
-.theme-linear {
-  --chat-text: #d2d2cc;
-  --chat-emphasis: #e4e4df;
+.theme-everforest {
+  --chat-text: #d3c6aa;
+  --chat-emphasis: #e4dccb;
 }
 .chat-session-header { min-height: 48px; }
 .chat-reading {
@@ -507,3 +498,15 @@ button[aria-haspopup="menu"]:focus-visible {
   --tw-ring-offset-shadow: 0 0 #0000;
   outline: none;
 }
+
+/* Everforest controls follow the approved rounded preview. */
+.theme-everforest button:not([role="switch"]),
+.theme-everforest .sidebar-menu-trigger { border-radius: 18px; }
+.theme-everforest .session-row,
+.theme-everforest .app-sidebar nav a { border-radius: 15px; }
+.theme-everforest [role="menuitem"],
+.theme-everforest [role="option"] { border-radius: 10px; }
+.theme-everforest .chat-code-block { background: #232a2e; border: 1px solid #475258; border-radius: 10px; }
+.theme-everforest .chat-code-header { background: transparent; border-bottom: 0; }
+.theme-everforest .chat-question-bubble { background: #3d484d; border-color: #475258; color: #d3c6aa; }
+.theme-everforest .md-body a { color: #7fbbb3; }
