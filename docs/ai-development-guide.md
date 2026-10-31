@@ -111,3 +111,11 @@ Linux/macOS：`python3.11 -m venv .venv`、`source .venv/bin/activate`、`python
 ### Everforest 主题兼容
 
 Everforest 森林替换 Linear 紫黑，采用 Everforest Dark Medium 配色与较大控件圆角。前端个人偏好和首屏缓存中的 `linear` 映射到 `everforest`；后端继续接受旧 `linear` 值，读取时返回 `everforest`。新主题可作为系统默认，个人优先级不变，不做数据库迁移。回退到旧版本前，将系统默认主题改为旧版本支持的主题；新个人偏好在旧客户端可能回退为默认主题。
+
+### macOS 毛玻璃偏好与材质
+
+macOS 主题的模糊只用于侧栏、输入卡片和设置导航；知识库列表及详情（含摘要、阅读索引、核心概念和文档关系）、新对话看板、文档、审批、分析和知识库授权页面的卡片或列表容器随浓度调整底色透明度（卡片不透明度为 25% + 浓度 × 75%，不叠加模糊），其他内容卡片使用雾海蓝固定底色（#1c2a35），菜单与弹窗使用稍亮的 #22323f，代码块保持独立深色底色，不再全局清空 `bg-background` 或强制全部按钮蓝色悬停。玻璃浓度新账号缺省 60%，已有账号的 `amd-ui-glass-opacity:<账号ID>` 保留，支持 30%–100%。背景及浓度由 Workspace 挂载时恢复，使用订阅式按账号读取，默认值不写回个人偏好。`*-rendered` 缓存仅用于首屏外观，登录后以当前账号偏好为准。无数据库迁移，旧版仍可读取原个人配置键。减少透明效果或浏览器不支持模糊时使用实色回退。
+
+毛玻璃背景保留烟熏蓝、Moonlit Mint、Rose Gold Mist、Aurora Haze、Obsidian；个人设置和账户外观菜单均可快速切换。已移除的 deep-blue、pearl-dusk、emerald-vault、galaxy-mesh 在读取及首屏渲染时回退到 moonlit-mint，不覆盖原存储值。
+
+Stripe 浅色退出主题列表；旧 stripe-light 仍接受读取及接口写入。系统默认读取为 minimal + moss，不批量改服务器配置；前端也兼容未重启的旧接口。个人 Stripe 偏好首次读取时按账号转为 minimal，并一次性设置 moss，之后用户可自行换色，不重复覆盖。旧浏览器级偏好仍仅迁移给首个登录账号。首屏缓存同步映射并记录已渲染强调色，避免旧色闪烁。无数据库迁移；回退前端后个人已迁移值仍为旧版支持的 minimal/moss。

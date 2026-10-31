@@ -14,8 +14,8 @@ export function ListMore({ label, items }: { label: string; items: { label: stri
   return <Menu.Root><Menu.Trigger asChild><Button variant="ghost" size="sm" aria-label={label} className="h-8 w-8 p-0"><MoreHorizontal className="h-4 w-4" /></Button></Menu.Trigger><Menu.Portal><Menu.Content align="end" sideOffset={6} className="z-50 min-w-36 rounded-lg border bg-popover p-1 text-popover-foreground shadow-md">{items.map(item => <Menu.Item key={item.label} disabled={item.disabled} onSelect={item.action} className={`cursor-pointer rounded px-3 py-2 text-sm outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50 ${item.destructive ? 'text-destructive' : ''}`}>{item.label}</Menu.Item>)}</Menu.Content></Menu.Portal></Menu.Root>
 }
 export type ListColumn<T> = { label: string; render: (row: T) => ReactNode; secondary?: boolean; className?: string }
-export function AdminList<T>({ rows, columns, rowKey, loading, error, empty = '没有匹配记录', filterKey = '', label, prefix = '' }: {
-  rows: T[]; columns: ListColumn<T>[]; rowKey: (row: T) => string | number; loading?: boolean; error?: Error | null; empty?: string; filterKey?: string; label: string; prefix?: string
+export function AdminList<T>({ rows, columns, rowKey, loading, error, empty = '没有匹配记录', filterKey = '', label, prefix = '', surfaceClassName = '' }: {
+  rows: T[]; columns: ListColumn<T>[]; rowKey: (row: T) => string | number; loading?: boolean; error?: Error | null; empty?: string; filterKey?: string; label: string; prefix?: string; surfaceClassName?: string
 }) {
   const [pagination, setPagination] = useState({ key: filterKey, page: 1 })
   const pages = Math.max(1, Math.ceil(rows.length / 20))
@@ -25,7 +25,7 @@ export function AdminList<T>({ rows, columns, rowKey, loading, error, empty = '�
   }
   const go = (next: number) => setPagination({ key: filterKey, page: next })
   return <div className="space-y-3">
-    <div className="overflow-hidden rounded-lg border bg-card text-card-foreground">
+    <div className={`overflow-hidden rounded-lg border bg-card text-card-foreground ${surfaceClassName}`}>
       <table aria-label={label} className="w-full table-fixed text-left text-[13px]">
         <thead className="bg-muted/35 text-xs text-muted-foreground"><tr>{columns.map((c, i) => <th key={i} scope="col" className={`px-3 py-3 font-normal md:px-4 ${c.secondary ? 'hidden md:table-cell' : ''} ${c.className || ''}`}>{c.label}</th>)}</tr></thead>
         <tbody>{loading || error || !rows.length ? <tr><td colSpan={columns.length} className="px-4 py-8 text-center text-sm text-muted-foreground"><span role={error ? 'alert' : 'status'}>{loading ? '加载中…' : error ? error.message : empty}</span></td></tr> : rows.slice((page - 1) * 20, page * 20).map(row => <tr key={rowKey(row)} className="border-t transition-colors hover:bg-muted/30">{columns.map((c, i) => <td key={i} className={`break-words px-3 py-3 align-middle md:px-4 [overflow-wrap:anywhere] ${c.secondary ? 'hidden md:table-cell' : ''} ${c.className || ''}`}>{c.render(row)}</td>)}</tr>)}</tbody>

@@ -65,7 +65,7 @@ export function KbGlobalSummaryCard({ kbId, canManage = false }: Props) {
   const summaryBody = coverageMatch ? data!.summary!.slice(coverageMatch[0].length) : data?.summary ?? ''
 
   return (
-    <Card className="mb-6 overflow-hidden">
+    <Card className="glass-content-card mb-6 overflow-hidden">
       <div className="flex items-center justify-between border-b px-5 py-3">
         <div className="flex items-center gap-2">
           <Globe className="h-4 w-4 text-muted-foreground" />

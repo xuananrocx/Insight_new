@@ -119,7 +119,7 @@ export default function KbDetailPage() {
 
   return (
     <div className="mx-auto max-w-5xl px-8 py-8">
-      {["owner", "manager"].includes(kb.role || "") && <Card className="mb-5 p-5"><Grants path={`/kbs/${kb.id}`} isKb /></Card>}
+      {["owner", "manager"].includes(kb.role || "") && <Card className="glass-content-card mb-5 p-5"><Grants path={`/kbs/${kb.id}`} isKb /></Card>}
       {/* 顶部：返回 + 标题 + 操作 */}
       <div className="mb-6">
         <Button
@@ -182,7 +182,7 @@ export default function KbDetailPage() {
 
       {/* 统计卡片 */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               文档数
@@ -193,7 +193,7 @@ export default function KbDetailPage() {
             {kb.document_count}
           </div>
         </Card>
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               向量数
@@ -204,7 +204,7 @@ export default function KbDetailPage() {
             {kb.total_chunks}
           </div>
         </Card>
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               磁盘占用
@@ -215,7 +215,7 @@ export default function KbDetailPage() {
             {formatSize(totalSize)}
           </div>
         </Card>
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               绑定会话
@@ -229,7 +229,7 @@ export default function KbDetailPage() {
       </div>
 
       {/* 元信息 */}
-      <Card className="mb-6 p-5">
+      <Card className="glass-content-card mb-6 p-5">
         <div className="mb-3 flex items-center gap-2">
           <Shield className="h-4 w-4 text-muted-foreground" />
           <span className="text-[14px] font-medium">元信息</span>
@@ -268,7 +268,7 @@ export default function KbDetailPage() {
       </Card>
 
       {/* 文档列表（只读） */}
-      <Card className="mb-6 overflow-hidden">
+      <Card className="glass-content-card mb-6 overflow-hidden">
         <div className="flex items-center justify-between border-b px-5 py-3">
           <button type="button" aria-expanded={documentsExpanded} aria-controls={`kb-documents-${kb.id}`} onClick={() => setDocumentView({ kbId: id, expanded: !documentsExpanded })} className="flex items-center gap-2">
             <ChevronRight className={`h-4 w-4 transition-transform ${documentsExpanded ? 'rotate-90' : ''}`} />
@@ -347,7 +347,7 @@ export default function KbDetailPage() {
       <KbDocumentGraph kbId={kb.id} />
 
       {/* 绑定的会话 */}
-      <Card className="overflow-hidden">
+      <Card className="glass-content-card overflow-hidden">
         <div className="flex items-center justify-between border-b px-5 py-3">
           <div className="flex items-center gap-2">
             <MessagesSquare className="h-4 w-4 text-muted-foreground" />

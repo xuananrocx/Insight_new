@@ -33,7 +33,7 @@ export function KbIndexCard({ kbId, canManage }: { kbId: string; canManage: bool
     ? query.isError ? '加载失败' : '正在加载'
     : files.length ? `${files.filter(f => f.status === 'ready').length}/${files.length} 已就绪` : '暂无文档'
   const failedTask = !!task && ['partial', 'failed'].includes(task.state)
-  return <Card className="mb-6 overflow-hidden">
+  return <Card className="glass-content-card mb-6 overflow-hidden">
     <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
       <button type="button" aria-expanded={expanded} aria-controls={contentId} className="flex flex-wrap items-center gap-2 text-sm font-medium" onClick={() => setExpanded(!expanded)}>
         {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}<Database className="h-4 w-4" />文档索引

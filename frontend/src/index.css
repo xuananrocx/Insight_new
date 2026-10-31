@@ -107,48 +107,31 @@
   /* ===== macOS Glass ===== */
   .theme-macos {
     color-scheme: dark;
-    /* 用户可调的毛玻璃强度：0.2 = 明显毛玻璃，1 = 完全不透明 */
-    --glass-alpha: 0.30;
-
-    /* macOS 主题使用更大的圆角 */
+    --glass-alpha: .6;
     --radius: 1rem;
-
-    --background: 220 25% 6%;
-    --foreground: 0 0% 98%;
-
-    --card: 220 22% 10%;
-    --card-foreground: 0 0% 98%;
-
-    /* popover 完全不透明，避免遮挡后面文字 */
-    --popover: 220 25% 8%;
-    --popover-foreground: 0 0% 98%;
-
-    --primary: 211 100% 56%;
+    --background: 216 24% 10%;
+    --foreground: 218 12% 87%;
+    --card: 206.40 30.86% 15.88%;
+    --card-foreground: 218 12% 87%;
+    --popover: 206.90 29.90% 19.02%;
+    --popover-foreground: 218 12% 87%;
+    --primary: 208 43% 47%;
     --primary-foreground: 0 0% 100%;
-
-    --secondary: 220 22% 14%;
-    --secondary-foreground: 0 0% 98%;
-
-    --muted: 220 22% 14%;
-    --muted-foreground: 0 0% 80%;
-
-    --accent: 211 70% 38%;
-    --accent-foreground: 0 0% 100%;
-
-    --destructive: 0 72% 52%;
+    --secondary: 215 20% 20%;
+    --secondary-foreground: 218 12% 87%;
+    --muted: 215 18% 20%;
+    --muted-foreground: 216 14% 68%;
+    --accent: 213 17% 25%;
+    --accent-foreground: 218 12% 90%;
+    --destructive: 0 53% 43%;
     --destructive-foreground: 0 0% 100%;
-
-    --success: 152 60% 48%;
-    --warning: 35 92% 52%;
-    --warning-foreground: 36 95% 72%;
-
-    --border: 220 8% 24%;
-    --input: 0 0% 100% / 0.15;
-    --ring: 211 100% 56%;
-
-    --sidebar-bg: 220 22% 9%;
-
-    --radius: 1rem;
+    --success: 145 26% 68%;
+    --warning: 41 44% 69%;
+    --warning-foreground: 41 44% 74%;
+    --border: 215 13% 29%;
+    --input: 215 13% 32%;
+    --ring: 211 59% 72%;
+    --sidebar-bg: 214 20% 15%;
   }
 
   .theme-macos body {
@@ -234,52 +217,32 @@
     background-attachment: fixed;
   }
 
-  /* 关键：根容器/topbar 等用 bg-background 的元素在 macOS 主题下必须透明，
-     否则会用不透明深色盖住 body 渐变，毛玻璃透出来的就是纯黑 */
-  .theme-macos .bg-background {
-    background-color: transparent;
+  /* Only the workspace shell is transparent; controls keep their own surfaces. */
+  .theme-macos .workspace-shell { background: transparent; }
+  .theme-macos .bg-sidebar,
+  .theme-macos .chat-composer,
+  .theme-macos .settings-index {
+    background-color: rgb(32 39 48 / var(--glass-alpha));
+    backdrop-filter: blur(22px) saturate(115%);
+    -webkit-backdrop-filter: blur(22px) saturate(115%);
+    border-color: rgb(255 255 255 / .09);
+    box-shadow: inset 0 1px rgb(255 255 255 / .025), 0 8px 28px rgb(0 0 0 / .07);
   }
-
-  /* 毛玻璃面板：sidebar/card/主区域容器 */
-  .theme-macos .glass-panel {
-    background-color: hsl(220 25% 28% / var(--glass-alpha));
-    backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
-    -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
-    border: 1px solid hsl(220 30% 50% / 0.3);
-    box-shadow: 0 8px 32px hsl(220 40% 30% / 0.15);
-  }
-
-  /* Card 与消息气泡共用毛玻璃，统一跟随透明度设置。 */
-  .theme-macos .bg-card,
-  .theme-macos .settings-index,
+  .theme-macos .bg-card:not(.chat-composer),
   .theme-macos .chat-bubble {
-    background-color: hsl(220 25% 28% / var(--glass-alpha));
-    backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
-    -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
-    border: 1px solid hsl(220 30% 50% / 0.25);
-    box-shadow: 0 4px 16px hsl(220 40% 30% / 0.12);
+    background-color: #1c2a35;
+    border-color: rgb(255 255 255 / .10);
   }
-
-  /* Sidebar 毛玻璃（稍深一点） */
-  .theme-macos .bg-sidebar {
-    background-color: hsl(220 25% 24% / var(--glass-alpha));
-    backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
-    -webkit-backdrop-filter: blur(40px) saturate(200%) brightness(1.05);
-    border-right: 1px solid hsl(220 30% 50% / 0.3);
+  /* Overview cards track concentration with a readable minimum opacity, without extra blur. */
+  .theme-macos .bg-card.glass-content-card {
+    background-color: rgb(34 42 53 / calc(.25 + var(--glass-alpha) * .75));
   }
-
-  /* popover 完全不透明，强制覆盖 */
   .theme-macos .bg-popover {
-    background-color: hsl(230 40% 10%);
-    border: 1px solid hsl(230 40% 40% / 0.3);
-    box-shadow: 0 8px 24px hsl(230 50% 20% / 0.2);
+    background-color: #22323f;
+    border-color: rgb(255 255 255 / .15);
+    box-shadow: 0 12px 36px rgb(0 0 0 / .25);
   }
 
-  /* Hover 蓝色（方案 F2）：菜单/按钮 hover 时半透明蓝填充 */
-  .theme-macos nav a:hover,
-  .theme-macos button:not([data-session-select]):hover {
-    background-color: rgba(28, 117, 201, 0.28) !important;
-  }
 }
 
 @layer base {
@@ -510,3 +473,36 @@ button[aria-haspopup="menu"]:focus-visible {
 .theme-everforest .chat-code-header { background: transparent; border-bottom: 0; }
 .theme-everforest .chat-question-bubble { background: #3d484d; border-color: #475258; color: #d3c6aa; }
 .theme-everforest .md-body a { color: #7fbbb3; }
+
+.theme-everforest input[aria-label="搜索会话或分组"]::placeholder {
+  color: #aaa18d;
+  opacity: 1;
+}
+
+.theme-everforest .session-search { border-radius: 16px; }
+.theme-everforest .session-search input { border-radius: 12px; padding-inline: 8px; }
+
+/* macOS: rounded controls, stable reading surfaces, restrained highlights. */
+.theme-macos button:not([role="switch"]),
+.theme-macos .sidebar-menu-trigger { border-radius: 18px; }
+.theme-macos .session-row,
+.theme-macos .app-sidebar nav a { border-radius: 15px; }
+.theme-macos [role="menuitem"], .theme-macos [role="option"] { border-radius: 10px; }
+.theme-macos .chat-composer { border-radius: 20px; }
+.theme-macos .chat-code-block { background: #151b23; border: 1px solid rgb(255 255 255 / .09); border-radius: 12px; }
+.theme-macos .chat-code-header { background: transparent; border-bottom: 0; }
+.theme-macos .chat-question-bubble { background: rgb(183 200 221 / .07); border-color: rgb(203 214 229 / .11); }
+.theme-macos .md-body a { color: #91b8e0; }
+.theme-macos .session-search { border-radius: 16px; }
+.theme-macos .session-search input { border-radius: 12px; padding-inline: 8px; }
+.theme-macos input::placeholder, .theme-macos textarea::placeholder { color: #a1a8b1; opacity: 1; }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .theme-macos .bg-sidebar, .theme-macos .chat-composer, .theme-macos .settings-index, .theme-macos .bg-card.glass-content-card { background-color: #202730; }
+}
+@media (prefers-reduced-transparency: reduce) {
+  .theme-macos .bg-sidebar, .theme-macos .chat-composer, .theme-macos .settings-index, .theme-macos .bg-card.glass-content-card {
+    background-color: #202730;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}

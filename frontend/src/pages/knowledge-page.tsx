@@ -286,7 +286,7 @@ export function KnowledgePage() {
       </div>
 
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               文档总数
@@ -300,7 +300,7 @@ export function KnowledgePage() {
             {s?.files_done ?? 0} 已入库 / {s?.files_pending ?? 0} 处理中
           </div>
         </Card>
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               知识片段
@@ -312,7 +312,7 @@ export function KnowledgePage() {
           </div>
           <div className="mt-1 text-[10px] text-muted-foreground">向量化的语义单元</div>
         </Card>
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               待审批
@@ -324,7 +324,7 @@ export function KnowledgePage() {
           </div>
           <div className="mt-1 text-[10px] text-muted-foreground">用户点赞的问答</div>
         </Card>
-        <Card className="p-4">
+        <Card className="glass-content-card p-4">
           <div className="flex items-center justify-between">
             <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
               已沉淀
@@ -350,7 +350,7 @@ export function KnowledgePage() {
         </div>
       ) : null}
 
-      <Card className="overflow-hidden">
+      <Card className="glass-content-card overflow-hidden">
         <div className="flex items-center justify-between border-b px-4 py-3">
           <div className="flex items-center gap-2">
             <span className="text-[13px] font-medium">文档列表</span>

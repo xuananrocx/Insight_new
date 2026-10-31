@@ -1,4 +1,5 @@
 import { ConfirmationProvider } from '@/components/confirmation-provider'
+import { useGlassOpacity } from '@/hooks/use-glass-opacity'
 import { useBackground } from '@/hooks/use-background'
 import { type ReactNode } from 'react'
 import { AuthBoundary, useAuth } from '@/hooks/use-auth'
@@ -26,9 +27,10 @@ function Guard({ permission, children }: { permission: string; children: ReactNo
 }
 function Workspace() {
   useBackground()
+  useGlassOpacity()
   return (
     <ChatSessionProvider>
-      <div className="flex h-dvh flex-col overflow-hidden bg-background md:flex-row">
+      <div className="workspace-shell flex h-dvh flex-col overflow-hidden bg-background md:flex-row">
         <AppSidebar />
         <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
           <main data-workspace-content className="min-h-0 flex-1 overflow-y-auto">

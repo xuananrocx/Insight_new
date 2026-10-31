@@ -22,21 +22,21 @@ export function ThemeProvider({ children, defaultTheme = 'minimal', storageKey =
 }) {
   const [key, setKey] = useState(() => accountKey(storageKey))
   const read = (currentKey: string) => {
-    try { return readThemePreference(localStorage, currentKey, storageKey) } catch { return null }
+    try { return readThemePreference(localStorage, currentKey, storageKey, accountKey('amd-ui-accent')) } catch { return null }
   }
   const readAccent = () => { try { return normalizeAccent(localStorage.getItem(accountKey('amd-ui-accent'))) } catch { return null } }
-  const [accentPreference, setAccentPreference] = useState<AccentKey | null>(readAccent)
   const [preference, setPreference] = useState<ThemeKey | null>(() => read(key))
+  const [accentPreference, setAccentPreference] = useState<AccentKey | null>(readAccent)
   const { data } = useQuery({ queryKey: ['appearance-default'], queryFn: accountApi.status, staleTime: 30_000, refetchOnWindowFocus: true })
-  const accent = accentPreference ?? normalizeAccent(data?.default_accent) ?? 'graphite'
+  const accent = accentPreference ?? (data?.default_theme === 'stripe-light' ? 'moss' : normalizeAccent(data?.default_accent)) ?? 'graphite'
   const theme = preference ?? normalizeTheme(data?.default_theme) ?? defaultTheme
 
   useEffect(() => {
     const sync = () => {
       const currentKey = accountKey(storageKey)
-      setAccentPreference(readAccent())
       setKey(currentKey)
       setPreference(read(currentKey))
+      setAccentPreference(readAccent())
     }
     sync()
     window.addEventListener('insight-theme-account-change', sync)
@@ -54,7 +54,7 @@ export function ThemeProvider({ children, defaultTheme = 'minimal', storageKey =
     root.classList.remove('theme-minimal', 'theme-stripe-light', 'theme-stripe-dark', 'theme-linear', 'theme-everforest', 'theme-macos')
     root.classList.add(`theme-${theme}`)
     root.dataset.accent = accent
-    try { localStorage.setItem('amd-ui-theme-rendered', theme) } catch { /* Cosmetic cache only. */ }
+    try { localStorage.setItem('amd-ui-theme-rendered', theme); localStorage.setItem('amd-ui-accent-rendered', accent) } catch { /* Cosmetic cache only. */ }
   }, [theme, accent])
 
   const setTheme = (next: ThemeKey) => {

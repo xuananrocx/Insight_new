@@ -557,12 +557,12 @@ export function ChatPage() {
 
           {showStats ? (
             <div className="mb-6">
-              <StatsCards />
+              <StatsCards cardClassName="glass-content-card" />
             </div>
           ) : null}
 
           <form onSubmit={handleSubmit}>
-            <Card className="p-4">
+            <Card className="chat-composer p-4">
               <AutosizeTextarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -678,7 +678,7 @@ export function ChatPage() {
         <div className="shrink-0 px-4 pb-4 pt-2 md:px-8">
           {!canAskKb && <p className="mx-auto mb-3 max-w-[820px] text-sm text-muted-foreground">当前知识库已不可用，历史会话保留。请新建对话并选择有权限的知识库。</p>}
           <form onSubmit={handleSubmit} className="mx-auto max-w-[820px]">
-            <Card className="p-3">
+            <Card className="chat-composer p-3">
               <AutosizeTextarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}

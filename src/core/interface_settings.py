@@ -9,6 +9,8 @@ THEMES = ('minimal', 'stripe-light', 'linear', 'everforest', 'macos')
 def default_theme() -> str:
     ui = settings.config.get('interface', {})
     value = ui.get('default_theme') if isinstance(ui, dict) else None
+    if value == 'stripe-light':
+        return 'minimal'
     if value == 'linear':
         return 'everforest'
     return value if value in THEMES else 'minimal'
@@ -18,5 +20,7 @@ ACCENTS = ('graphite', 'blue', 'slate', 'terracotta', 'moss', 'stone')
 
 def default_accent() -> str:
     ui = settings.config.get('interface', {})
+    if isinstance(ui, dict) and ui.get('default_theme') == 'stripe-light':
+        return 'moss'
     value = ui.get('default_accent') if isinstance(ui, dict) else None
     return value if value in ACCENTS else 'graphite'

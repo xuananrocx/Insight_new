@@ -11,36 +11,35 @@
           var t = localStorage.getItem('amd-ui-theme-rendered') || localStorage.getItem('amd-ui-theme') || 'minimal';
           var map = {
             'minimal': 'theme-minimal',
-            'stripe-light': 'theme-stripe-light',
+            'stripe-light': 'theme-minimal',
             'linear': 'theme-everforest',
             'everforest': 'theme-everforest',
             'macos': 'theme-macos',
           };
           var cls = map[t] || 'theme-minimal';
           if (cls) document.documentElement.classList.add(cls);
+          var accent = t === 'stripe-light' ? 'moss' : localStorage.getItem('amd-ui-accent-rendered');
+          if (['graphite', 'blue', 'slate', 'terracotta', 'moss', 'stone'].indexOf(accent) !== -1) document.documentElement.dataset.accent = accent;
 
           // macOS 主题下的渐变背景选择
           var bgMap = {
-            'deep-blue': '',
             'smoky-blue': 'bg-smoky-blue',
             'moonlit-mint': 'bg-moonlit-mint',
-            'pearl-dusk': 'bg-pearl-dusk',
-            'emerald-vault': 'bg-emerald-vault',
             'rose-gold-mist': 'bg-rose-gold-mist',
             'aurora-haze': 'bg-aurora-haze',
             'obsidian': 'bg-obsidian',
-            'galaxy-mesh': 'bg-galaxy-mesh',
           };
-          var b = 'moonlit-mint';
-          if (b && bgMap[b] && t === 'macos') {
+          var b = localStorage.getItem('amd-ui-background-rendered') || 'moonlit-mint';
+          if (!Object.prototype.hasOwnProperty.call(bgMap, b)) b = 'moonlit-mint';
+          if (t === 'macos') {
             document.documentElement.classList.add(bgMap[b]);
           }
 
-          var glassRaw = localStorage.getItem('amd-ui-glass-opacity');
+          var glassRaw = localStorage.getItem('amd-ui-glass-rendered');
           if (glassRaw) {
             var glass = JSON.parse(glassRaw);
-            if (typeof glass === 'number' && !isNaN(glass)) {
-              document.documentElement.style.setProperty('--glass-alpha', String(glass));
+            if (typeof glass === 'number' && isFinite(glass)) {
+              document.documentElement.style.setProperty('--glass-alpha', String(Math.min(1, Math.max(0.3, glass))));
             }
           }
         } catch (e) {}

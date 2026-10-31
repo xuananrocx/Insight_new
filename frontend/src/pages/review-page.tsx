@@ -99,7 +99,7 @@ export function ReviewPage() {
           加载中...
         </div>
       ) : list.length === 0 ? (
-        <Card className="flex flex-col items-center justify-center py-16 text-center">
+        <Card className="glass-content-card flex flex-col items-center justify-center py-16 text-center">
           <Inbox className="mb-3 h-8 w-8 text-muted-foreground/40" />
           <div className="text-[13px] text-muted-foreground">
             {tab === 'pending' ? '审批队列为空' : '还没有已通过的案例'}
@@ -135,7 +135,7 @@ function FeedbackCard({
 }) {
   const sources = getFeedbackSources(fb)
   return (
-    <Card className="p-4">
+    <Card className="glass-content-card p-4">
       <div className="mb-3 flex items-start gap-2">
         <span className="mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded bg-secondary text-[10px] font-medium text-secondary-foreground">
           Q

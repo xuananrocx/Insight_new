@@ -614,3 +614,16 @@ def test_default_accent_validation_permissions_and_legacy_update(env, monkeypatc
     assert yaml.safe_load(USER_CONFIG_PATH.read_text())['interface']['default_accent'] == 'terracotta'
     assert env.admin.put(endpoint, json={'default_theme': 'linear'}).json()['default_accent'] == 'terracotta'
     assert env.alice.get('/api/v1/auth/status').json()['default_accent'] == 'terracotta'
+
+
+def test_legacy_stripe_default_maps_to_minimal_moss(env, monkeypatch):
+    from src.core.config import settings
+    monkeypatch.setitem(settings.config, 'interface', {'default_theme': 'stripe-light', 'default_accent': 'blue'})
+    result = env.admin.get('/api/v1/settings/interface').json()
+    assert result == {'default_theme': 'minimal', 'default_accent': 'moss'}
+    public = env.alice.get('/api/v1/auth/status').json()
+    assert public['default_theme'] == 'minimal'
+    assert public['default_accent'] == 'moss'
+    assert env.admin.put('/api/v1/settings/interface', json={'default_theme': 'stripe-light'}).status_code == 200
+    result = env.admin.put('/api/v1/settings/interface', json={'default_theme': 'minimal', 'default_accent': 'stone'}).json()
+    assert result == {'default_theme': 'minimal', 'default_accent': 'stone'}

@@ -36,3 +36,20 @@ test('saved Linear preference maps to Everforest without changing inheritance', 
   assert.equal(normalizeTheme('everforest'), 'everforest')
   assert.equal(readThemePreference(storage([[`${legacy}:alice`, 'linear']]), `${legacy}:alice`, legacy), 'everforest')
 })
+
+test('Stripe migration selects moss once and preserves subsequent personal choices', () => {
+  const s = storage([[`${legacy}:alice`, 'stripe-light'], ['accent:alice', 'blue']])
+  assert.equal(readThemePreference(s, `${legacy}:alice`, legacy, 'accent:alice'), 'minimal')
+  assert.equal(s.getItem('accent:alice'), 'moss')
+  s.setItem('accent:alice', 'stone')
+  assert.equal(readThemePreference(s, `${legacy}:alice`, legacy, 'accent:alice'), 'minimal')
+  assert.equal(s.getItem('accent:alice'), 'stone')
+  assert.equal(readThemePreference(s, `${legacy}:bob`, legacy, 'accent:bob'), null)
+  assert.equal(s.getItem('accent:bob'), null)
+})
+test('browser-wide Stripe is claimed only by first account with moss', () => {
+  const s = storage([[legacy, 'stripe-light']])
+  assert.equal(readThemePreference(s, `${legacy}:alice`, legacy, 'accent:alice'), 'minimal')
+  assert.equal(s.getItem('accent:alice'), 'moss')
+  assert.equal(readThemePreference(s, `${legacy}:bob`, legacy, 'accent:bob'), null)
+})
