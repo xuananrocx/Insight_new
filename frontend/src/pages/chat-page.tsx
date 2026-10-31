@@ -669,9 +669,9 @@ export function ChatPage() {
             })}
           </div>
         </div>
-        {showJump && <Button type="button" variant="outline" size="sm" onClick={scrollToBottom}
-          className="absolute bottom-3 left-1/2 -translate-x-1/2 gap-1.5 rounded-full bg-popover shadow-md">
-          <ArrowDown className="h-3.5 w-3.5" />回到底部
+        {showJump && <Button type="button" variant="outline" size="icon" onClick={scrollToBottom} aria-label="回到底部" title="回到底部"
+          className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-popover shadow-md">
+          <ArrowDown className="h-4 w-4" aria-hidden="true" />
         </Button>}
         </div>
 
