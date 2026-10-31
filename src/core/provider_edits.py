@@ -16,8 +16,8 @@ def edit_version(cur, provider):
     catalog = [
         dict(r)
         for r in cur.execute(
-            """SELECT m.model_id,m.display_name,m.revision,l.context_tokens,l.output_tokens
-        FROM api_models m LEFT JOIN api_model_limits l USING(provider_id,model_id)
+            """SELECT m.model_id,m.display_name,m.revision,l.context_tokens,l.output_tokens,w.mode AS web_search
+        FROM api_models m LEFT JOIN api_model_limits l USING(provider_id,model_id) LEFT JOIN api_model_web w USING(provider_id,model_id)
         WHERE m.provider_id=? ORDER BY m.model_id""",
             (provider["id"],),
         )

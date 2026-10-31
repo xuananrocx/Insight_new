@@ -1,3 +1,4 @@
+import { useBackground, BACKGROUND_OPTIONS, BACKGROUND_PREVIEW_CSS } from '@/hooks/use-background'
 import { ACCENT_COLORS } from '@/lib/accent-colors'
 import * as Menu from '@radix-ui/react-dropdown-menu'
 import { ChevronRight, ChevronsUpDown, LogOut, ShieldCheck, SunMoon } from 'lucide-react'
@@ -10,6 +11,7 @@ import { cn } from '@/lib/utils'
 export function AccountMenu({ collapsed = false, onNavigate }: { collapsed?: boolean; onNavigate?: () => void }) {
   const { user, logout } = useAuth()
   const { theme, setTheme, followsDefault, resetTheme, accent, setAccent, resetAccent, followsDefaultAccent } = useTheme()
+  const { background, set: setBackground } = useBackground()
   const navigate = useNavigate()
   const roles = user.roles.filter(role => role.enabled).map(role => role.name).join('、') || '无启用角色'
   const initial = Array.from(user.username.trim())[0]?.toLocaleUpperCase() || '?'
@@ -35,6 +37,12 @@ export function AccountMenu({ collapsed = false, onNavigate }: { collapsed?: boo
             <Menu.RadioGroup value={followsDefaultAccent ? 'system' : accent} onValueChange={value => { if (value === 'system') resetAccent(); else { const c = ACCENT_COLORS.find(c => c.key === value); if (c) setAccent(c.key) } }}>
               <Menu.RadioItem value="system" className={itemClass}>使用系统默认颜色<Menu.ItemIndicator className="ml-auto">✓</Menu.ItemIndicator></Menu.RadioItem>
               {ACCENT_COLORS.map(c => <Menu.RadioItem key={c.key} value={c.key} className={itemClass} onSelect={e => e.preventDefault()}><span className="h-3.5 w-3.5 rounded-full" style={{ background: c.hex }} />{c.label}<Menu.ItemIndicator className="ml-auto">✓</Menu.ItemIndicator></Menu.RadioItem>)}
+            </Menu.RadioGroup>
+          </>}
+          {theme === 'macos' && <>
+            <Menu.Separator className="mx-2 my-1 h-px bg-border" /><Menu.Label className="px-3 py-1 text-xs text-muted-foreground">背景渐变</Menu.Label>
+            <Menu.RadioGroup value={background} onValueChange={value => { const selected = BACKGROUND_OPTIONS.find(o => o.key === value); if (selected) setBackground(selected.key) }}>
+              {BACKGROUND_OPTIONS.map(o => <Menu.RadioItem key={o.key} value={o.key} className={itemClass} onSelect={e => e.preventDefault()}><span className="h-4 w-4 shrink-0 rounded-full border border-white/20" style={{ background: BACKGROUND_PREVIEW_CSS[o.key] }} />{o.label}<Menu.ItemIndicator className="ml-auto">✓</Menu.ItemIndicator></Menu.RadioItem>)}
             </Menu.RadioGroup>
           </>}
         </Menu.SubContent></Menu.Portal>

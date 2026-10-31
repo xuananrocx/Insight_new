@@ -32,10 +32,10 @@ export function StatsPage() {
         </p>
       </div>
 
-      <StatsCards />
+      <StatsCards cardClassName="glass-content-card" />
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <Card className="p-5">
+        <Card className="glass-content-card p-5">
           <div className="mb-4 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <BarChart3 className="h-4 w-4 text-muted-foreground" />
@@ -58,7 +58,7 @@ export function StatsPage() {
           </div>
         </Card>
 
-        <Card className="p-5">
+        <Card className="glass-content-card p-5">
           <div className="mb-4 flex items-center gap-2">
             <Target className="h-4 w-4 text-muted-foreground" />
             <span className="text-[14px] font-medium">高频问题 Top 4</span>

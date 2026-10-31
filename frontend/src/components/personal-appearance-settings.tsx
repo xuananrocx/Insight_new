@@ -18,7 +18,7 @@ export function SidebarSettingsCard() {
     DEFAULT_MENU_ORDER,
   )
 
-  const visibleOrder = visibleMenuOrder(menuOrder, can, showLogs).filter(path => ['/review', '/stats', '/ai-logs', '/logs'].includes(path))
+  const visibleOrder = visibleMenuOrder(menuOrder, can, showLogs).filter(path => ['/review', '/stats', '/ai-logs', '/logs', '/admin/knowledge-access'].includes(path))
   const move = (idx: number, dir: 'up' | 'down') => {
     const target = dir === 'up' ? idx - 1 : idx + 1
     if (target < 0 || target >= visibleOrder.length) return
@@ -102,13 +102,13 @@ export function AppearanceSettingsCard() {
         {theme === 'macos' ? (
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <label className="text-[12px] text-muted-foreground">毛玻璃透明度</label>
+              <label className="text-[12px] text-muted-foreground">玻璃浓度</label>
               <span className="font-mono text-[11px] text-muted-foreground">
                 {Math.round(glassOpacity * 100)}%
               </span>
             </div>
             <input
-              aria-label="毛玻璃透明度"
+              aria-label="玻璃浓度"
               type="range"
               min={0.3}
               max={1}
@@ -118,8 +118,8 @@ export function AppearanceSettingsCard() {
               className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary"
             />
             <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
-              <span>透明（看到背景）</span>
-              <span>不透明（清晰易读）</span>
+              <span>通透（背景更明显）</span>
+              <span>厚实（内容更清晰）</span>
             </div>
             <div className="mt-3 text-[11px] text-muted-foreground">
               实时生效，立即看到效果。设置自动保存。
@@ -132,36 +132,29 @@ export function AppearanceSettingsCard() {
                 {BACKGROUND_OPTIONS.find((o) => o.key === background)?.label ?? 'Moonlit Mint'}
               </span>
             </div>
-            <div className="grid grid-cols-3 gap-2">
+            <div role="group" aria-label="毛玻璃背景" className="grid max-w-md grid-cols-3 gap-2 sm:grid-cols-5">
               {BACKGROUND_OPTIONS.map((opt) => (
                 <button
                   key={opt.key}
                   onClick={() => setBackground(opt.key)}
-                  className={
-                    'relative h-16 rounded-md overflow-hidden transition-all ' +
-                    (background === opt.key
-                      ? 'ring-2 ring-primary ring-offset-2 ring-offset-background'
-                      : 'ring-1 ring-border hover:ring-primary/50')
-                  }
-                  style={{ background: BACKGROUND_PREVIEW_CSS[opt.key] }}
+                  type="button"
+                  aria-label={opt.label}
+                  aria-pressed={background === opt.key}
+                  className={`flex flex-col items-center gap-1.5 rounded-md border px-2 py-2 text-[11px] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${background === opt.key ? 'border-input bg-muted' : 'border-transparent hover:bg-muted/60'}`}
                   title={`${opt.label} · ${opt.description}`}
                 >
-                  <span
-                    className="absolute bottom-1 left-1.5 text-[10px] font-medium text-white"
-                    style={{ textShadow: '0 1px 3px rgba(0,0,0,0.7)' }}
-                  >
-                    {opt.label}
-                  </span>
+                  <span className="flex h-7 w-7 items-center justify-center rounded-full border border-white/20 text-white" style={{ background: BACKGROUND_PREVIEW_CSS[opt.key] }} aria-hidden="true">{background === opt.key ? '✓' : ''}</span>
+                  <span>{opt.label}</span>
                 </button>
               ))}
             </div>
             <div className="mt-1.5 text-[11px] text-muted-foreground">
-              切换主题后背景会自动恢复默认（Moonlit Mint）。
+              背景与玻璃浓度按当前账号保存在此浏览器，切换主题或刷新后保留。
             </div>
           </div>
         ) : (
           <div className="rounded-md bg-muted/20 p-3 text-[12px] text-muted-foreground">
-            切换到 macOS 毛玻璃主题后，这里会出现透明度调节。
+            切换到 磨砂玻璃主题后，这里会出现玻璃浓度调节。
           </div>
         )}
       </Card>

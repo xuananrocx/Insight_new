@@ -38,6 +38,7 @@ class ToolTurn:
     calls: list[ToolCall]
     usage: dict
     truncated: bool = False
+    paused: bool = False
 
 
 class ToolChat:
@@ -49,6 +50,13 @@ class ToolChat:
         self.check_access = check_access
         self.meta = meta or {}
         self.style = getattr(provider, "_api_style", "chat") if isinstance(provider, OpenAIProvider) else "anthropic"
+        from src.core.config import settings
+        self.web_mode = getattr(provider, 'web_search_mode', 'off') if settings.config.get('qa', {}).get('ai_generation', {}).get('web_search_enabled', False) else 'off'
+        if self.web_mode == 'responses':
+            self.style = 'responses'
+        self.on_web_event = lambda event: None
+        from src.core.web_search import WebEvents
+        self.web_events = WebEvents(lambda event: self.on_web_event(event))
         self.http = httpx.AsyncClient(timeout=network_timeout(), transport=transport)
         self.retry_count = 10
         self.deadline = float("inf")
@@ -97,6 +105,11 @@ class ToolChat:
                        "max_output_tokens": max_tokens, "store": False, "include": ["reasoning.encrypted_content"]}
             if tools:
                 payload.update(tools=[{"type": "function", **t} for t in tools], tool_choice="none" if final else "required" if force else "auto")
+            if self.web_mode == 'responses':
+                payload.setdefault('tools', []).append({'type': 'web_search'})
+                payload['include'].append('web_search_call.action.sources')
+                if final:
+                    payload['tool_choice'] = 'none'
             return url + "/responses", headers, payload
         if isinstance(p, AnthropicArchProvider):
             payload = p._build_payload(self.messages, max_tokens, None, system=self.system)
@@ -107,6 +120,10 @@ class ToolChat:
         if tools:
             payload.update(tools=[{"name": t["name"], "description": t["description"], "input_schema": t["parameters"]} for t in tools],
                            tool_choice={"type": "none" if final else "any" if force else "auto"})
+        if self.web_mode == 'anthropic':
+            payload.setdefault('tools', []).append({'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 5})
+            if final:
+                payload['tool_choice'] = {'type': 'none'}
         base = p.api_base.rstrip("/")
         url = base if base.endswith("/messages") else base + ("/messages" if base.endswith("/v1") else "/v1/messages")
         return url, headers, payload
@@ -147,7 +164,7 @@ class ToolChat:
         else:
             reason = data.get("stop_reason")
             truncated = reason == "max_tokens"
-            if reason not in ("end_turn", "tool_use", "stop_sequence", "max_tokens"):
+            if reason not in ("end_turn", "tool_use", "stop_sequence", "max_tokens", "pause_turn"):
                 raise ToolProtocolError("模型响应不完整，工具尚未执行。")
             blocks = data.get("content", [])
             for b in blocks:
@@ -160,17 +177,18 @@ class ToolChat:
                 self.messages.append({"role": "assistant", "content": blocks})
         if len({c.id for c in calls}) != len(calls) or any(not c.id for c in calls):
             raise ToolProtocolError("模型返回重复或缺失的工具调用编号。")
-        return ToolTurn(text, calls, data.get("usage") or {}, truncated=truncated)
+        return ToolTurn(text, calls, data.get("usage") or {}, truncated=truncated, paused=data.get("stop_reason") == "pause_turn")
 
     def _log(self, scene, started, response=None, error=None):
+        scene = getattr(self, "log_scene", scene)
         # Reasoning blocks remain protocol state only, never a displayed thinking trace.
         messages = []
         for message in self.messages:
-            if message.get("type") == "reasoning":
+            if message.get("type") in ("reasoning", "web_search_call"):
                 continue
             safe = {k: v for k, v in message.items() if k != "reasoning_content"}
             if isinstance(safe.get("content"), list):
-                safe["content"] = [b for b in safe["content"] if b.get("type") not in ("thinking", "redacted_thinking")]
+                safe["content"] = [b for b in safe["content"] if b.get("type") not in ("thinking", "redacted_thinking", "server_tool_use", "web_search_tool_result")]
             messages.append(safe)
         ai_call_logger.log_call(provider=self.name, model=self.provider.chat_model, scene=scene,
                                 messages=messages, system_prompt=self.system, response_text=response,
@@ -206,7 +224,15 @@ class ToolChat:
             await asyncio.to_thread(self.check_access)
             diagnostic.data["phase"] = "解析工具响应"
             try:
-                result = self._decode(response.json())
+                data = response.json()
+                result = self._decode(data)
+                if self.web_mode != 'off':
+                    if self.style == 'responses':
+                        self.web_events.feed({'type': 'response.completed', 'response': data})
+                    else:
+                        for block in data.get('content', []):
+                            self.web_events.item(block)
+                        self.web_events.feed({'type': 'message_stop'})
             except (ValueError, KeyError, TypeError, IndexError) as exc:
                 raise ToolProtocolError("模型未返回完整的原生工具协议响应，请检测工具调用支持或使用 AI 增强。") from exc
             self._log("deep_ai_tools", started, json.dumps({"text": result.text, "tools": [c.name for c in result.calls], "usage": result.usage}, ensure_ascii=False))
@@ -243,7 +269,10 @@ class ToolChat:
                             if raw == '[DONE]':
                                 break
                             try:
-                                token = assembly.feed(json.loads(raw))
+                                event = json.loads(raw)
+                                if self.web_mode != 'off':
+                                    self.web_events.feed(event)
+                                token = assembly.feed(event)
                             except (ValueError,KeyError,TypeError) as exc:
                                 raise ToolProtocolError('模型流式工具协议不完整') from exc
                             if token:
@@ -318,6 +347,8 @@ class ToolChat:
                     if raw == "[DONE]":
                         break
                     event = json.loads(raw)
+                    if self.web_mode != 'off':
+                        self.web_events.feed(event)
                     if event.get("error") or event.get("type") == "error":
                         from src.core.llm_diagnostics import error_body
                         diagnostic.data["response_error"] = error_body(raw.encode("utf-8"), self.provider._api_key)
@@ -392,6 +423,7 @@ async def probe_tools():
     tool = definition("insight_connection_probe", "Return a random verification marker. Call with an empty object.")
     model = create_tool_chat("Call the provided tool once, then return its marker exactly. Do not invent the marker.",
                              [{"role": "user", "content": "Verify tool calling now."}])
+    model.log_scene = "test"
     model.retry_count = 1
     model.deadline = time.monotonic() + 60
     try:

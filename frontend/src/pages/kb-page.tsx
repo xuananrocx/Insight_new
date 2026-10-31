@@ -306,7 +306,7 @@ export default function KbPage() {
         {kbs?.map((kb) => (
           <Card
             key={kb.id}
-            className="group relative cursor-pointer p-5 transition-colors hover:border-primary/40"
+            className="glass-content-card group relative cursor-pointer p-5 transition-colors hover:border-primary/40"
             onClick={() => navigate(`/kbs/${kb.id}`)}
           >
             <div className="flex items-start justify-between">

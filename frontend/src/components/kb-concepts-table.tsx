@@ -59,7 +59,7 @@ export function KbConceptsTable({ kbId }: Props) {
     : concepts
 
   return (
-    <Card className="mb-6 overflow-hidden">
+    <Card className="glass-content-card mb-6 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-5 py-3">
         <button type="button" aria-expanded={expanded} aria-controls={contentId} onClick={() => setExpanded(!expanded)} className="flex items-center gap-2">
           <ChevronRight className={cn("h-4 w-4 transition-transform", expanded && "rotate-90")} />

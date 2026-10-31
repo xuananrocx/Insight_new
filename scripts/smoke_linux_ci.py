@@ -23,6 +23,7 @@ def main():
         'summary_staleness', 'summary_stream_policy', 'global_summary_backfill',
         'summarize_map_reduce', 'deployment_regressions',
         'answer_jobs', 'export_plan', 'model_availability', 'tool_agent',
+        'web_search', 'team_api_stats', 'retrieval_timeout',
     ]
     for group in (regression_files, ['default_kb']):
         subprocess.run(['docker', 'run', '--rm', '--network', 'none',

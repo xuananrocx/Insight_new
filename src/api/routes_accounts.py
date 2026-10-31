@@ -173,6 +173,7 @@ class ModelInput(BaseModel):
     original_model_id: str | None = Field(None, min_length=1, max_length=200)
     model_id: str = Field(min_length=1, max_length=200)
     display_name: str = Field("", max_length=80)
+    web_search: Literal['off', 'anthropic', 'responses'] | None = None
     context_tokens: int | None = Field(None, ge=4096, le=10000000)
     output_tokens: int | None = Field(None, ge=256, le=1000000)
 
@@ -327,6 +328,11 @@ def save_provider(req: ProviderInput, pid: str | None = None, *, preview=False):
             cur.execute("""INSERT INTO api_models(provider_id,model_id,display_name,revision) VALUES (?,?,?,?)
               ON CONFLICT(provider_id,model_id) DO UPDATE SET display_name=excluded.display_name""",
                         (pid, model.model_id, model.display_name, time.time_ns()))
+            previous_web = cur.execute('SELECT mode FROM api_model_web WHERE provider_id=? AND model_id=?', (pid, model.original_model_id if model.original_model_id in renames else model.model_id)).fetchone()
+            web = model.web_search if model.web_search is not None else (previous_web[0] if previous_web else 'off')
+            if (web == 'responses' and req.protocol != 'openai') or (web == 'anthropic' and req.protocol not in ('anthropic', 'anthropic-arch')):
+                raise HTTPException(422, '联网搜索方式与 API 协议不匹配')
+            cur.execute('INSERT OR REPLACE INTO api_model_web VALUES (?,?,?)', (pid, model.model_id, web))
             if model.original_model_id in renames or 'context_tokens' in model.model_fields_set or 'output_tokens' in model.model_fields_set:
                 previous = cur.execute('SELECT context_tokens,output_tokens FROM api_model_limits WHERE provider_id=? AND model_id=?', (pid, model.original_model_id if model.original_model_id in renames else model.model_id)).fetchone()
                 context = model.context_tokens if 'context_tokens' in model.model_fields_set else (previous[0] if previous else None)
@@ -479,6 +485,26 @@ def test_provider(pid: str, model_id: str | None = None):
     if not answer:
         raise HTTPException(502, "模型返回空内容")
     return {"ok": True, "name": p["name"]}
+
+
+@router.post("/providers/{pid}/test-web-search")
+async def test_provider_web_search(pid: str, request: Request, model_id: str | None = None):
+    from src.core.web_search import probe
+    from src.core.request_task import until_disconnect
+    p = a.resolve_provider(pid, model_id)
+    mode = p.get('web_search', 'off')
+    if mode == 'off':
+        raise HTTPException(400, '请先为此模型配置联网搜索方式')
+    a.bind_provider(pid, model_id=model_id)
+    a.rate_limit('provider-test:' + a.user()['id'], 20, 60)
+    try:
+        return await until_disconnect(request, probe(mode), timeout=90)
+    except ConnectionAbortedError:
+        return Response(status_code=204)
+    except HTTPException:
+        raise
+    except Exception:
+        return {'supported': False, 'message': '联网测试未完成，请检查接口支持情况及 AI 调用日志', 'sources': []}
 
 
 @router.post("/providers/{pid}/test-tools")

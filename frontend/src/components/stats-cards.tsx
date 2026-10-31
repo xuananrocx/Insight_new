@@ -11,7 +11,7 @@ import {
 import { Card } from '@/components/ui/card'
 import { api } from '@/lib/api'
 
-export function StatsCards() {
+export function StatsCards({ cardClassName = '' }: { cardClassName?: string }) {
   const { can } = useAuth()
   const allowed = can('analysis.view') || can('documents.view') || can('feedback.view')
   const { data, isLoading } = useQuery({
@@ -60,7 +60,7 @@ export function StatsCards() {
         const toneClass =
           stat.tone === 'warning' ? 'text-warning' : 'text-muted-foreground'
         return (
-          <Card key={stat.label} className="p-4">
+          <Card key={stat.label} className={`p-4 ${cardClassName}`}>
             <div className="flex items-center justify-between">
               <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 {stat.label}

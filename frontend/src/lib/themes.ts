@@ -7,19 +7,14 @@ export const THEMES: { key: ThemeKey; label: string; preview: string[] }[] = [
     preview: ['#fafafa', '#35383d', '#f3f3f1'],
   },
   {
-    key: 'stripe-light',
-    label: 'Stripe 浅色',
-    preview: ['#f6f9fc', '#635bff', '#e3e8ee'],
-  },
-  {
-    key: 'linear',
-    label: 'Linear 紫黑',
-    preview: ['#101016', '#5e6ad2', '#1c1d24'],
-  },
-  {
     key: 'macos',
-    label: 'macOS 毛玻璃',
+    label: '磨砂玻璃',
     preview: ['#0a1628', '#1c75c9', '#354159'],
+  },
+  {
+    key: 'everforest',
+    label: 'Everforest 森林',
+    preview: ['#2d353b', '#a7c080', '#232a2e'],
   },
 ]
 

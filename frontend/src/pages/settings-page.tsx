@@ -1,3 +1,4 @@
+import { Toggle } from '@/components/ui/toggle-switch'
 import { InterfaceSettingsCard, DefaultThemeSettingsCard } from '@/components/interface-settings-card'
 import { SettingsLayout } from '@/components/settings-layout'
 import { useAuth } from '@/hooks/use-auth'
@@ -116,6 +117,29 @@ function LLMTimeoutsCard() {
   )
 }
 
+
+function WebSearchConfigCard() {
+  const qc = useQueryClient()
+  const { can } = useAuth()
+  const status = useQuery({ queryKey: ['web-search-status'], queryFn: api.webSearch.get })
+  const save = useMutation({
+    mutationFn: api.webSearch.update,
+    onSuccess: data => {
+      qc.setQueryData(['web-search-status'], data)
+      void qc.invalidateQueries({ queryKey: ['settings', 'ai_generation'] })
+      toast.success(data.enabled ? '联网搜索已开启' : '联网搜索已关闭')
+    },
+    onError: (error: Error) => toast.error(`保存失败，未生效：${error.message}`),
+  })
+  return <Card className="p-5">
+    <div className="flex items-center justify-between gap-4">
+      <div><h3 className="text-sm font-medium">联网搜索</h3><p role="status" className="mt-1 text-xs text-muted-foreground">{save.isPending ? '正在保存…' : status.isError ? '状态读取失败，请重试' : !status.data ? '正在读取…' : status.data.enabled ? '已开启 · 切换即时保存' : '已关闭 · 切换即时保存'}</p></div>
+      <Toggle label="启用联网搜索" checked={save.isPending ? save.variables : status.data?.enabled ?? false} disabled={!can('system.edit') || !status.data || save.isPending} onChange={enabled => save.mutate(enabled)} />
+    </div>
+    {status.isError && <Button variant="outline" size="sm" onClick={() => void status.refetch()}>重试</Button>}
+    <p className="mt-3 text-xs text-muted-foreground">仅对新发起的深度 AI 提问生效；模型还需配置联网能力，由 AI 自主决定是否搜索。联网能力检测不受此开关影响。</p>
+  </Card>
+}
 
 function AiGenerationConfigCard() {
   const qc = useQueryClient()
@@ -585,7 +609,7 @@ export function SettingsPage() {
       </Card>
 
       </> },
-      { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
+      { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><WebSearchConfigCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
       { id: 'interface', label: '界面与交互', description: '系统默认外观与当前账号的界面交互偏好。', content: <><DefaultThemeSettingsCard /><InterfaceSettingsCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>

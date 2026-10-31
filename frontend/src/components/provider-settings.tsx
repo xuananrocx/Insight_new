@@ -1,8 +1,9 @@
+import { api } from '@/lib/api'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Plug } from 'lucide-react'
+import { Plug, Check, ChevronDown } from 'lucide-react'
 import { accountApi, accountRequest, type ApiModel, type Provider } from '@/lib/account-api'
 import { accountInput, useAuth } from '@/hooks/use-auth'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,7 @@ import { AccessEditor } from '@/components/access-editor'
 import { useConfirm } from '@/components/confirmation-provider'
 import { ApiModelSelect } from '@/components/api-model-select'
 import { modelEditMessage, type ModelEditImpact } from '@/lib/model-edit'
+import { WebSearchTestDialog, type WebSearchTest } from '@/components/web-search-test-dialog'
 
 const providerQueryKey = ['account-providers']
 async function refreshApiQueries(qc: ReturnType<typeof useQueryClient>) {
@@ -27,6 +29,7 @@ async function refreshApiQueries(qc: ReturnType<typeof useQueryClient>) {
 
 function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 'personal' | 'team'; onClose: () => void }) {
   const qc = useQueryClient()
+  const { refreshAccount } = useAuth()
   const confirm = useConfirm()
   const [name, setName] = useState(initial?.name || '')
   const [protocol, setProtocol] = useState(initial?.protocol || 'openai')
@@ -44,7 +47,7 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
     try {
       const body = {
         name, scope, protocol, base_url: url,
-        models: models.map(m => ({ model_id: m.model_id, original_model_id: m.original_model_id, display_name: m.display_name, context_tokens: m.context_tokens, output_tokens: m.output_tokens })),
+        models: models.map(m => ({ model_id: m.model_id, original_model_id: m.original_model_id, display_name: m.display_name, context_tokens: m.context_tokens, output_tokens: m.output_tokens, web_search: m.web_search ?? 'off' })),
         api_key: key || (initial ? null : ''), enabled: initial?.enabled ?? true,
         edit_version: initial?.edit_version,
       }
@@ -56,6 +59,7 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
         confirmation_token = impact.confirmation_token
       }
       await accountRequest(`/providers${initial ? '/' + initial.id : ''}`, initial ? 'PUT' : 'POST', { ...body, confirmation_token })
+      await refreshAccount()
       await refreshApiQueries(qc); onClose(); toast.success('API 配置已保存')
     } catch (e) { setError((e as Error).message) } finally { setBusy(false) }
   }
@@ -71,6 +75,8 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
         <p className="text-xs text-muted-foreground">修改已有模型 ID 时，确认后同步默认选择与会话；删除后再添加视为不同模型。</p>
         <label className="block text-sm">显示名称（可选）<input className={accountInput} value={model.display_name} onChange={e => patch(i, 'display_name', e.target.value)} maxLength={80} placeholder="聊天选择器中显示的名称" /></label>
         <p className="text-xs text-muted-foreground">显示名称仅影响展示，不改变实际调用的模型。</p>
+        <label className="block text-sm">联网搜索（深度 AI）<OptionSelect aria-label={`模型 ${i + 1} 联网搜索`} value={model.web_search ?? 'off'} onValueChange={value => setModels(items => items.map((item, index) => index === i ? { ...item, web_search: value as ApiModel['web_search'] } : item))} options={[{ value: 'off', label: '不启用' }, ...(protocol === 'openai' ? [{ value: 'responses', label: '启用 · Responses 搜索' }] : [{ value: 'anthropic', label: '启用 · Anthropic 搜索' }])]} /></label>
+        <p className="text-xs text-muted-foreground">需同时开启系统联网搜索。Responses 模式仅用于深度 AI，该模型的普通连接测试沿用 API 协议；启用后请测试联网能力。</p>
         <details className="col-span-full text-xs text-muted-foreground"><summary className="cursor-pointer">模型能力（可选，摘要预算使用）</summary><p className="my-2">按服务商文档填写；留空表示未知，不根据模型名称推测。填写值不代表服务商保证。</p><div className="grid gap-3 sm:grid-cols-2">
           {(['context_tokens', 'output_tokens'] as const).map(key => <label key={key}>{key === 'context_tokens' ? '上下文容量（tokens）' : '最大输出（tokens）'}<input type="number" className={accountInput} value={model[key] ?? ''} min={key === 'context_tokens' ? 4096 : 256} onChange={e => setModels(items => items.map((item, index) => index === i ? { ...item, [key]: e.target.value === '' ? null : Number(e.target.value) } : item))} /></label>)}
         </div></details>
@@ -82,26 +88,69 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
   </ManagementDialog>
 }
 
+function CompactStatus({ label, value, passed, detail, onClick }: { label: string; value: string; passed?: boolean; detail: string; onClick?: () => void }) {
+  const content = <>{label}{passed ? <Check aria-hidden="true" className="h-3 w-3 text-emerald-600 dark:text-emerald-400" /> : <span>{value}</span>}</>
+  const style = 'inline-flex items-center gap-1 whitespace-nowrap rounded py-1 text-[11px] text-muted-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+  if (onClick) return <button type="button" className={style} title={detail} aria-label={`${label}：${value}，查看详情`} onClick={onClick}>{content}</button>
+  return <DropdownMenu.Root modal={false}><DropdownMenu.Trigger asChild><button type="button" className={style} title={detail} aria-label={`${label}：${value}，查看详情`}>{content}</button></DropdownMenu.Trigger><DropdownMenu.Portal><DropdownMenu.Content align="start" sideOffset={4} collisionPadding={8} className="z-[90] max-w-[min(320px,calc(100vw-32px))] whitespace-pre-line break-words rounded-md border bg-popover p-3 text-xs leading-relaxed text-popover-foreground shadow-md">{detail}</DropdownMenu.Content></DropdownMenu.Portal></DropdownMenu.Root>
+}
+
 function TestResult({ model, kind }: { model: ApiModel; kind: 'connection' | 'tools' }) {
   const state = model[`${kind}_status`]
   const time = model[`${kind}_checked_at`]
-  const label = kind === 'connection' ? '连接' : '工具调用'
-  return <p className="text-xs text-muted-foreground" title={model[`${kind}_message`] || undefined}>{label}：{state === 'passed' ? '上次检测通过' : state === 'failed' ? '上次检测失败' : state === 'unknown' ? '上次未能确认' : '未检测'}{time ? ` · ${new Date(time * 1000).toLocaleString()}` : ''}</p>
+  const label = kind === 'connection' ? '连接' : '工具'
+  const value = state === 'passed' ? '通过' : state === 'failed' ? '失败' : state === 'unknown' ? '未确认' : '未检测'
+  const detail = `${label}：${value}${time ? `\n检测时间：${new Date(time * 1000).toLocaleString()}` : ''}${model[`${kind}_message`] ? `\n${model[`${kind}_message`]}` : ''}`
+  return <CompactStatus label={label} value={value} passed={state === 'passed'} detail={detail} />
 }
 
 export function ProviderSettings({ team = false }: { team?: boolean }) {
   const qc = useQueryClient()
   const confirm = useConfirm()
-  const { can } = useAuth()
+  const { can, refreshAccount } = useAuth()
+  const webStatus = useQuery({ queryKey: ['web-search-status'], queryFn: api.webSearch.get })
   const providers = useQuery({ queryKey: providerQueryKey, queryFn: accountApi.providers })
   const [form, setForm] = useState<{ scope: 'personal' | 'team'; initial?: Provider } | null>(null)
   const [busy, setBusy] = useState(false)
   const [failure, setFailure] = useState('')
+  const [testFailure, setTestFailure] = useState<{ title: string; message: string } | null>(null)
+  const [webTest, setWebTest] = useState<WebSearchTest | null>(null)
+  const [showWebTest, setShowWebTest] = useState(false)
+  const webController = useRef<AbortController | null>(null)
+  useEffect(() => () => { webController.current?.abort() }, [])
+  function stopWebSearch() {
+    webController.current?.abort()
+    setWebTest(previous => previous?.status === 'pending' ? { ...previous, status: 'cancelled', elapsedMs: Date.now() - previous.startedAt,
+      message: '已停止等待并断开本次测试请求，不计为测试失败。服务端检测到断开后会取消任务；上游是否停止计算或计费取决于服务商。' } : previous)
+  }
   const [grants, setGrants] = useState<Provider | null>(null)
-  async function run(action: () => Promise<unknown>, success?: string) {
+  async function testWebSearch(provider: Provider, model: ApiModel) {
+    if (busy || webController.current) return
+    const controller = new AbortController()
+    webController.current = controller
+    const startedAt = Date.now()
+    const initial: WebSearchTest = { providerId: provider.id, modelId: model.model_id,
+      label: `${provider.name} · ${model.display_name || model.model_id}`, startedAt,
+      status: 'pending', message: '正在确认模型配置与使用权限…', sources: [] }
+    setWebTest(initial); setShowWebTest(true); setBusy(true); setFailure('')
+    try {
+      await refreshAccount()
+      controller.signal.throwIfAborted()
+      setWebTest({ ...initial, message: '正在请求模型执行搜索，并验证返回的网页来源…' })
+      const result = await accountRequest<{ supported: boolean; message: string; sources: { title: string; url: string }[] }>(`/providers/${provider.id}/test-web-search?model_id=${encodeURIComponent(model.model_id)}`, 'POST', undefined, controller.signal)
+      controller.signal.throwIfAborted()
+      setWebTest({ ...initial, ...result, status: result.supported ? 'success' : 'unconfirmed', elapsedMs: Date.now() - startedAt })
+    } catch (error) {
+      setWebTest({ ...initial, status: controller.signal.aborted ? 'cancelled' : 'error', message: controller.signal.aborted ? '已停止等待并断开本次测试请求，不计为测试失败。服务端检测到断开后会取消任务；上游是否停止计算或计费取决于服务商。' : (error as Error).message || '请求未完成，请稍后重试', elapsedMs: Date.now() - startedAt })
+    } finally { webController.current = null; setBusy(false) }
+  }
+  async function run(action: () => Promise<unknown>, success?: string, testTitle?: string) {
     setBusy(true); setFailure('')
-    try { await action(); if (success) toast.success(success) }
-    catch (e) { setFailure((e as Error).message) }
+    try { await refreshAccount(); await action(); await refreshAccount(); if (success) toast.success(success) }
+    catch (e) {
+      if (testTitle) setTestFailure({ title: testTitle, message: (e as Error).message || '请求未完成，请稍后重试' })
+      else setFailure((e as Error).message)
+    }
     finally { await refreshApiQueries(qc); setBusy(false) }
   }
   async function toggle(p: Provider) {
@@ -116,6 +165,8 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
       { title: '已授权的团队 API', description: '可以选择和检测模型。连接信息及模型列表由团队管理员维护。', items: items.filter(p => p.scope === 'team' && p.usable), canCreate: false },
     ]
   return <div className="space-y-4">
+    {testFailure && <ManagementDialog title={testFailure.title} className="max-w-xl" onClose={() => setTestFailure(null)}><div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 p-4"><p className="font-medium text-destructive">检测未通过</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed">{testFailure.message}</p></div><p className="text-xs text-muted-foreground">本次检测未成功完成，请根据提示检查配置后手动重试。</p><Button variant="outline" onClick={() => setTestFailure(null)}>关闭</Button></ManagementDialog>}
+    {showWebTest && webTest && <WebSearchTestDialog test={webTest} onClose={() => setShowWebTest(false)} onStop={stopWebSearch} />}
     {!team && <Card className="space-y-3 p-5"><h2 className="font-semibold">我的默认模型</h2>
       <p className="text-sm text-muted-foreground">用于新会话和之后发起的 AI 摘要任务。聊天中可以单独切换会话模型；失败不会自动换用其他 API。</p>
       <ApiModelSelect providers={items} selection={providers.data?.selection} disabled={busy || providers.isLoading} onChange={(p, m) => void run(() => accountApi.choose(p, m), '默认模型已更新')} />
@@ -123,6 +174,7 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
       {providers.data && !providers.data.selection.valid && <p role="alert" className="text-sm text-destructive">{providers.data.selection.reason}</p>}
     </Card>}
     {(failure || providers.error) && <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">{failure || providers.error?.message}</p>}
+    <p className="text-xs text-muted-foreground">联网搜索需同时启用系统总开关与模型配置；检测不受系统开关影响，点击状态可查看详情。</p>
     {groups.map(group => <Card key={group.title} className="space-y-4 p-5">
       <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">{group.title}</h2>
         {group.canCreate && <Button size="sm" onClick={() => setForm({ scope: team ? 'team' : 'personal' })}>新增 API</Button>}</div>
@@ -154,13 +206,23 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
           {!p.usable && <p className="mt-2 text-xs text-muted-foreground">{!p.enabled ? '恢复使用后才能选择或检测模型。' : '没有调用授权，不能选择或检测；管理配置不自动获得调用权。'}</p>}
           <div className="mb-1 ml-2 mt-5 border-l pl-3 sm:pl-5">
             <p className="mb-1 text-xs text-muted-foreground">模型 · {p.models.length}</p>
-            <div className="divide-y">{p.models.map(m => <div key={m.model_id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 py-3">
-            <div className="min-w-0 flex-1 basis-40"><p className="break-all text-sm font-normal">{m.display_name || m.model_id}</p>{m.display_name && <p className="break-all text-xs text-muted-foreground">{m.model_id}</p>}
-              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1"><TestResult model={m} kind="connection" /><TestResult model={m} kind="tools" /></div>
+            <div className="divide-y">{p.models.map(m => <div key={m.model_id} className="flex items-start justify-between gap-4 py-3">
+            <div className="min-w-0 flex-1"><p className="flex min-h-8 items-center break-all text-sm font-normal leading-5">{m.display_name || m.model_id}</p>{m.display_name && <p className="break-all text-xs text-muted-foreground">{m.model_id}</p>}
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5"><TestResult model={m} kind="connection" /><TestResult model={m} kind="tools" />
+                {webTest?.providerId === p.id && webTest.modelId === m.model_id
+                  ? <CompactStatus label="联网" value={webTest.status === 'pending' ? '测试中…' : !m.web_search || m.web_search === 'off' ? '未配置' : webStatus.data ? webStatus.data.enabled ? '已启用' : '已配置·系统未开启' : '系统状态未知'} detail={`${webTest.message}\n${webStatus.data ? webStatus.data.enabled ? '系统总开关已开启' : '系统总开关未开启，问答中不生效' : '系统开关状态未知'}\n检测不受系统开关影响；本次检测结果刷新后不保留`} onClick={() => setShowWebTest(true)} />
+                  : <CompactStatus label="联网" value={m.web_search && m.web_search !== 'off' ? webStatus.data ? webStatus.data.enabled ? '已启用' : '已配置·系统未开启' : '系统状态未知' : '未配置'} detail={m.web_search && m.web_search !== 'off' ? '已配置服务端搜索方式，尚无本次页面的测试结果。配置不代表检测通过；实际问答还需开启系统总开关。' : '此模型未启用联网搜索，可在 API 编辑窗口配置。'} />}
+              </div>
             </div>
-            <div className="flex max-w-full shrink-0 flex-wrap items-center gap-1">
-              <Button size="sm" variant="ghost" disabled={busy || !p.usable} onClick={() => void run(() => accountRequest(`/providers/${p.id}/test?model_id=${encodeURIComponent(m.model_id)}`, 'POST'), '连接测试成功')}>测试连接</Button>
-              <Button size="sm" variant="ghost" disabled={busy || !p.usable} onClick={() => void run(async () => { const result = await accountRequest<{ supported: boolean | null; message: string }>(`/providers/${p.id}/test-tools?model_id=${encodeURIComponent(m.model_id)}`, 'POST'); if (!result.supported) throw new Error(result.message); toast.success(result.message) })}>检测工具调用</Button>
+            <div className="flex shrink-0 items-start">
+              <DropdownMenu.Root modal={false}>
+                <DropdownMenu.Trigger asChild><Button size="sm" variant="ghost" className="text-sm font-normal leading-5" disabled={busy || !p.usable} aria-label={`${m.model_id} 检测`}>检测<ChevronDown aria-hidden="true" className="ml-1 h-3 w-3" /></Button></DropdownMenu.Trigger>
+                <DropdownMenu.Portal><DropdownMenu.Content align="end" sideOffset={4} collisionPadding={8} className="z-[90] min-w-36 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md">
+                  <DropdownMenu.Item className="cursor-pointer rounded px-3 py-2 outline-none focus:bg-accent" onSelect={() => void run(() => accountRequest(`/providers/${p.id}/test?model_id=${encodeURIComponent(m.model_id)}`, 'POST'), '连接测试成功', `${p.name} · ${m.model_id} · 连接测试`)}>测试连接</DropdownMenu.Item>
+                  <DropdownMenu.Item className="cursor-pointer rounded px-3 py-2 outline-none focus:bg-accent" onSelect={() => void run(async () => { const result = await accountRequest<{ supported: boolean | null; message: string }>(`/providers/${p.id}/test-tools?model_id=${encodeURIComponent(m.model_id)}`, 'POST'); if (!result.supported) throw new Error(result.message); toast.success(result.message) }, undefined, `${p.name} · ${m.model_id} · 工具调用检测`)}>检测工具调用</DropdownMenu.Item>
+                  <DropdownMenu.Item disabled={!m.web_search || m.web_search === 'off'} className="cursor-pointer rounded px-3 py-2 outline-none focus:bg-accent data-[disabled]:opacity-50 data-[disabled]:pointer-events-none" onSelect={() => void testWebSearch(p, m)}>测试联网搜索</DropdownMenu.Item>
+                </DropdownMenu.Content></DropdownMenu.Portal>
+              </DropdownMenu.Root>
             </div>
           </div>)}</div>
           </div>

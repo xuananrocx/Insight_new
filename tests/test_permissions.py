@@ -437,3 +437,11 @@ def test_download_inherited_from_role_and_revoked_at_source(env):
 def test_list_error_summary_never_forwards_unstructured_content(message):
     from src.api.routes_ai_logs import safe_error_summary
     assert safe_error_summary(message) == "调用失败"
+
+
+def test_web_search_status_visible_to_members_but_write_requires_system_edit(env):
+    response = env.alice.get('/api/v1/settings/web_search')
+    assert response.status_code == 200
+    assert set(response.json()) == {'enabled'}
+    assert env.alice.put('/api/v1/settings/web_search', json={'enabled': True}).status_code == 403
+    assert env.alice.get('/api/v1/settings/ai_generation').status_code == 403

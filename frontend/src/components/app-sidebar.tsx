@@ -20,7 +20,6 @@ type Item = { to: string; label: string; icon: LucideIcon; count?: number; secti
 const adminIcons: Record<string, LucideIcon> = {
   '/admin/users': Users,
   '/admin/roles': ShieldCheck,
-  '/admin/knowledge-access': LockKeyhole,
   '/admin/team-api': Network,
   '/admin/audit': ScrollText,
   '/system-settings': Settings,
@@ -41,6 +40,7 @@ function SidebarContent({ collapsed, mobile = false, onToggle, onNavigate }: { c
     { to: '/stats', label: '分析', icon: BarChart3 },
     { to: '/ai-logs', label: 'AI 日志', icon: Bot },
     { to: '/logs', label: '系统日志', icon: ScrollText },
+    { to: '/admin/knowledge-access', label: '知识库授权', icon: LockKeyhole },
   ].filter(item => available.includes(item.to)).sort((a, b) => available.indexOf(a.to) - available.indexOf(b.to))
   const settingsItems: Item[] = [
     { to: '/settings', label: '个人设置', icon: Settings, section: '个人' },

@@ -265,6 +265,8 @@ async def authorize(request: Request):
             a.require_owner("feedback", params["feedback_id"])
         return
     if path.startswith("/api/v1/settings"):
+        if path == "/api/v1/settings/web_search" and method == "GET":
+            return  # 登录用户仅可读取联网总开关，不暴露其他系统配置。
         if path.endswith("/llm_providers") and method == "GET":
             return
         if path.endswith("/llm_providers/switch"):

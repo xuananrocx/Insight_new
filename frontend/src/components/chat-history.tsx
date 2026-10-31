@@ -128,7 +128,7 @@ export function ChatHistory({ onNavigate }: { onNavigate?: () => void }) {
   }
 
   return <div className="flex h-full min-h-0 flex-col">
-    <div className="mx-1 mb-3 flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-muted-foreground"><Search className="h-3.5 w-3.5 shrink-0" /><input aria-label="搜索会话或分组" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索会话或分组…" className="min-w-0 flex-1 bg-transparent text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring" /></div>
+    <div className="session-search mx-1 mb-3 flex shrink-0 items-center gap-2 rounded-md px-2 py-1.5 text-muted-foreground"><Search className="h-3.5 w-3.5 shrink-0" /><input aria-label="搜索会话或分组" value={query} onChange={e => setQuery(e.target.value)} placeholder="搜索会话或分组…" className="min-w-0 flex-1 bg-transparent text-xs outline-none focus-visible:ring-1 focus-visible:ring-ring" /></div>
     <div className="flex shrink-0 items-center justify-between px-3 pb-2">
       <span className="text-[11px] text-muted-foreground">会话</span>
       <Actions items={[

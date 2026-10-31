@@ -1,3 +1,4 @@
+import { normalizeTheme } from '@/lib/theme-preference'
 import { AccentPicker } from '@/components/accent-picker'
 import type { AccentKey } from '@/lib/accent-colors'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -26,7 +27,7 @@ export function InterfaceSettingsCard() {
 export function DefaultThemeSettingsCard() {
   const { can } = useAuth()
   const qc = useQueryClient()
-  const query = useQuery({ queryKey: ['interface-settings'], queryFn: () => accountRequest<{ default_theme: ThemeKey; default_accent?: AccentKey }>('/settings/interface') })
+  const query = useQuery({ queryKey: ['interface-settings'], queryFn: () => accountRequest<{ default_theme: string; default_accent?: AccentKey }>('/settings/interface').then(data => ({ default_theme: normalizeTheme(data.default_theme) ?? 'minimal', default_accent: data.default_theme === 'stripe-light' ? 'moss' as const : data.default_accent })) })
   const mutation = useMutation({
     mutationFn: (values: { default_theme: ThemeKey; default_accent?: AccentKey }) => accountRequest<{ default_theme: ThemeKey; default_accent?: AccentKey }>('/settings/interface', 'PUT', values),
     onSuccess: data => {

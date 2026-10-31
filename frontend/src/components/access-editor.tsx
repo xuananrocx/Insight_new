@@ -1,5 +1,6 @@
+import { AdminList, ListTag } from '@/components/admin-list'
 import { OptionSelect } from '@/components/ui/select'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -25,6 +26,7 @@ export function PreviewPanel({ value, onSave, onCancel, busy = false }: { value:
 type Grant = { subject_type: 'user' | 'role'; subject_id: string; name?: string; effect: 'allow' | 'deny' | 'remove'; actions: string[] }
 type Effective = { actions: string[]; reason: string; sources: { source: string; effect: string; actions: string[] }[] }
 export function AccessEditor({ kind, id }: { kind: 'kb' | 'api'; id: string }) {
+  const formId = useId()
   const qc = useQueryClient()
   const path = `/access/${kind}/${id}`
   const users = useQuery({ queryKey: ['directory'], queryFn: accountApi.members })
@@ -51,7 +53,12 @@ export function AccessEditor({ kind, id }: { kind: 'kb' | 'api'; id: string }) {
     <h3 className="font-medium">{kind === 'kb' ? '知识库授权' : 'API 使用授权'}</h3>
     <p className="text-xs text-muted-foreground">默认不共享。可以按用户或角色授权；删除一条授权不会覆盖其他来源，明确禁止可停止该用户访问。</p>
     {kind === 'kb' && <p className="rounded-md border bg-muted/20 p-3 text-xs leading-relaxed text-muted-foreground">查询、编辑与下载分别授权。用户授权与角色授权会合并，关闭单条授权中的下载不会抵消其他角色授予的权限；所有者自动拥有全部权限。导出知识库包含原文档，限制获取原文档时也需检查导出权限。</p>}
-    {grants.error && <p role="alert" className="text-destructive">{grants.error.message}</p>}
+    <section className="space-y-2"><h4 className="text-sm font-medium">已有授权</h4><AdminList label="已有授权" rows={grants.data?.items || []} loading={grants.isLoading} error={grants.error} rowKey={g => g.subject_type + g.subject_id} empty="暂无额外授权" columns={[
+      { label: '对象', render: g => <><span className="font-medium">{g.name || '对象已移除'}</span><div className="mt-1"><ListTag>{g.subject_type === 'role' ? '角色' : '用户'}</ListTag></div></> },
+      { label: '规则 / 权限', render: g => <><span className={g.effect === 'deny' ? 'text-destructive' : ''}>{g.effect === 'deny' ? '明确禁止' : '允许'}</span><p className="mt-1 text-xs text-muted-foreground">{g.effect === 'deny' ? '禁止访问' : g.actions.map(x => actionNames[x] || x).join('、')}</p></> },
+      { label: '操作', className: 'w-28 text-right', render: g => <div className="flex justify-end"><Button size="sm" variant="ghost" disabled={busy} onClick={() => { setChange(g); setPreview(null); document.getElementById(formId)?.scrollIntoView({ block: 'nearest', behavior: 'auto' }) }}>编辑</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => prepare({ ...g, effect: 'remove', actions: [] })}>移除</Button></div> },
+    ]} /></section>
+    <h4 id={formId} className="border-t pt-4 text-sm font-medium">添加 / 编辑授权</h4>
     <fieldset disabled={busy} className="space-y-3">
       <div className="grid gap-2 sm:grid-cols-3"><OptionSelect aria-label="授权对象类型" className={accountInput} disabled={busy} value={change.subject_type} onValueChange={value => update({ subject_type: value as 'user' | 'role', subject_id: '', effect: 'allow' })} options={[{ value: 'user', label: '指定用户' }, { value: 'role', label: '指定角色' }]} /><OptionSelect aria-label="授权对象" className={accountInput} disabled={busy} value={change.subject_id} onValueChange={value => update({ subject_id: value })} options={[{ value: '', label: '请选择' }, ...(change.subject_type === 'user' ? users.data?.map(u => ({ value: u.id, label: u.username })) : roles.data?.map(r => ({ value: r.id, label: r.name + (r.enabled ? '' : '（已停用）') }))) || []]} /><OptionSelect aria-label="授权规则" className={accountInput} disabled={busy} value={change.effect} onValueChange={value => update({ effect: value as Grant['effect'] })} options={[{ value: 'allow', label: '允许' }, ...(change.subject_type === 'user' ? [{ value: 'deny', label: '明确禁止访问' }] : []), { value: 'remove', label: '移除此条授权' }]} /></div>
       {change.effect === 'allow' && <div className="flex flex-wrap gap-x-6 gap-y-3">{(kind === 'kb' ? Object.keys(actionNames).filter(x => x !== 'use') : ['use']).map(action => <label key={action} className="flex items-center gap-2 text-sm"><span>{actionNames[action]}</span><Toggle label={actionNames[action]} checked={change.actions.includes(action)} onChange={on => {
@@ -68,7 +75,7 @@ export function AccessEditor({ kind, id }: { kind: 'kb' | 'api'; id: string }) {
       </div>
     </fieldset>
     {preview && <PreviewPanel value={preview} onSave={save} onCancel={() => setPreview(null)} busy={busy} />}
-    <div className="divide-y rounded border">{grants.data?.items.length === 0 && <p className="p-3 text-sm text-muted-foreground">暂无额外授权。</p>}{grants.data?.items.map(g => <div className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm" key={g.subject_type+g.subject_id}><div><p>{g.subject_type === 'role' ? '角色' : '用户'} · {g.name}</p><p className="text-xs text-muted-foreground">{g.effect === 'deny' ? '明确禁止' : g.actions.map(x => actionNames[x]).join('、')}</p></div><div className="flex gap-2"><Button size="sm" variant="ghost" disabled={busy} onClick={() => { setChange(g); setPreview(null) }}>编辑</Button><Button size="sm" variant="ghost" disabled={busy} onClick={() => prepare({ ...g, effect: 'remove', actions: [] })}>移除</Button></div></div>)}</div>
+
     <div className="space-y-2"><label className="text-sm">查看用户最终权限<OptionSelect aria-label="查看最终权限的用户" className={`${accountInput} mt-2`} value={inspect} onValueChange={setInspect} options={[{ value: '', label: '选择用户' }, ...users.data?.map(u => ({ value: u.id, label: u.username })) || []]} /></label>{effective.data && <div className="rounded bg-muted p-3 text-sm"><p>最终权限：{effective.data.actions.map(x => actionNames[x]).join('、') || '无'}</p>{effective.data.reason && <p>{effective.data.reason}</p>}{kind === 'kb' && <div className="my-2 space-y-2 border-y py-2">{['download', 'export'].map(action => <div key={action}><p className="font-medium">{actionNames[action]}：{effective.data.actions.includes(action) ? '允许' : '不允许'}</p><p className="text-xs text-muted-foreground">{effective.data.actions.includes(action) ? `授权来源：${effective.data.sources.filter(s => s.effect === 'allow' && s.actions.includes(action)).map(s => s.source).join('、')}` : effective.data.reason || '没有生效的授权'}</p></div>)}</div>}{effective.data.sources.map((s, i) => <p key={i}>{s.source}：{s.effect === 'deny' ? '明确禁止' : s.actions.map(x => actionNames[x]).join('、')}</p>)}</div>}{effective.error && <p className="text-destructive">{effective.error.message}</p>}</div>
   </div>
 }

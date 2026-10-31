@@ -352,3 +352,23 @@ async def test_immediate_stop_does_not_leave_running_row(job_request, monkeypatc
     assert (await jobs.read(job_request.session_id, job_request.turn_id))[
         "state"
     ] == "cancelled"
+
+
+def test_elapsed_ignores_wall_clock_skew(monkeypatch):
+    job = {"clock_start": 100.0, "snapshot": {"state": "running", "started_at": 1000}}
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: 102.5)
+    monkeypatch.setattr(jobs.time, "time", lambda: 999999)
+    assert jobs.response_snapshot(job)["elapsed_ms"] == 2500
+    job["snapshot"]["state"] = "done"
+    monkeypatch.setattr(jobs.time, "monotonic", lambda: 800)
+    assert jobs.response_snapshot(job)["elapsed_ms"] == 2500
+
+
+def test_legacy_finished_duration_and_restart_checkpoint(monkeypatch):
+    job = {"snapshot": {"state": "done", "started_at": 1000, "finished_at": 4500}}
+    assert jobs.response_snapshot(job)["elapsed_ms"] == 3500
+    job = {"snapshot": {"state": "running", "started_at": 1000,
+                        "elapsed_ms": 2500, "revision": 0, "trace": []}}
+    monkeypatch.setattr(jobs.time, "time", lambda: 999999)
+    jobs.mark_interrupted(job)
+    assert job["snapshot"]["elapsed_ms"] == 2500

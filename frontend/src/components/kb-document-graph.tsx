@@ -57,7 +57,7 @@ export function KbDocumentGraph({ kbId }: Props) {
 
   if (query.isLoading) {
     return (
-      <Card className="mb-6 p-5">
+      <Card className="glass-content-card mb-6 p-5">
         <div className="py-8 text-center text-[12px] text-muted-foreground">加载关联图...</div>
       </Card>
     )
@@ -65,7 +65,7 @@ export function KbDocumentGraph({ kbId }: Props) {
 
   if (nodes.length === 0) {
     return (
-      <Card className="mb-6 p-5">
+      <Card className="glass-content-card mb-6 p-5">
         <Header
           conceptsCount={data?.concepts_count ?? 0}
           minShared={minShared}
@@ -83,7 +83,7 @@ export function KbDocumentGraph({ kbId }: Props) {
   }
 
   return (
-    <Card className="mb-6 overflow-hidden">
+    <Card className="glass-content-card mb-6 overflow-hidden">
       <Header
         conceptsCount={data?.concepts_count ?? 0}
         minShared={minShared}

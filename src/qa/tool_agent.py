@@ -155,6 +155,14 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             messages = list(context.messages if context else user_history(history))
             messages.append({'role': 'user', 'content': question})
             model = await bounded(asyncio.to_thread(create_tool_chat, system, messages, meta=meta), 15, tools_phase=True)
+            def web_event(data):
+                if stopped.is_set():
+                    return
+                trace[:] = [s for s in trace if s.get('stage') != data['stage']]
+                trace.append(data)
+                queue.put_nowait({'type': 'stage', 'data': data})
+            model.on_web_event = web_event
+
             model.retry_count = min(10, max(0, int(api_retry_count)))
             model.deadline = deadline - reserve
             # 单次 API 尝试的时长上限随作答预算放宽（推理模型思考期也在 attempt 内）
@@ -262,6 +270,9 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     stage("agent_output_limit", "输出达到上限", status="partial", notes=reason)
                     break
                 stage("agent_round", f"第 {round_no + 1} 轮资料查阅", started, count=len(turn.calls), notes="模型已选择下一步工具" if turn.calls else "模型结束查阅，准备按现有证据回答")
+                if getattr(turn, 'paused', False):
+                    answer_streamed = False
+                    continue
                 if not turn.calls:
                     break
                 results = []

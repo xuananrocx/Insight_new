@@ -5,7 +5,7 @@ export type AnswerSnapshot = {
   session_id: string; turn_id: string; revision: number
   state: 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
   answer: string; sources: QaSource[]; trace: QaTraceStage[]
-  started_at: number; finished_at?: number; error?: string; used_provider?: string
+  started_at: number; finished_at?: number; elapsed_ms?: number; error?: string; used_provider?: string
 }
 
 export const answerJobPath = (sid: string, tid?: string) =>
@@ -53,6 +53,13 @@ export async function followAnswerJob(body: Record<string, unknown>, cb: QaStrea
       let snapshot: AnswerSnapshot
       try { snapshot = await response.json() }
       catch { await pause(signal); continue }
+      // Compatibility with older servers: subtract timestamps from the server only.
+      if (snapshot.elapsed_ms == null) {
+        const serverEnd = snapshot.finished_at ?? Date.parse(response.headers.get('Date') || '')
+        if (Number.isFinite(serverEnd) && Number.isFinite(snapshot.started_at)) {
+          snapshot.elapsed_ms = Math.max(0, serverEnd - snapshot.started_at)
+        }
+      }
       cb.onConnection?.('')
       if (snapshot.revision !== revision) {
         revision = snapshot.revision

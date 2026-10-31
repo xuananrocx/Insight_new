@@ -22,6 +22,11 @@ def init_schema():
           provider_id TEXT NOT NULL, model_id TEXT NOT NULL, context_tokens INTEGER, output_tokens INTEGER,
           PRIMARY KEY(provider_id,model_id),
           FOREIGN KEY(provider_id,model_id) REFERENCES api_models(provider_id,model_id) ON DELETE CASCADE);
+        CREATE TABLE IF NOT EXISTS api_model_web (
+          provider_id TEXT NOT NULL, model_id TEXT NOT NULL,
+          mode TEXT NOT NULL DEFAULT 'off',
+          PRIMARY KEY(provider_id,model_id),
+          FOREIGN KEY(provider_id,model_id) REFERENCES api_models(provider_id,model_id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS api_preferences (
           user_id TEXT PRIMARY KEY REFERENCES auth_users(id) ON DELETE CASCADE,
           model_id TEXT, retry_count INTEGER NOT NULL DEFAULT 10 CHECK(retry_count BETWEEN 0 AND 10));
@@ -43,7 +48,7 @@ def init_schema():
 
 def models(provider):
     found = a.rows(
-        "SELECT m.*,l.context_tokens,l.output_tokens FROM api_models m LEFT JOIN api_model_limits l USING(provider_id,model_id) WHERE m.provider_id=? ORDER BY m.rowid", (provider["id"],)
+        "SELECT m.*,l.context_tokens,l.output_tokens,COALESCE(w.mode,'off') AS web_search FROM api_models m LEFT JOIN api_model_limits l USING(provider_id,model_id) LEFT JOIN api_model_web w USING(provider_id,model_id) WHERE m.provider_id=? ORDER BY m.rowid", (provider["id"],)
     )
     return found or [dict(model_id=provider["chat_model"], display_name="")]
 
