@@ -259,6 +259,11 @@ app.include_router(logs_router)
 app.include_router(ai_logs_router)
 
 
+# Independent MCP management and bearer-only query adapter. SDK runs in a separate gateway.
+from src.mcp.routes import router as mcp_router, query_app as mcp_query_app
+app.include_router(mcp_router)
+app.mount("/mcp-service", mcp_query_app)
+
 # ===== 数据模型 =====
 
 

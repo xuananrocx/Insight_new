@@ -24,6 +24,7 @@ develop-eggs/
 
 # ===== 虚拟环境 =====
 .venv/
+.venv-mcp/
 venv/
 env/
 ENV/

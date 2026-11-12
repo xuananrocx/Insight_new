@@ -1,0 +1,8 @@
+# Install into a separate virtual environment, never the Insight backend environment.
+mcp==1.30.0
+httpx==0.28.1
+starlette==0.41.3
+sse-starlette==2.2.1
+uvicorn==0.34.0
+pydantic==2.12.5
+pydantic-settings==2.12.0

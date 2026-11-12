@@ -1,3 +1,4 @@
+import { PersonalMcpSettings } from '@/components/mcp-settings'
 import { ProviderSettings } from '@/components/provider-settings'
 import { Link } from 'react-router-dom'
 import { SettingsLayout } from '@/components/settings-layout'
@@ -59,6 +60,7 @@ export function AccountPage() {
     <Card className="space-y-3 p-5"><h2 className="font-semibold">AI 回答设置</h2><p className="text-sm text-muted-foreground">AI约束策略适用于增强AI和深度AI。增强AI 一次检索后直接回答；深度AI 主动查阅知识库，需要 API 支持工具调用。下方查阅轮数与总时长设置仅用于深度AI。</p><DeepAiOptionsFields />
     </Card>
     </> },
+    { id: 'mcp', label: 'MCP 接入', description: '个人令牌与外部 Agent 配置', content: <PersonalMcpSettings /> },
     { id: 'account', label: '账号与安全', description: '账号信息与密码', content: <>
       <Card className="space-y-2 p-5"><h2 className="font-semibold">账号信息</h2><p className="text-sm">{user.username}</p><p className="text-sm text-muted-foreground">{user.roles.filter(r => r.enabled).map(r => r.name).join('、') || '无启用角色'}</p></Card>
     <Card className="p-5"><h2 className="mb-4 font-semibold">修改密码</h2><div className="max-w-md"><PasswordForm onDone={logout} /></div></Card>

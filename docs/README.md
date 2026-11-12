@@ -23,6 +23,7 @@
 ## 账号与运行
 
 - [账号与权限](accounts.md)
+- [只读知识 MCP 接入](mcp.md)：独立网关、个人令牌、权限边界、部署及验证。
 - [发布流程](release-process.md)
 - [按平台构建候选包](selective-build.md)
 - [Linux 部署说明](../deploy/linux/README.md)

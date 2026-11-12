@@ -1,0 +1,23 @@
+[Unit]
+Description=Insight read-only MCP gateway
+After=network.target
+
+[Service]
+Type=simple
+User=insight
+WorkingDirectory=/opt/insight
+Environment=INSIGHT_BACKEND_URL=http://127.0.0.1:8888
+Environment=INSIGHT_MCP_PORT=8001
+# Set the exact public host when using a reverse proxy.
+Environment=INSIGHT_MCP_ALLOWED_HOSTS=knowledge.example.com,knowledge.example.com:443
+ExecStart=/opt/insight/.venv-mcp/bin/python -m src.mcp.gateway
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+MemoryMax=256M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

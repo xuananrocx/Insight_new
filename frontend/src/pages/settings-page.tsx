@@ -1,4 +1,5 @@
 import { ContextBudgetCard } from '@/components/context-budget-card'
+import { SystemMcpSettings } from '@/components/mcp-settings'
 import { Toggle } from '@/components/ui/toggle-switch'
 import { InterfaceSettingsCard, DefaultThemeSettingsCard } from '@/components/interface-settings-card'
 import { SettingsLayout } from '@/components/settings-layout'
@@ -611,6 +612,7 @@ export function SettingsPage() {
 
       </> },
       { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><WebSearchConfigCard /><AiGenerationConfigCard /><ContextBudgetCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
+      { id: 'mcp', label: 'MCP 接入', managesReadOnly: true, description: '外部知识查询的独立配置、令牌与调用记录', content: <SystemMcpSettings /> },
       { id: 'interface', label: '界面与交互', description: '系统默认外观与当前账号的界面交互偏好。', content: <><DefaultThemeSettingsCard /><InterfaceSettingsCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>

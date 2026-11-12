@@ -210,6 +210,7 @@ Insight_new/
 │   ├── core/            # 配置、账号、模型客户端及日志
 │   ├── db/              # SQLite 元数据及迁移
 │   ├── knowledge/       # 解析、导入、索引及重建
+│   ├── mcp/             # 独立知识 MCP 配置、令牌、只读适配与可选 SDK 网关
 │   ├── qa/              # 检索、增强 AI、深度 AI 工具及上下文
 │   ├── feedback/        # 反馈处理
 │   └── web/             # 旧 Streamlit 界面

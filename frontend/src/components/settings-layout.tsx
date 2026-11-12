@@ -7,6 +7,8 @@ type SettingsSection = {
   label: string
   description: string
   content: ReactNode
+  /** Section handles edit permissions itself, keeping read-only pagination usable. */
+  managesReadOnly?: boolean
 }
 
 /** One continuous page; navigation scrolls without unmounting settings or drafts. */
@@ -119,17 +121,17 @@ export function SettingsLayout({ title, description, sections, readOnly = false,
       </aside>
       <div ref={contentRef} data-settings-content className="min-h-0 min-w-0 overflow-y-auto overscroll-contain p-4 md:p-8">
           {readOnly && <p className="mb-4 rounded-lg border bg-muted/20 p-3 text-sm text-muted-foreground">当前为只读权限。</p>}
-          <fieldset disabled={readOnly} className="min-w-0 space-y-10">
+          <fieldset className="min-w-0 space-y-10">
             {sections.map(section => (
               <section key={section.id} ref={node => { if (node) sectionRefs.current.set(section.id, node); else sectionRefs.current.delete(section.id) }} id={`${prefix}-${section.id}`} aria-labelledby={`${prefix}-${section.id}-nav`} className="border-b border-border/60 pb-8 last:border-b-0 last:pb-0">
                 <div className="mb-4">
                   <h2 className="text-lg font-semibold">{section.label}</h2>
                   <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
                 </div>
-                <div className="space-y-4">{section.content}</div>
+                <fieldset disabled={readOnly && !section.managesReadOnly} className="min-w-0 space-y-4">{section.content}</fieldset>
               </section>
             ))}
-            {children}
+            {children && <fieldset disabled={readOnly} className="min-w-0">{children}</fieldset>}
           </fieldset>
       </div>
     </div>
