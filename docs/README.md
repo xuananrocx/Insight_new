@@ -8,6 +8,8 @@
 - [架构设计](architecture.md)：基础架构原则和历史背景；与当前源码冲突时以源码和交接指南为准。
 - [开发指南](development.md)：跨平台开发和日常切换。
 - [配置说明](configuration.md)：配置覆盖、路径、模型和 API。
+- [配置入口待办](configuration-ui-backlog.md)：上下文窗口、模型预算及检索高级配置的前台入口梳理。
+- [模型能力与问答预算方案](model-budget-plan.md)：统一模型约束、作答预留、前台入口和兼容验证。
 
 ## AI、检索与知识库
 

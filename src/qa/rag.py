@@ -870,7 +870,7 @@ def ask(
         question, top_k, history, trace, system_override, kb_scope,
         strict=strict_knowledge, options=deep_ai_options,
     )
-    chat_cfg = enhanced_ai.chat_options()
+    chat_cfg = enhanced_ai.chat_options(messages)
     with trace.stage("generation", "生成回答") as s:
         try:
             answer_text, chat_provider = client.chat(
@@ -1088,7 +1088,7 @@ async def ask_stream(
     yield {"type": "sources", "data": sources}
 
     # 流式生成
-    chat_cfg = enhanced_ai.chat_options()
+    chat_cfg = enhanced_ai.chat_options(messages)
     full_answer_parts: list[str] = []
     used_provider = embed_provider
     gen_t0 = time.perf_counter()
@@ -1135,7 +1135,7 @@ async def ask_stream(
                 full_answer_parts.append(token)
                 yield {"type": "token", "data": {"text": token}}
             if truncated:
-                s.set(count=1, status="partial", notes=f"provider={used_provider}；模型输出达到上限，回答已截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限")
+                s.set(count=1, status="partial", notes=f"provider={used_provider}；模型输出达到上限，回答已截断，请结合本轮实际额度核对模型输出限制和上下文剩余空间")
             else:
                 s.set(count=1, status="ok", notes=f"provider={used_provider}")
     except Exception as e:
@@ -1159,8 +1159,8 @@ async def ask_stream(
     }
     if truncated:
         done_data["outcome"] = "partial"
-        done_data["reason"] = "模型输出达到输出上限，回答已截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限"
-        done_data["answer"] = full_answer + "\n\n> 本次回答因输出上限被截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限后重试。"
+        done_data["reason"] = "模型输出达到输出上限，回答已截断，请结合本轮实际额度核对模型输出限制和上下文剩余空间"
+        done_data["answer"] = full_answer + "\n\n> 本次回答因输出上限被截断，请结合本轮实际额度核对模型输出限制和上下文剩余空间。"
     yield {"type": "done", "data": done_data}
 
 

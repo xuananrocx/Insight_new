@@ -1,3 +1,4 @@
+import { ContextBudgetCard } from '@/components/context-budget-card'
 import { Toggle } from '@/components/ui/toggle-switch'
 import { InterfaceSettingsCard, DefaultThemeSettingsCard } from '@/components/interface-settings-card'
 import { SettingsLayout } from '@/components/settings-layout'
@@ -203,7 +204,7 @@ function AiGenerationConfigCard() {
       </p>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
-          <label className="mb-1.5 block text-[13px] font-medium">输出上限（tokens）</label>
+          <label className="mb-1.5 block text-[13px] font-medium">问答输出封顶（tokens）</label>
           <input
             type="number"
             min={256}
@@ -212,7 +213,7 @@ function AiGenerationConfigCard() {
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
           />
           <p className="mt-1 text-[11px] text-muted-foreground">
-            须符合所选模型的输出能力，建议 32768-131072
+            实际额度取系统封顶、模型最大输出和上下文剩余空间的较小值；模型能力未配置时无法保证接口接受。
           </p>
         </div>
         <div>
@@ -609,7 +610,7 @@ export function SettingsPage() {
       </Card>
 
       </> },
-      { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><WebSearchConfigCard /><AiGenerationConfigCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
+      { id: 'ai', label: 'AI 运行配置', description: '通用连接、问答生成与摘要任务', content: <><LLMTimeoutsCard /><WebSearchConfigCard /><AiGenerationConfigCard /><ContextBudgetCard /><AiSummaryConfigCard /><SystemPromptCard /></> },
       { id: 'interface', label: '界面与交互', description: '系统默认外观与当前账号的界面交互偏好。', content: <><DefaultThemeSettingsCard /><InterfaceSettingsCard /></> },
       { id: 'logs', label: '日志与诊断', description: 'AI 调用记录与清理配置', content: <AiCallLogConfigCard /> },
     ]}>

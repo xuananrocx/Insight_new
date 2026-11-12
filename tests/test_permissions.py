@@ -445,3 +445,12 @@ def test_web_search_status_visible_to_members_but_write_requires_system_edit(env
     assert set(response.json()) == {'enabled'}
     assert env.alice.put('/api/v1/settings/web_search', json={'enabled': True}).status_code == 403
     assert env.alice.get('/api/v1/settings/ai_generation').status_code == 403
+
+
+def test_context_budget_requires_system_permissions(env):
+    assert env.alice.get('/api/v1/settings/context_budget').status_code == 403
+    assert env.alice.put('/api/v1/settings/context_budget', json={'history_tokens': 9000}).status_code == 403
+    viewer = role(env.admin, ['system.view'])
+    assign(env, env.alice_id, [viewer])
+    assert env.alice.get('/api/v1/settings/context_budget').status_code == 200
+    assert env.alice.put('/api/v1/settings/context_budget', json={'history_tokens': 9000}).status_code == 403

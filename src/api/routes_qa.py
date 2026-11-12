@@ -1,6 +1,8 @@
 """问答相关 API 路由。"""
 from __future__ import annotations
 
+from src.core import model_budget
+
 import asyncio
 import contextvars
 from concurrent.futures import ThreadPoolExecutor
@@ -81,9 +83,14 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
             status_code=503,
             detail="向量库重建中，请等待重建完成后再提问",
         )
+    budget_token = model_budget.active.set(model_budget.capture())
     bundle = None
-    if _resolve_mode(req) in ('ai', 'deep_ai'):
-        bundle = asyncio.run(conversation_context.prepare(req.question, req.history, req.session_id, req.turn_id, req.kb_scope, req.api_retry_count, background=False))
+    try:
+        if _resolve_mode(req) in ('ai', 'deep_ai'):
+            bundle = asyncio.run(conversation_context.prepare(req.question, req.history, req.session_id, req.turn_id, req.kb_scope, req.api_retry_count, background=False))
+    except BaseException:
+        model_budget.active.reset(budget_token)
+        raise
     context_token = conversation_context.active.set(bundle)
     try:
         result = ask(
@@ -106,13 +113,15 @@ def ask_endpoint(req: AskRequest) -> AskResponse:
 
     finally:
         conversation_context.active.reset(context_token)
+        model_budget.active.reset(budget_token)
     if bundle:
         result.trace.insert(0, bundle.stage())
 
     from src.core import accounts
     if accounts.enabled:
         accounts.require_kb(req.kb_scope)
-        if accounts.selected_provider.get(): accounts.resolve_provider(accounts.selected_provider.get())
+        if accounts.selected_provider.get():
+            accounts.resolve_provider(accounts.selected_provider.get())
     return AskResponse(
         question=result.question,
         answer=result.answer,
@@ -226,6 +235,7 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
                     "notes": f"{info['reason']}，{info['delay']:.1f} 秒后进行第 {info['attempt']}/{info['maximum']} 次重试"}
             retry_stages.append(data)
             loop.call_soon_threadsafe(queue.put_nowait, {"type": "stage", "data": data})
+        budget_token = model_budget.active.set(model_budget.capture())
         observer_token = retry_observer.set(on_retry)
         context_token = None
         bundle = None
@@ -261,6 +271,7 @@ async def _sse_events(req: AskRequest) -> AsyncGenerator[bytes, None]:
             if context_token is not None:
                 conversation_context.active.reset(context_token)
             retry_observer.reset(observer_token)
+            model_budget.active.reset(budget_token)
             await queue.put(None)
 
     producer_task = asyncio.create_task(producer())
