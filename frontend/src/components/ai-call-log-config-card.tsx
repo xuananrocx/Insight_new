@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -63,11 +64,9 @@ export function AiCallLogConfigCard() {
     <Card className="mb-4 p-5">
       <div className="mb-3 flex items-center gap-2">
         <Bot className="h-4 w-4 text-primary" />
-        <h3 className="text-[14px] font-semibold">AI 调用日志</h3>
+        <h3 className="text-[14px] font-semibold"><SettingsHelp title="AI 调用日志">记录每次 LLM 调用的完整 prompt、消息、响应（含失败的）。30 天自动清理。</SettingsHelp></h3>
       </div>
-      <p className="mb-3 text-[12px] text-muted-foreground">
-        记录每次 LLM 调用的完整 prompt、消息、响应（含失败的）。30 天自动清理。
-      </p>
+
 
       <div className="space-y-3">
         {/* 全局开关 */}
@@ -77,8 +76,7 @@ export function AiCallLogConfigCard() {
             checked={draft.enabled}
             onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
           />
-          <span className="font-medium">启用 AI 调用日志</span>
-          <span className="text-muted-foreground">（关闭后所有场景都不记录）</span>
+          <span className="font-medium"><SettingsHelp title="启用 AI 调用日志">关闭后所有场景都不记录。</SettingsHelp></span>
         </label>
 
         {draft.enabled ? (
@@ -131,7 +129,7 @@ export function AiCallLogConfigCard() {
 
             {/* 保留天数 */}
             <div className="flex items-center gap-3 text-[12px]">
-              <label className="text-muted-foreground">保留天数：</label>
+              <label className="text-muted-foreground"><SettingsHelp title="保留天数：">超过保留时间的日志会自动清理，也可手动立即清理过期日志。</SettingsHelp></label>
               <input
                 type="number"
                 min={1}
@@ -146,7 +144,7 @@ export function AiCallLogConfigCard() {
                 className="w-20 rounded-md border border-input bg-background px-2 py-1"
               />
               <span className="text-muted-foreground">
-                天（超过自动清理）
+                天
               </span>
             </div>
 

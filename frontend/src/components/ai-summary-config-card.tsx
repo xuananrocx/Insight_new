@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Sparkles } from 'lucide-react'
@@ -40,33 +41,32 @@ export function AiSummaryConfigCard() {
   const numeric = (entries: readonly (readonly [keyof SummaryConfig, string, string])[]) => entries.map(([key, label, hint]) => {
     const schema = query.data?.schema[key]
     return <label key={key} className="space-y-1.5 text-xs">
-      <span className="block font-medium">{label}</span>
+      <span className="block font-medium"><SettingsHelp title={label} label={`${label}说明`}>{hint} · 来源：{query.data?.sources[key]}</SettingsHelp></span>
       <input type="number" value={Number(form?.[key])} min={schema?.minimum} max={schema?.maximum}
         disabled={mutation.isPending || query.data?.sources[key]?.endsWith('覆盖')} onChange={e => edit(key, Number(e.target.value))}
         className="h-9 w-full rounded-md border bg-background px-3" />
-      <span className="block text-[11px] leading-relaxed text-muted-foreground">{hint} · {query.data?.sources[key]}</span>
     </label>
   })
   return <Card className="mb-4 p-5">
-    <div className="mb-2 flex items-center gap-2"><Sparkles className="h-4 w-4 text-muted-foreground" /><h3 className="text-sm font-medium">文档摘要与全局概览</h3></div>
-    <p className="mb-4 text-xs leading-relaxed text-muted-foreground">复用有效摘要与已完成汇总。保存后对新任务生效，运行中的任务继续使用启动时的配置。输出额度需符合所选模型能力。</p>
+    <div className="mb-2 flex items-center gap-2"><Sparkles className="h-4 w-4 text-muted-foreground" /><h3 className="text-sm font-medium"><SettingsHelp title="文档摘要与全局概览">复用有效摘要与已完成汇总。保存后对新任务生效，运行中的任务继续使用启动时的配置。输出额度需符合所选模型能力。</SettingsHelp></h3></div>
+
     {query.isLoading && <p className="text-xs">正在读取配置…</p>}
     {form && <>
       <div className="grid gap-4 sm:grid-cols-2">{numeric(fields)}</div>
       <details className="mt-5 rounded-lg border p-3">
         <summary className="cursor-pointer text-xs font-medium">高级设置与导入行为</summary>
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
-          <div className="space-y-2 text-xs"><span className="block font-medium">摘要网络读取等待</span>
+          <div className="space-y-2 text-xs"><span className="block font-medium"><SettingsHelp title="摘要网络读取等待">指网络无数据等待，不是任务总时长。</SettingsHelp></span>
             <label className="flex items-center gap-2"><input type="checkbox" checked={form.read_timeout_seconds === null} disabled={mutation.isPending}
               onChange={e => edit('read_timeout_seconds', e.target.checked ? null : query.data!.effective_read_timeout_seconds)} />继承通用连接配置</label>
             {form.read_timeout_seconds !== null && <input type="number" aria-label="摘要网络读取等待（秒）" min={query.data?.schema.read_timeout_seconds?.anyOf?.[0]?.minimum} max={query.data?.schema.read_timeout_seconds?.anyOf?.[0]?.maximum} value={form.read_timeout_seconds} disabled={mutation.isPending}
               onChange={e => edit('read_timeout_seconds', Number(e.target.value))} className="h-9 w-full rounded-md border bg-background px-3" />}
-            <span className="block text-[11px] text-muted-foreground">已保存的生效值：{query.data?.effective_read_timeout_seconds} 秒；指网络无数据等待，不是任务总时长。</span>
+            <span className="block text-[11px] text-muted-foreground">已保存的生效值：{query.data?.effective_read_timeout_seconds} 秒</span>
           </div>
           {numeric(advanced)}
         </div>
-        <label className="mt-4 flex items-center gap-2 text-xs"><input type="checkbox" checked={form.enabled} disabled={mutation.isPending} onChange={e => edit('enabled', e.target.checked)} />导入时自动生成摘要与概念</label>
-        <p className="mt-1 text-[11px] text-muted-foreground">此开关不影响手动生成全局概览。大文档可能需要多次调用，费用由所选模型决定。</p>
+        <label className="mt-4 flex items-center gap-2 text-xs"><input type="checkbox" checked={form.enabled} disabled={mutation.isPending} onChange={e => edit('enabled', e.target.checked)} /><SettingsHelp title="导入时自动生成摘要与概念">此开关不影响手动生成全局概览。大文档可能需要多次调用，费用由所选模型决定。</SettingsHelp></label>
+
       </details>
       <div className="mt-4 flex items-center justify-between gap-3">
         <button className="text-xs text-muted-foreground underline" disabled={mutation.isPending} onClick={() => setDraft(Object.fromEntries(Object.entries(query.data!.defaults).map(([key, value]) => [key, query.data!.sources[key]?.endsWith('覆盖') ? form[key as keyof SummaryConfig] : value])) as SummaryConfig)}>恢复默认值（保存后生效）</button>
