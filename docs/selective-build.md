@@ -21,6 +21,10 @@ Windows 为 x64 EXE；macOS 为 ARM64 DMG；Linux 为 AMD64 tar.gz。不同架�
 
 该路径先构建 CPU 运行时，再下载完整 BGE-Large、BGE-reranker-v2-m3 和 tokenizer，复用现有离线打包程序。下载后验证大小及哈希；候选镜像通过依赖一致性、断网模型推理、健康接口和前端页面检查后才上传。升级包仍不含模型文件。首次准备会有数 GB 下载，须使用独立构建机器，不在业务服务器运行。
 
+Linux 版本包现增加独立 MCP 网关镜像，使用 `deploy/mcp/requirements.lock.txt` 和固定 Python 基础镜像构建，不改变主应用运行依赖。应用与网关必须有相同版本和完整提交，否则拒绝打包；`release.json` 格式 2 同时记录三组件镜像 ID，另输出 `mcp-python-dependencies.txt`。构建机可联网获取固定依赖，部署机只加载镜像。MCP 基础镜像默认使用 CI 材料中的 Python digest，可通过 `--mcp-base-image` 指定经过审查的固定来源。
+
+上传候选前，流水线另外检查独立 SDK 协议、host/Compose 事务失败恢复，以及临时空数据的真实主应用 → MCP 网关 → Nginx 握手、列工具、查询和代理屏蔽规则。网关部署不自动开启 MCP 业务开关。历史 host 环境使用同包中的受控接管流程，仍须在实际环境审阅挂载和 Nginx 候选配置，不能把源码级测试当成生产验收。
+
 候选包的官方模型清单不保证与 176/224 历史模型目录逐文件一致，不能绕过部署校验或直接套用 Compose 升级；现有 host 网络部署仍须另行验收并保留原模型目录。构建成功不等于数据迁移或真实 AI 服务已验收。
 
 使用已准备好的运行时和模型归档时，将 `linux_bootstrap` 设为 `false`，继续使用下述原有配置。

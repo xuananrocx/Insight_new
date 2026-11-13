@@ -156,7 +156,20 @@ def create_app(backend_url=None, transport=None):
             finally:
                 bearer.reset(binding)
 
-    return Starlette(routes=[Route('/mcp', Endpoint(), methods=['GET', 'POST', 'DELETE'])], lifespan=lifespan)
+    async def health(request):
+        # Readiness is independent of the business switch and never needs a token.
+        # Do not expose backend addresses, credentials or configuration here.
+        ready = False
+        try:
+            response = await client.get(backend + '/health', timeout=3)
+            ready = response.is_success and response.json().get('status') == 'ok'
+        except (httpx.RequestError, ValueError, AttributeError):
+            pass
+        return JSONResponse({'status': 'ok' if ready else 'unavailable',
+                             'component': 'insight-mcp', 'version': __version__},
+                            status_code=200 if ready else 503, headers={'Cache-Control': 'no-store'})
+
+    return Starlette(routes=[Route('/health', health), Route('/mcp', Endpoint(), methods=['GET', 'POST', 'DELETE'])], lifespan=lifespan)
 
 
 def main():

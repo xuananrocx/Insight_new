@@ -21,25 +21,36 @@ def inspect(image):
     return json.loads(subprocess.check_output(['docker', 'image', 'inspect', image], text=True))[0]
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--kind', choices=['full', 'upgrade'], required=True)
-    parser.add_argument('--app-image', required=True)
-    parser.add_argument('--web-image', required=True)
-    parser.add_argument('--models', type=Path, required=True, help='Approved model directory, also used to specify upgrade prerequisites')
-    parser.add_argument('--output', type=Path, required=True, help='New bundle directory, never overwrite')
-    parser.add_argument('--data-schema', required=True, help='Reviewed compatibility identifier, e.g. insight-0.1.1')
-    parser.add_argument('--runtime', type=Path, help='Optional operator-reviewed Docker/Compose installation materials')
-    args = parser.parse_args()
-    app, web = inspect(args.app_image), inspect(args.web_image)
+def validate_images(app, web, mcp):
     labels = app['Config'].get('Labels') or {}
     revision = labels.get('org.opencontainers.image.revision', '')
     version = labels.get('org.opencontainers.image.version', '')
     if not re.fullmatch('[0-9a-f]{40}', revision) or not re.fullmatch(r'\d+\.\d+\.\d+(?:[-+][\w.-]+)?', version):
         raise ValueError('Image must declare version and full source commit labels')
-    for image in (app, web):
+    mcp_labels = mcp['Config'].get('Labels') or {}
+    if (mcp_labels.get('org.opencontainers.image.revision') != revision
+            or mcp_labels.get('org.opencontainers.image.version') != version
+            or mcp_labels.get('io.insight.component') != 'mcp'):
+        raise ValueError('MCP image must match the application version and full commit')
+    for image in (app, web, mcp):
         if image['Architecture'] != 'amd64' or image['Os'] != 'linux':
             raise ValueError('Only linux/amd64 images are supported by this bundle')
+    return version, revision
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--kind', choices=['full', 'upgrade'], required=True)
+    parser.add_argument('--app-image', required=True)
+    parser.add_argument('--web-image', required=True)
+    parser.add_argument('--mcp-image', required=True)
+    parser.add_argument('--models', type=Path, required=True, help='Approved model directory, also used to specify upgrade prerequisites')
+    parser.add_argument('--output', type=Path, required=True, help='New bundle directory, never overwrite')
+    parser.add_argument('--data-schema', required=True, help='Reviewed compatibility identifier, e.g. insight-0.1.1')
+    parser.add_argument('--runtime', type=Path, help='Optional operator-reviewed Docker/Compose installation materials')
+    args = parser.parse_args()
+    app, web, mcp = inspect(args.app_image), inspect(args.web_image), inspect(args.mcp_image)
+    version, revision = validate_images(app, web, mcp)
     source = args.models.resolve()
     required = [source / 'huggingface/hub/models--BAAI--bge-large-zh-v1.5/refs/main',
                 source / 'reranker-torch/config.json', source / 'tiktoken']
@@ -65,8 +76,10 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True)
     templates = Path(__file__).resolve().parent
-    for name in ('compose.yaml', 'nginx.conf', 'insightctl.py', 'settings.example.json', 'config.local.example.yaml', 'README.md'):
+    for name in ('compose.yaml', 'nginx.conf', 'insightctl.py', 'hostctl.py', 'hostctl.sh', 'host-runner.py', 'host-settings.example.json',
+                 'settings.example.json', 'config.local.example.yaml', 'README.md'):
         shutil.copyfile(templates / name, out / name)
+    (out / 'mcp-image.id').write_text(mcp['Id'] + '\n')
     models = {}
     for path in sorted(source.rglob('*')):
         if path.is_file():
@@ -80,10 +93,10 @@ def main():
         shutil.copytree(source, out / 'models', symlinks=False)
     if args.runtime:
         shutil.copytree(args.runtime, out / 'runtime', symlinks=False)
-    subprocess.run(['docker', 'save', '-o', str(out / 'images.tar'), args.app_image, args.web_image], check=True)
-    release = dict(format=1, kind=args.kind, version=version, revision=revision, architecture='amd64',
-                   data_schema=args.data_schema, app_image=args.app_image, web_image=args.web_image,
-                   image_ids={args.app_image: app['Id'], args.web_image: web['Id']}, model_checksums=models,
+    subprocess.run(['docker', 'save', '-o', str(out / 'images.tar'), args.app_image, args.web_image, args.mcp_image], check=True)
+    release = dict(format=2, kind=args.kind, version=version, revision=revision, architecture='amd64',
+                   data_schema=args.data_schema, app_image=args.app_image, web_image=args.web_image, mcp_image=args.mcp_image,
+                   image_ids={args.app_image: app['Id'], args.web_image: web['Id'], args.mcp_image: mcp['Id']}, model_checksums=models,
                    runtime_included=bool(args.runtime))
     (out / 'release.json').write_text(json.dumps(release, indent=2) + '\n')
     sums = {p.relative_to(out).as_posix(): digest(p) for p in sorted(out.rglob('*')) if p.is_file()}

@@ -135,13 +135,23 @@ def build_linux(args, output, work, version, revision):
     run(['docker', 'build', '--network', 'none', '-f', 'deploy/linux/Dockerfile',
          '--build-arg', 'RUNTIME_IMAGE=' + runtime_tag, '--build-arg', 'REVISION=' + revision,
          '--build-arg', 'APP_VERSION=' + version, '-t', tag, '.'])
+    # Independent SDK dependencies; never install them into the application image.
+    mcp_base = args.mcp_base_image or json.loads((ROOT / 'deploy/linux/ci-materials.json').read_text())['images']['python']
+    mcp_python = require_pinned_image(mcp_base)
+    mcp_base_tag = 'insight-mcp-python:build-' + mcp_python['Id'].split(':')[1]
+    run(['docker', 'tag', mcp_python['Id'], mcp_base_tag])
+    mcp_tag = 'insight-mcp:build-' + revision
+    run(['docker', 'build', '--platform', 'linux/amd64', '-f', 'deploy/mcp/Dockerfile',
+         '--build-arg', 'PYTHON_IMAGE=' + mcp_base_tag, '--build-arg', 'REVISION=' + revision,
+         '--build-arg', 'APP_VERSION=' + version, '-t', mcp_tag, '.'])
+    run(['docker', 'run', '--rm', '--network', 'none', mcp_tag, 'python', '-m', 'pip', 'check'])
     actual_version = capture(['docker', 'run', '--rm', '--network', 'none', '--read-only', tag,
                               'python', '-c', 'from src import __version__; print(__version__)'])
     if actual_version != version:
         raise ValueError('Image application version differs from release version')
     bundle = work / 'insight-linux'
     run([sys.executable, 'deploy/linux/package.py', '--kind', args.linux_package,
-         '--app-image', tag, '--web-image', web_tag, '--models', models,
+         '--app-image', tag, '--web-image', web_tag, '--mcp-image', mcp_tag, '--models', models,
          '--data-schema', args.data_schema, '--output', bundle])
     archive = output / f'Insight-{version}-linux-amd64-{revision[:12]}-{args.linux_package}.tar.gz'
     with tarfile.open(archive, 'w:gz', compresslevel=1) as tar:
@@ -149,7 +159,10 @@ def build_linux(args, output, work, version, revision):
     shutil.copyfile(bundle / 'release.json', output / 'linux-bundle.json')
     with (output / 'python-dependencies.txt').open('w', encoding='utf-8') as stream:
         run(['docker', 'run', '--rm', '--network', 'none', tag, 'python', '-m', 'pip', 'freeze', '--all'], stdout=stream)
+    with (output / 'mcp-python-dependencies.txt').open('w', encoding='utf-8') as stream:
+        run(['docker', 'run', '--rm', '--network', 'none', mcp_tag, 'python', '-m', 'pip', 'freeze', '--all'], stdout=stream)
     return dict(runtime_image=runtime['Id'], proxy_image=web['Id'], app_image=image_info(tag)['Id'],
+                mcp_image=image_info(mcp_tag)['Id'], mcp_python_image=mcp_python['Id'],
                 package_kind=args.linux_package, model_manifest_sha256=digest(bundle / 'release.json'))
 
 
@@ -187,7 +200,7 @@ def write_manifest(output, version, revision, target, details):
                                node=capture([executable('node'), '--version']),
                                pnpm=capture([executable('pnpm'), '--version'])),
                     inputs={name: digest(ROOT / name) for name in
-                            ('requirements.txt', 'frontend/pnpm-lock.yaml', 'src/__init__.py')},
+                            ('requirements.txt', 'frontend/pnpm-lock.yaml', 'src/__init__.py', 'deploy/mcp/requirements.lock.txt')},
                     details=details,
                     workflow={key: os.environ.get(key) for key in (
                         'GITHUB_WORKFLOW_REF', 'GITHUB_WORKFLOW_SHA', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT')},
@@ -208,6 +221,8 @@ def main():
     parser.add_argument('--linux-package', choices=['full', 'upgrade'], default='upgrade')
     parser.add_argument('--runtime-image', default=os.environ.get('INSIGHT_RUNTIME_IMAGE'))
     parser.add_argument('--web-image', default=os.environ.get('INSIGHT_WEB_IMAGE'))
+    parser.add_argument('--mcp-base-image', default=os.environ.get('INSIGHT_MCP_BASE_IMAGE'),
+                        help='Pinned Python image; defaults to checked-in CI materials')
     parser.add_argument('--models', type=Path, default=os.environ.get('INSIGHT_MODELS_DIR'))
     parser.add_argument('--data-schema', default='insight-0.1.1')
     args = parser.parse_args()

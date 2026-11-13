@@ -9,5 +9,8 @@
 !deploy/
 !deploy/linux/
 !deploy/linux/Dockerfile
+!deploy/mcp/
+!deploy/mcp/Dockerfile
+!deploy/mcp/requirements.lock.txt
 **/__pycache__/
 **/*.pyc

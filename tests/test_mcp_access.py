@@ -41,8 +41,8 @@ def setup(env):  # noqa: F811
     service._rates.clear()
 
 
-def token(env, client=None, kids=None):  # noqa: F811
-    result = (client or env.alice).post('/api/v1/account/mcp/tokens', json={'name': 'Local Agent', 'kb_ids': kids or [env.kid], 'days': 7})
+def token(env, client=None, kids=None, days=7):  # noqa: F811
+    result = (client or env.alice).post('/api/v1/account/mcp/tokens', json={'name': 'Local Agent', 'kb_ids': kids or [env.kid], 'days': days})
     assert result.status_code == 201, result.text
     return result.json()
 
@@ -76,6 +76,12 @@ def test_default_closed_and_management_boundaries(setup):
     assert bearer.get('/mcp-service/check', headers={'Origin': 'https://evil.test'}).status_code == 403
 
 
+def test_deployment_status_requires_system_view(setup, monkeypatch):
+    monkeypatch.delenv('INSIGHT_MCP_HEALTH_URL', raising=False)
+    assert setup.alice.get('/api/v1/admin/mcp/status').status_code == 403
+    assert setup.admin.get('/api/v1/admin/mcp/status').json()['state'] == 'not_configured'
+
+
 def test_tokens_hash_ownership_scope_and_live_revocation(setup):
     e = setup
     t = token(e)
@@ -94,6 +100,43 @@ def test_tokens_hash_ownership_scope_and_live_revocation(setup):
     assert c.get('/check').status_code == 401
     assert e.admin.get('/api/v1/admin/mcp/calls').json()['total'] >= 1
     assert e.bob.get('/api/v1/admin/mcp/calls').status_code == 403
+
+
+def test_permanent_token_survives_time_but_not_revocation(setup, monkeypatch):
+    e = setup
+    permanent = token(e, days=None)
+    finite = token(e, days=365)
+    item = permanent['item']
+    assert item['expires_at'] is None
+    row = a.rows('SELECT * FROM mcp_tokens WHERE id=?', (item['id'],))[0]
+    assert row['expires_at'] == store.PERMANENT_TOKEN_EXPIRY
+    assert row['token_hash'] == hashlib.sha256(permanent['token'].encode()).hexdigest()
+    for client, endpoint in [(e.alice, '/api/v1/account/mcp'), (e.admin, '/api/v1/admin/mcp/tokens')]:
+        response = client.get(endpoint)
+        saved = next(t for t in response.json()['items'] if t['id'] == item['id'])
+        assert saved['expires_at'] is None
+        assert 'token_hash' not in response.text and permanent['token'] not in response.text
+    c = external(permanent['token'])
+    later = row['created_at'] + 366 * 86400
+    with monkeypatch.context() as patch:
+        patch.setattr(store.time, 'time', lambda: later)
+        assert external(finite['token']).get('/check').status_code == 401
+        assert c.get('/check').status_code == 200
+        assert [v['kb_id'] for v in invoke(c, 'list_knowledge_bases').json()['knowledge_bases']] == [e.kid]
+    assert e.alice.delete('/api/v1/account/mcp/tokens/'+item['id']).status_code == 200
+    assert c.get('/check').status_code == 401
+    assert invoke(c, 'list_knowledge_bases').status_code == 401
+
+
+def test_token_duration_defaults_bounds_and_strict_validation(setup):
+    e = setup
+    for duration in ({}, {'days': 1}, {'days': 365}):
+        response = e.alice.post('/api/v1/account/mcp/tokens', json={'name': 'duration', 'kb_ids': [e.kid], **duration})
+        assert response.status_code == 201, response.text
+        item = response.json()['item']
+        assert item['expires_at'] - item['created_at'] == duration.get('days', 30) * 86400
+    for days in (0, -1, 366, True, 1.5, '30'):
+        assert e.alice.post('/api/v1/account/mcp/tokens', json={'name': 'invalid', 'kb_ids': [e.kid], 'days': days}).status_code == 422
 
 
 @pytest.mark.parametrize('url', ['http://172.19.211.176:8001/mcp', 'http://kb.example.com/mcp', 'https://kb.example.com/mcp', 'http://[fd00::1]:8001/mcp'])
@@ -150,10 +193,11 @@ def test_call_user_filter_matches_all_pages_counts_and_literal_text(setup):
     assert e.admin.get(endpoint, params={'search': 'x' * 201}).status_code == 422
 
 
+@pytest.mark.parametrize('days', [7, None])
 @pytest.mark.parametrize('change', ['expiry', 'disable', 'password', 'capability', 'global'])
-def test_every_request_rechecks_current_access(setup, change):
+def test_every_request_rechecks_current_access(setup, change, days):
     e = setup
-    t = token(e)
+    t = token(e, days=days)
     c = external(t['token'])
     assert c.get('/check').status_code == 200
     if change == 'expiry':
@@ -170,10 +214,11 @@ def test_every_request_rechecks_current_access(setup, change):
     assert invoke(c, 'list_knowledge_bases').status_code in (401, 403, 503)
 
 
-def test_kb_permission_removed_and_admin_not_a_bypass(setup):
+@pytest.mark.parametrize('days', [7, None])
+def test_kb_permission_removed_and_admin_not_a_bypass(setup, days):
     e = setup
     assert e.alice.put(f'/api/v1/kbs/{e.kid}/members/{e.bob_id}', json={'role': 'reader'}).status_code == 200
-    c = external(token(e, e.bob)['token'])
+    c = external(token(e, e.bob, days=days)['token'])
     assert invoke(c, 'get_kb_overview', kb_id=e.kid).status_code == 200
     assert e.alice.delete(f'/api/v1/kbs/{e.kid}/members/{e.bob_id}').status_code == 200
     assert invoke(c, 'get_kb_overview', kb_id=e.kid).status_code == 403
@@ -358,10 +403,11 @@ def test_deadline_and_revocation_during_worker(setup, monkeypatch):
     asyncio.run(in_flight())
 
 
-def test_concurrent_token_creation_enforces_account_limit(setup):
+@pytest.mark.parametrize('days', [7, None])
+def test_concurrent_token_creation_enforces_account_limit(setup, days):
     from concurrent.futures import ThreadPoolExecutor
     e = setup
-    first = token(e)
+    first = token(e, days=days)
     row = a.rows('SELECT * FROM mcp_tokens WHERE id=?', (first['item']['id'],))[0]
     # Leave one slot free and race two independent management requests.
     for _ in range(18):

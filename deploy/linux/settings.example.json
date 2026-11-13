@@ -7,6 +7,7 @@
   "backup_dir": "/srv/insight/backups",
   "bind_address": "0.0.0.0",
   "http_port": 8088,
+  "mcp_allowed_hosts": "REPLACE_WITH_PUBLIC_HOST_AND_PORT,127.0.0.1:8088",
   "network_subnet": "REPLACE_WITH_VERIFIED_FREE_SUBNET",
   "web_ip": "REPLACE_WITH_ADDRESS_IN_SUBNET",
   "app_memory": "6g",
