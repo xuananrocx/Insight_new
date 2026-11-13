@@ -15,11 +15,12 @@ def definition():
             for name in ('list_knowledge_bases', 'wait', 'denied', 'partial', 'busy')]
 
 
-async def run():
+async def run(backend_url):
     seen = []
     entered, cancelled = asyncio.Event(), asyncio.Event()
     valid = {'Bearer alice', 'Bearer bob'}
     async def backend(request):
+        assert str(request.url).startswith(backend_url + '/mcp-service/')
         auth = request.headers.get('authorization')
         seen.append((request.url.path, auth))
         if auth not in valid:
@@ -44,7 +45,7 @@ async def run():
             return httpx.Response(403, json={'detail': 'revoked'})
         await asyncio.sleep(.01)
         return httpx.Response(200, json={'knowledge_bases': [{'name': auth}]})
-    app = create_app(transport=httpx.MockTransport(backend))
+    app = create_app(backend_url=backend_url, transport=httpx.MockTransport(backend))
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url='http://127.0.0.1:8001') as raw:
@@ -114,4 +115,14 @@ async def run():
 
 
 if __name__ == '__main__':
-    asyncio.run(run())
+    for invalid in ('ftp://backend.example', 'http://user:pass@backend.example', 'http://backend.example:bad',
+                    'http://backend.example:65536', 'http://backend.example/path', 'http://backend.example?secret=x',
+                    'http://backend.example#fragment', 'http://bad host', 'http://[broken'):
+        try:
+            create_app(backend_url=invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError('Accepted invalid backend origin: '+invalid)
+    for origin in ('http://172.19.211.176:8888', 'https://backend.example'):
+        asyncio.run(run(origin))

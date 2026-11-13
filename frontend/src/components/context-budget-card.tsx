@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -34,22 +35,18 @@ export function ContextBudgetCard() {
   const input = (field: typeof fields[number]) => {
     const locked = data.sources[field.key]?.includes('覆盖')
     return <label key={field.key} className="block text-[13px]">
-      <span className="mb-1.5 block font-medium">{field.label}（tokens）</span>
+      <span className="mb-1.5 block font-medium"><SettingsHelp title={<>{field.label}（tokens）</>} label={`${field.label}说明`}>{field.help}{`\n来源：${data.sources[field.key]}${locked ? '；请调整覆盖文件' : ''}`}</SettingsHelp></span>
       <input type="number" required min={field.min} max={field.max} step={1} disabled={locked || mutation.isPending}
         value={form[field.key]} onChange={e => setDraft({ ...form, [field.key]: Number(e.target.value) })}
         className="w-full rounded-md border border-input bg-background px-3 py-2 disabled:opacity-60" />
-      <span className="mt-1 block text-[11px] text-muted-foreground">{field.help}</span>
-      <span className="mt-1 block text-[11px] text-muted-foreground">来源：{data.sources[field.key]}{locked ? '；请调整覆盖文件' : ''}</span>
     </label>
   }
   const invalid = fields.some(f => !Number.isInteger(form[f.key]) || form[f.key] < f.min || form[f.key] > f.max)
   return <Card className="mb-4 p-5">
-    <h3 className="text-[14px] font-medium">上下文与会话记忆</h3>
-    <p className="mb-4 mt-2 text-[12px] text-muted-foreground">模型能力在 API 模型编辑中设置。这里管理默认窗口和资料分配；实际输入采用估算，实际输出额度可在对话的上下文使用情况中查看。</p>
+    <h3 className="mb-4 text-[14px] font-medium"><SettingsHelp title="上下文与会话记忆">模型能力在 API 模型编辑中设置。这里管理默认窗口和资料分配；实际输入采用估算，实际输出额度可在对话的上下文使用情况中查看。保存后新提问生效，正在生成的回答沿用原预算。</SettingsHelp></h3>
     {input(fields[0])}
     <details className="mt-4"><summary className="cursor-pointer text-[13px] font-medium">高级预算</summary><div className="mt-3 grid gap-4 sm:grid-cols-2">{fields.slice(1).map(input)}</div></details>
-    <div className="mt-4 flex items-center justify-between gap-3">
-      <p className="text-[11px] text-muted-foreground">保存后新提问生效，正在生成的回答沿用原预算。</p>
+    <div className="mt-4 flex justify-end gap-3">
       <Button size="sm" disabled={mutation.isPending || invalid || !draft} onClick={() => {
         const { context_window_tokens, answer_reserve_tokens, history_tokens, summary_input_tokens, summary_tokens } = form
         const values = { context_window_tokens, answer_reserve_tokens, history_tokens, summary_input_tokens, summary_tokens }

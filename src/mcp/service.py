@@ -6,16 +6,19 @@ import contextvars
 import threading
 import time
 from collections import defaultdict, deque
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import HTTPException
 from src.mcp import store, tools, contracts
 
 _lock = threading.Lock()
 _active = 0
 _rates = defaultdict(deque)
+_executor: ThreadPoolExecutor | None = None
+_executor_limit = 0
 
 
 async def call(token, name, arguments, disconnected=None):
-    global _active
+    global _active, _executor, _executor_limit
     cfg = store.config()
     store.require_access(token)
     started = time.monotonic()
@@ -34,14 +37,26 @@ async def call(token, name, arguments, disconnected=None):
         bucket.append(started)
         _active += 1
     cancelled = threading.Event()
+    work_started = False
+    released = False
     deadline = started + cfg.timeout_seconds
+
+    def release():
+        nonlocal released
+        global _active
+        with _lock:
+            if not released:
+                _active -= 1
+                released = True
 
     def check():
         if cancelled.is_set() or time.monotonic() >= deadline:
             raise HTTPException(408, 'MCP 查询已取消或超时')
 
     def work():
-        global _active
+        nonlocal work_started
+        with _lock:
+            work_started = True
         status = 'failed'
         try:
             check()
@@ -56,12 +71,30 @@ async def call(token, name, arguments, disconnected=None):
             try:
                 store.audit_call(token, name, arguments.get('kb_id'), status, started)
             finally:
-                with _lock:
-                    _active -= 1
+                release()
 
     ctx = contextvars.copy_context()
-    # asyncio.to_thread copies context; explicit context keeps this invariant visible.
-    worker = asyncio.create_task(asyncio.to_thread(ctx.run, work))
+    # Use an independent, lazily populated pool, not asyncio's shared fixed-size
+    # executor. Admission counts include old pools' in-flight work during resizing.
+    try:
+        with _lock:
+            if _executor is None or _executor_limit != cfg.max_concurrent:
+                replacement = ThreadPoolExecutor(max_workers=cfg.max_concurrent, thread_name_prefix='mcp-query')
+                previous, _executor = _executor, replacement
+                _executor_limit = cfg.max_concurrent
+                if previous is not None:
+                    previous.shutdown(wait=False)
+            future = _executor.submit(ctx.run, work)
+    except Exception as exc:
+        # submit() can fail after enqueueing if an OS thread cannot be created.
+        # Cancel any queued work, but keep a running worker's slot until exit.
+        with _lock:
+            cancelled.set()
+            if not work_started and not released:
+                _active -= 1
+                released = True
+        raise HTTPException(503, contracts.error('unavailable', 'MCP 查询暂时无法启动，请稍后重试')) from exc
+    worker = asyncio.wrap_future(future)
     def consume(task):
         if not task.cancelled():
             task.exception()

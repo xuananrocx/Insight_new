@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { ContextBudgetCard } from '@/components/context-budget-card'
 import { SystemMcpSettings } from '@/components/mcp-settings'
 import { Toggle } from '@/components/ui/toggle-switch'
@@ -76,7 +77,7 @@ function LLMTimeoutsCard() {
       </div>
       <div className="grid grid-cols-2 gap-4">
         <div>
-          <label className="mb-1.5 block text-[13px] font-medium">连接测试超时（秒）</label>
+          <label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="连接测试超时（秒）">「测试」按钮的等待时长，建议 5-15 秒</SettingsHelp></label>
           <input
             type="number"
             min={1}
@@ -85,10 +86,10 @@ function LLMTimeoutsCard() {
             onChange={(e) => setForm({ ...form, test: Number(e.target.value) })}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">「测试」按钮的等待时长，建议 5-15 秒</p>
+
         </div>
         <div>
-          <label className="mb-1.5 block text-[13px] font-medium">网络读取等待（秒）</label>
+          <label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="网络读取等待（秒）">网络持续无数据时的等待上限。摘要默认继承；任务总时长另行设置。</SettingsHelp></label>
           <input
             type="number"
             min={10}
@@ -97,7 +98,7 @@ function LLMTimeoutsCard() {
             onChange={(e) => setForm({ ...form, request: Number(e.target.value) })}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">网络持续无数据时的等待上限。摘要默认继承；任务总时长另行设置。</p>
+
         </div>
       </div>
       <div className="mt-3 flex justify-end">
@@ -135,11 +136,11 @@ function WebSearchConfigCard() {
   })
   return <Card className="p-5">
     <div className="flex items-center justify-between gap-4">
-      <div><h3 className="text-sm font-medium">联网搜索</h3><p role="status" className="mt-1 text-xs text-muted-foreground">{save.isPending ? '正在保存…' : status.isError ? '状态读取失败，请重试' : !status.data ? '正在读取…' : status.data.enabled ? '已开启 · 切换即时保存' : '已关闭 · 切换即时保存'}</p></div>
+      <div><h3 className="text-sm font-medium"><SettingsHelp title="联网搜索">仅对新发起的深度 AI 提问生效；模型还需配置联网能力，由 AI 自主决定是否搜索。联网能力检测不受此开关影响。</SettingsHelp></h3><p role="status" className="mt-1 text-xs text-muted-foreground">{save.isPending ? '正在保存…' : status.isError ? '状态读取失败，请重试' : !status.data ? '正在读取…' : status.data.enabled ? '已开启 · 切换即时保存' : '已关闭 · 切换即时保存'}</p></div>
       <Toggle label="启用联网搜索" checked={save.isPending ? save.variables : status.data?.enabled ?? false} disabled={!can('system.edit') || !status.data || save.isPending} onChange={enabled => save.mutate(enabled)} />
     </div>
     {status.isError && <Button variant="outline" size="sm" onClick={() => void status.refetch()}>重试</Button>}
-    <p className="mt-3 text-xs text-muted-foreground">仅对新发起的深度 AI 提问生效；模型还需配置联网能力，由 AI 自主决定是否搜索。联网能力检测不受此开关影响。</p>
+
   </Card>
 }
 
@@ -195,17 +196,15 @@ function AiGenerationConfigCard() {
     <Card className="mb-4 p-5">
       <div className="mb-2 flex items-center gap-2">
         <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-        <span className="text-[14px] font-medium">问答生成</span>
+        <span className="text-[14px] font-medium"><SettingsHelp title="问答生成">输出上限是单次模型调用的 token 上限，推理模型的思考过程也计入其中；达到上限的回答会被标记为部分完成，不再静默截断或反复重试。</SettingsHelp></span>
         <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
           深度 AI 与增强 AI 通用
         </span>
       </div>
-      <p className="mb-4 text-[12px] text-muted-foreground">
-        输出上限是单次模型调用的 token 上限，推理模型的思考过程也计入其中；达到上限的回答会被标记为部分完成，不再静默截断或反复重试。
-      </p>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
-          <label className="mb-1.5 block text-[13px] font-medium">问答输出封顶（tokens）</label>
+          <label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="问答输出封顶（tokens）">实际额度取系统封顶、模型最大输出和上下文剩余空间的较小值；模型能力未配置时无法保证接口接受。</SettingsHelp></label>
           <input
             type="number"
             min={256}
@@ -213,12 +212,10 @@ function AiGenerationConfigCard() {
             onChange={(e) => setDraft({ ...form, maxTokens: Number(e.target.value) })}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            实际额度取系统封顶、模型最大输出和上下文剩余空间的较小值；模型能力未配置时无法保证接口接受。
-          </p>
+
         </div>
         <div>
-          <label className="mb-1.5 block text-[13px] font-medium">生成时长（秒）</label>
+          <label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="生成时长（秒）">作答阶段的最长生成时间，建议 300-1800 秒</SettingsHelp></label>
           <input
             type="number"
             min={30}
@@ -226,19 +223,19 @@ function AiGenerationConfigCard() {
             onChange={(e) => setDraft({ ...form, timeoutSeconds: Number(e.target.value) })}
             className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
           />
-          <p className="mt-1 text-[11px] text-muted-foreground">作答阶段的最长生成时间，建议 300-1800 秒</p>
+
         </div>
       </div>
       <div className="mt-4 grid grid-cols-1 gap-4 border-t pt-3 sm:grid-cols-2">
-        <div><label className="mb-1.5 block text-[13px] font-medium">后台生成总时限（秒）</label><input type="number" min={30} max={86400} value={form.jobTimeout} onChange={e => setDraft({ ...form, jobTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">默认 3600 秒，包含查阅与作答。刷新或关闭页面不会停止；服务重启保留部分回答，但不自动重试。新提问生效。</p></div>
-        <div><label className="mb-1.5 block text-[13px] font-medium">后台生成并发上限</label><input type="number" min={1} max={64} value={form.jobMax} onChange={e => setDraft({ ...form, jobMax: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">全站同时生成数量，默认 4；同一会话最多 1 个。达到上限时提示稍后重试，不自动排队。</p></div>
+        <div><label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="后台生成总时限（秒）">默认 3600 秒，包含查阅与作答。刷新或关闭页面不会停止；服务重启保留部分回答，但不自动重试。新提问生效。</SettingsHelp></label><input type="number" min={30} max={86400} value={form.jobTimeout} onChange={e => setDraft({ ...form, jobTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /></div>
+        <div><label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="后台生成并发上限">全站同时生成数量，默认 4；同一会话最多 1 个。达到上限时提示稍后重试，不自动排队。</SettingsHelp></label><input type="number" min={1} max={64} value={form.jobMax} onChange={e => setDraft({ ...form, jobMax: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /></div>
       </div>
       <div className="mt-4 border-t pt-3">
         <div className="mb-2 text-[12px] font-medium text-muted-foreground">深度 AI 专项</div>
-        <div className="mb-4"><label className="mb-1.5 block text-[13px] font-medium">单次工具查阅超时（秒）</label><input type="number" min={5} max={600} value={form.toolTimeout} onChange={e => setDraft({ ...form, toolTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /><p className="mt-1 text-[11px] text-muted-foreground">默认 25 秒，可设 5–600 秒。用于检索、目录与原文读取等工具，不是 API 网络超时；开启整轮时限时仍受剩余时间限制。保存后新提问生效。</p></div>
+        <div className="mb-4"><label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="单次工具查阅超时（秒）">默认 25 秒，可设 5–600 秒。用于检索、目录与原文读取等工具，不是 API 网络超时；开启整轮时限时仍受剩余时间限制。保存后新提问生效。</SettingsHelp></label><input type="number" min={5} max={600} value={form.toolTimeout} onChange={e => setDraft({ ...form, toolTimeout: Number(e.target.value) })} className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]" /></div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div>
-            <label className="mb-1.5 block text-[13px] font-medium">查阅上下文（字符）</label>
+            <label className="mb-1.5 block text-[13px] font-medium"><SettingsHelp title="查阅上下文（字符）">单次提问可读取的原文总字符预算，建议 20000-80000；范围 2,000–1,000,000，搜索摘录和原文共用此预算。</SettingsHelp></label>
             <input
               type="number"
               min={2000}
@@ -247,9 +244,7 @@ function AiGenerationConfigCard() {
               onChange={(e) => setDraft({ ...form, contextChars: Number(e.target.value) })}
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-[13px]"
             />
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              单次提问可读取的原文总字符预算，建议 20000-80000；范围 2,000–1,000,000，搜索摘录和原文共用此预算。
-            </p>
+
           </div>
         </div>
       </div>
@@ -323,16 +318,14 @@ function DefaultKbCard() {
     <Card className="mb-4 p-5">
       <div className="mb-3 flex items-center gap-2">
         <Library className="h-4 w-4 text-muted-foreground" />
-        <span className="text-[14px] font-medium">系统默认知识库</span>
+        <span className="text-[14px] font-medium"><SettingsHelp title="系统默认知识库">作为未设置个人默认知识库的用户的默认选择；用户可在个人设置中选择自己的默认知识库，优先于本配置。留空则使用内置知识库。</SettingsHelp></span>
         {currentValue ? (
           <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">已配置</span>
         ) : (
           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">未配置</span>
         )}
       </div>
-      <p className="mb-3 text-[12px] text-muted-foreground">
-        作为未设置个人默认知识库的用户的默认选择；用户可在个人设置中选择自己的默认知识库，优先于本配置。留空则使用内置知识库。
-      </p>
+
       <div className="flex items-center gap-2">
         <Select
           value={selected || 'none'}
@@ -503,7 +496,7 @@ export function SettingsPage() {
               <Database className="h-4 w-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-[13px] font-medium">{m.label}</span>
+                  <span className="text-[13px] font-medium"><SettingsHelp title={m.label} label={`${m.label}说明`}>{m.description}</SettingsHelp></span>
                   <span className="font-mono text-[10px] text-muted-foreground">{m.name}</span>
                   {m.is_cached ? (
                     <span className="inline-flex items-center gap-1 rounded bg-success/15 px-1.5 py-0.5 text-[10px] font-medium text-success">
@@ -511,9 +504,6 @@ export function SettingsPage() {
                       已加载到内存
                     </span>
                   ) : null}
-                </div>
-                <div className="mt-0.5 text-[11px] text-muted-foreground">
-                  {m.description}
                 </div>
                 <div className="mt-1 flex gap-3 text-[10px] text-muted-foreground">
                   <span>大小 {m.size}</span>
@@ -685,30 +675,32 @@ function CacheOption({
 }) {
   const active = current === value
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={disabled || active}
+    <div
       className={cn(
-        'w-full rounded-md border p-3 text-left transition-colors',
+        'relative rounded-md border p-3 text-left transition-colors',
         active
           ? 'border-primary bg-accent/30'
           : 'bg-muted/20 hover:bg-accent/30 hover:border-primary/40',
         disabled && 'cursor-not-allowed opacity-60',
       )}
     >
-      <div className="mb-1 flex items-center gap-2">
+      <button
+        type="button"
+        aria-label={title}
+        onClick={onSelect}
+        disabled={disabled || active}
+        className="absolute inset-0 h-full w-full rounded-[inherit] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      />
+      <div className="pointer-events-none relative flex items-center gap-2">
         {active ? (
-          <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
+          <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-primary" />
         ) : (
-          <div className="h-3.5 w-3.5 rounded-full border" />
+          <div className="h-3.5 w-3.5 shrink-0 rounded-full border" />
         )}
-        <span className="text-[12px] font-medium">{title}</span>
-        <span className="ml-auto font-mono text-[10px] text-muted-foreground">{value}</span>
+        <span className="min-w-0 flex-1 text-[12px] font-medium"><SettingsHelp title={title}>{cost} · {benefit}</SettingsHelp></span>
+        <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">{value}</span>
       </div>
-      <div className="text-[11px] text-muted-foreground">{cost}</div>
-      <div className="text-[11px] text-success">{benefit}</div>
-    </button>
+    </div>
   )
 }
 

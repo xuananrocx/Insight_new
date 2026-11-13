@@ -769,8 +769,8 @@ export function ChatPage() {
 
 function TurnCard({ turn, onStop, onRetry, searchResults }: { turn: ChatTurn; onStop?: () => void; onRetry?: () => void; searchResults: React.ReactNode }) {
   const [copied, setCopied] = useState(false)
-  const [layout] = useLocalStorage<string>('amd-chat-layout', 'classic')
-  const bubble = layout === 'bubble'
+  const [layout] = useLocalStorage<string>('amd-chat-layout', 'bubble')
+  const bubble = layout !== 'classic'
   const [showThinking] = useLocalStorage<boolean>('amd-ui-show-thinking', true)
   const [showCitations] = useLocalStorage<boolean>('amd-ui-show-citations', false)
   const [showContext] = useLocalStorage<boolean>('amd-ui-show-context', false)

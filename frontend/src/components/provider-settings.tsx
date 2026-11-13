@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { api } from '@/lib/api'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
@@ -67,17 +68,17 @@ function ProviderForm({ initial, scope, onClose }: { initial?: Provider; scope: 
     <form onSubmit={save}><fieldset disabled={busy} className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2"><label className="text-sm">API 名称<input className={accountInput} value={name} onChange={e => setName(e.target.value)} required maxLength={80} /></label>
         <label className="text-sm">协议<OptionSelect aria-label="协议" value={protocol} onValueChange={setProtocol} options={[{ value: 'openai', label: 'OpenAI 兼容' }, { value: 'anthropic', label: 'Anthropic' }, { value: 'anthropic-arch', label: 'Anthropic Arch' }]} /></label></div>
-      <label className="block text-sm">API 地址<input className={accountInput} type="url" value={url} onChange={e => setUrl(e.target.value)} required maxLength={2048} placeholder="https://api.example.com/v1" /></label>
-      <p className="text-xs text-muted-foreground">同一 API 下的模型共用地址、协议和密钥。OpenAI 兼容地址只填域名时使用 /v1，自定义路径请填写完整地址。</p>
+      <label className="block text-sm"><SettingsHelp title="API 地址">同一 API 下的模型共用地址、协议和密钥。OpenAI 兼容地址只填域名时使用 /v1，自定义路径请填写完整地址。</SettingsHelp><input className={accountInput} type="url" value={url} onChange={e => setUrl(e.target.value)} required maxLength={2048} placeholder="https://api.example.com/v1" /></label>
+
       <label className="block text-sm">API 密钥<input className={accountInput} type="password" autoComplete="new-password" value={key} onChange={e => setKey(e.target.value)} maxLength={8192} placeholder={initial?.has_api_key ? '已保存；留空保留原密钥' : '服务无密钥要求时可留空'} /></label>
       <div className="space-y-3"><p className="text-sm font-medium">模型列表</p>{models.map((model, i) => <div key={i} className="space-y-2 rounded border p-3">
-        <label className="block text-sm">模型 ID<input className={accountInput} value={model.model_id} onChange={e => patch(i, 'model_id', e.target.value)} required maxLength={200} placeholder="服务商提供的准确模型 ID" /></label>
-        <p className="text-xs text-muted-foreground">修改已有模型 ID 时，确认后同步默认选择与会话；删除后再添加视为不同模型。</p>
-        <label className="block text-sm">显示名称（可选）<input className={accountInput} value={model.display_name} onChange={e => patch(i, 'display_name', e.target.value)} maxLength={80} placeholder="聊天选择器中显示的名称" /></label>
-        <p className="text-xs text-muted-foreground">显示名称仅影响展示，不改变实际调用的模型。</p>
-        <label className="block text-sm">联网搜索（深度 AI）<OptionSelect aria-label={`模型 ${i + 1} 联网搜索`} value={model.web_search ?? 'off'} onValueChange={value => setModels(items => items.map((item, index) => index === i ? { ...item, web_search: value as ApiModel['web_search'] } : item))} options={[{ value: 'off', label: '不启用' }, ...(protocol === 'openai' ? [{ value: 'responses', label: '启用 · Responses 搜索' }] : [{ value: 'anthropic', label: '启用 · Anthropic 搜索' }])]} /></label>
-        <p className="text-xs text-muted-foreground">需同时开启系统联网搜索。Responses 模式仅用于深度 AI，该模型的普通连接测试沿用 API 协议；启用后请测试联网能力。</p>
-        <details className="col-span-full text-xs text-muted-foreground"><summary className="cursor-pointer">模型能力（问答与摘要）</summary><p className="my-2">按此 API 实际支持范围填写，问答、摘要和辅助生成共同遵守。留空表示未知，不根据模型名称推测；上下文最多使用应用支持的 262,144 tokens。</p><div className="grid gap-3 sm:grid-cols-2">
+        <label className="block text-sm"><SettingsHelp title="模型 ID">修改已有模型 ID 时，确认后同步默认选择与会话；删除后再添加视为不同模型。</SettingsHelp><input className={accountInput} value={model.model_id} onChange={e => patch(i, 'model_id', e.target.value)} required maxLength={200} placeholder="服务商提供的准确模型 ID" /></label>
+
+        <label className="block text-sm"><SettingsHelp title="显示名称（可选）">显示名称仅影响展示，不改变实际调用的模型。</SettingsHelp><input className={accountInput} value={model.display_name} onChange={e => patch(i, 'display_name', e.target.value)} maxLength={80} placeholder="聊天选择器中显示的名称" /></label>
+
+        <label className="block text-sm"><SettingsHelp title="联网搜索（深度 AI）">需同时开启系统联网搜索。Responses 模式仅用于深度 AI，该模型的普通连接测试沿用 API 协议；启用后请测试联网能力。</SettingsHelp><OptionSelect aria-label={`模型 ${i + 1} 联网搜索`} value={model.web_search ?? 'off'} onValueChange={value => setModels(items => items.map((item, index) => index === i ? { ...item, web_search: value as ApiModel['web_search'] } : item))} options={[{ value: 'off', label: '不启用' }, ...(protocol === 'openai' ? [{ value: 'responses', label: '启用 · Responses 搜索' }] : [{ value: 'anthropic', label: '启用 · Anthropic 搜索' }])]} /></label>
+
+        <details className="col-span-full text-xs text-muted-foreground"><summary className="cursor-pointer"><SettingsHelp title="模型能力（问答与摘要）">按此 API 实际支持范围填写，问答、摘要和辅助生成共同遵守。留空表示未知，不根据模型名称推测；上下文最多使用应用支持的 262,144 tokens。</SettingsHelp></summary><div className="grid gap-3 sm:grid-cols-2">
           {(['context_tokens', 'output_tokens'] as const).map(key => <label key={key}>{key === 'context_tokens' ? '上下文容量（tokens）' : '最大输出（tokens）'}<input type="number" className={accountInput} value={model[key] ?? ''} min={key === 'context_tokens' ? 4096 : 256} onChange={e => setModels(items => items.map((item, index) => index === i ? { ...item, [key]: e.target.value === '' ? null : Number(e.target.value) } : item))} /></label>)}
         </div></details>
         <Button type="button" size="sm" variant="ghost" disabled={models.length === 1} onClick={() => setModels(models.filter((_, n) => n !== i))}>移除此模型</Button>
@@ -167,18 +168,16 @@ export function ProviderSettings({ team = false }: { team?: boolean }) {
   return <div className="space-y-4">
     {testFailure && <ManagementDialog title={testFailure.title} className="max-w-xl" onClose={() => setTestFailure(null)}><div role="alert" className="rounded-lg border border-destructive/20 bg-destructive/5 p-4"><p className="font-medium text-destructive">检测未通过</p><p className="mt-2 whitespace-pre-wrap break-words text-sm leading-relaxed">{testFailure.message}</p></div><p className="text-xs text-muted-foreground">本次检测未成功完成，请根据提示检查配置后手动重试。</p><Button variant="outline" onClick={() => setTestFailure(null)}>关闭</Button></ManagementDialog>}
     {showWebTest && webTest && <WebSearchTestDialog test={webTest} onClose={() => setShowWebTest(false)} onStop={stopWebSearch} />}
-    {!team && <Card className="space-y-3 p-5"><h2 className="font-semibold">我的默认模型</h2>
-      <p className="text-sm text-muted-foreground">用于新会话和之后发起的 AI 摘要任务。聊天中可以单独切换会话模型；失败不会自动换用其他 API。</p>
+    {!team && <Card className="space-y-3 p-5"><h2 className="font-semibold"><SettingsHelp title="我的默认模型">用于新会话和之后发起的 AI 摘要任务。聊天中可以单独切换会话模型；失败不会自动换用其他 API。</SettingsHelp></h2>
+
       <ApiModelSelect providers={items} selection={providers.data?.selection} disabled={busy || providers.isLoading} onChange={(p, m) => void run(() => accountApi.choose(p, m), '默认模型已更新')} />
       {providers.data?.selection.valid && <p className="text-xs text-muted-foreground">来源：{providers.data.selection.provider_name}</p>}
       {providers.data && !providers.data.selection.valid && <p role="alert" className="text-sm text-destructive">{providers.data.selection.reason}</p>}
     </Card>}
     {(failure || providers.error) && <p role="alert" className="rounded border border-destructive/30 p-3 text-sm text-destructive">{failure || providers.error?.message}</p>}
-    <p className="text-xs text-muted-foreground">联网搜索需同时启用系统总开关与模型配置；检测不受系统开关影响，点击状态可查看详情。</p>
     {groups.map(group => <Card key={group.title} className="space-y-4 p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold">{group.title}</h2>
+      <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="font-semibold"><SettingsHelp title={group.title} label={`${group.title}说明`}>{group.description} 联网搜索需同时启用系统总开关与模型配置；检测不受系统开关影响，点击状态可查看详情。</SettingsHelp></h2>
         {group.canCreate && <Button size="sm" onClick={() => setForm({ scope: team ? 'team' : 'personal' })}>新增 API</Button>}</div>
-      <p className="text-sm text-muted-foreground">{group.description}</p>
       {!providers.isLoading && group.items.length === 0 && <p className="text-sm text-muted-foreground">{group.title === '已授权的团队 API' ? '暂无已授权且启用的团队 API。' : '暂无 API 配置。'}</p>}
       {group.items.map(p => {
         const editable = p.manageable && (team || p.scope === 'personal')

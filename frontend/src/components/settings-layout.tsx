@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { useLocation, useSearchParams } from 'react-router-dom'
 import { cn } from '@/lib/utils'
@@ -125,8 +126,7 @@ export function SettingsLayout({ title, description, sections, readOnly = false,
             {sections.map(section => (
               <section key={section.id} ref={node => { if (node) sectionRefs.current.set(section.id, node); else sectionRefs.current.delete(section.id) }} id={`${prefix}-${section.id}`} aria-labelledby={`${prefix}-${section.id}-nav`} className="border-b border-border/60 pb-8 last:border-b-0 last:pb-0">
                 <div className="mb-4">
-                  <h2 className="text-lg font-semibold">{section.label}</h2>
-                  <p className="mt-1 text-sm text-muted-foreground">{section.description}</p>
+                  <h2 className="text-lg font-semibold"><SettingsHelp title={section.label} label={`${section.label}说明`}>{section.description}</SettingsHelp></h2>
                 </div>
                 <fieldset disabled={readOnly && !section.managesReadOnly} className="min-w-0 space-y-4">{section.content}</fieldset>
               </section>

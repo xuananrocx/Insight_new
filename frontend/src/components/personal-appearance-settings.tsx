@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { PersonalAccentPicker } from '@/components/accent-picker'
 import { useAuth } from '@/hooks/use-auth'
 import { DEFAULT_MENU_ORDER, MENU_LABELS, normalizeMenuOrder, visibleMenuOrder } from '@/lib/navigation'
@@ -35,11 +36,9 @@ export function SidebarSettingsCard() {
     <Card className="mb-4 p-5">
       <div className="mb-3 flex items-center gap-2">
         <PanelLeft className="h-4 w-4 text-muted-foreground" />
-        <span className="text-[14px] font-medium">侧边栏</span>
+        <span className="text-[14px] font-medium"><SettingsHelp title="侧边栏">调整工作台二级菜单的显示顺序。顶部导航与底部账号入口保持固定；侧栏宽度可拖动分界线调整，双击恢复默认。偏好在当前浏览器中按账号保存。</SettingsHelp></span>
       </div>
-      <p className="mb-3 text-[12px] text-muted-foreground">
-        调整工作台二级菜单的显示顺序。顶部导航与底部账号入口保持固定；侧栏宽度可拖动分界线调整，双击恢复默认。偏好在当前浏览器中按账号保存。
-      </p>
+
       <div className="space-y-1">
         {visibleOrder.map((path, idx) => {
           const label = MENU_LABELS[path] ?? path
@@ -95,14 +94,14 @@ export function AppearanceSettingsCard() {
         </div>
 
         <div className="mb-4 flex items-center justify-between gap-3 rounded-md border p-3">
-          <span className="text-sm">主题</span>
+          <span className="text-sm"><SettingsHelp title="主题">切换到磨砂玻璃主题后，可调节玻璃浓度与背景渐变。外观偏好自动保存。</SettingsHelp></span>
           <ThemeToggle />
         </div>
         {theme === 'minimal' && <PersonalAccentPicker />}
         {theme === 'macos' ? (
           <div>
             <div className="mb-2 flex items-center justify-between">
-              <label className="text-[12px] text-muted-foreground">玻璃浓度</label>
+              <label className="text-[12px] text-muted-foreground"><SettingsHelp title="玻璃浓度">浓度越低，背景越明显；浓度越高，内容越清晰。实时生效并自动保存，仅影响当前账号在此浏览器中的外观。</SettingsHelp></label>
               <span className="font-mono text-[11px] text-muted-foreground">
                 {Math.round(glassOpacity * 100)}%
               </span>
@@ -118,16 +117,14 @@ export function AppearanceSettingsCard() {
               className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary"
             />
             <div className="mt-1.5 flex justify-between text-[10px] text-muted-foreground">
-              <span>通透（背景更明显）</span>
-              <span>厚实（内容更清晰）</span>
+              <span>通透</span>
+              <span>厚实</span>
             </div>
-            <div className="mt-3 text-[11px] text-muted-foreground">
-              实时生效，立即看到效果。设置自动保存。
-            </div>
+
 
             {/* 毛玻璃背景渐变 */}
             <div className="mt-5 mb-2 flex items-center justify-between">
-              <label className="text-[12px] text-muted-foreground">背景渐变</label>
+              <label className="text-[12px] text-muted-foreground"><SettingsHelp title="背景渐变">背景与玻璃浓度按当前账号保存在此浏览器，切换主题或刷新后保留。</SettingsHelp></label>
               <span className="font-mono text-[11px] text-muted-foreground">
                 {BACKGROUND_OPTIONS.find((o) => o.key === background)?.label ?? 'Moonlit Mint'}
               </span>
@@ -148,15 +145,9 @@ export function AppearanceSettingsCard() {
                 </button>
               ))}
             </div>
-            <div className="mt-1.5 text-[11px] text-muted-foreground">
-              背景与玻璃浓度按当前账号保存在此浏览器，切换主题或刷新后保留。
-            </div>
+
           </div>
-        ) : (
-          <div className="rounded-md bg-muted/20 p-3 text-[12px] text-muted-foreground">
-            切换到 磨砂玻璃主题后，这里会出现玻璃浓度调节。
-          </div>
-        )}
+        ) : null}
       </Card>
 
   )

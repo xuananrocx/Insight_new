@@ -1,3 +1,4 @@
+import { SettingsHelp } from '@/components/settings-help'
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -59,16 +60,14 @@ export function PersonalDefaultKbCard() {
     <Card className="space-y-3 p-5">
       <div className="flex items-center gap-2">
         <Library className="h-4 w-4 text-muted-foreground" />
-        <h2 className="font-semibold">我的默认知识库</h2>
+        <h2 className="font-semibold"><SettingsHelp title="我的默认知识库">提问页和文档管理页会默认选中此知识库，仅对自己的账号生效。留空时使用系统默认知识库。</SettingsHelp></h2>
         {currentValue ? (
           <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] text-primary">已自定义</span>
         ) : (
           <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">跟随系统</span>
         )}
       </div>
-      <p className="text-sm text-muted-foreground">
-        提问页和文档管理页会默认选中此知识库，仅对自己的账号生效。留空时使用系统默认知识库。
-      </p>
+
       <div className="flex items-center gap-2">
         <Select
           value={selected || 'inherit'}
