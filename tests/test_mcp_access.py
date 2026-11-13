@@ -20,9 +20,10 @@ from src.qa.knowledge_tools import TOOLS, KnowledgeTools
 
 @pytest.fixture
 def setup(env):  # noqa: F811
+    db.set_state('mcp_retrieval_settings', {})
     for table in ('mcp_references', 'mcp_calls', 'mcp_tokens'):
         a.execute(f'DELETE FROM {table}')
-    db.set_state('mcp_settings', store.Settings(enabled=True, max_concurrent=2).model_dump())
+    db.set_state('mcp_settings', store.Settings(enabled=True, max_concurrent=2, rerank_enabled=False).model_dump())
     service._rates.clear()
     assert service._active == 0
     role = uuid.uuid4().hex
@@ -34,6 +35,7 @@ def setup(env):  # noqa: F811
     env.role = role
     yield env
     db.set_state('mcp_settings', {})
+    db.set_state('mcp_retrieval_settings', {})
     a.execute('DELETE FROM permission_user_roles WHERE role_id=?', (role,))
     a.execute('DELETE FROM permission_roles WHERE id=?', (role,))
     service._rates.clear()
@@ -319,3 +321,37 @@ def test_concurrent_token_creation_enforces_account_limit(setup):
     assert sorted(results) == [201, 409]
     assert e.alice.delete('/api/v1/account/mcp/tokens/'+first['item']['id']).status_code == 200
     assert create() == 201  # failed transaction released its write lock
+
+
+@pytest.mark.parametrize('slots', [1, 2])
+def test_four_overlapping_calls_obey_configured_slots(setup, monkeypatch, slots):
+    e = setup
+    created = token(e)
+    release = threading.Event()
+    cfg = store.config().model_copy(update={'max_concurrent': slots})
+    monkeypatch.setattr(store, 'config', lambda: cfg)
+    def block(token, name, args, check):
+        assert release.wait(5), 'test worker was not released'
+        check()
+        return {'ok': True}
+    monkeypatch.setattr(tools, 'execute', block)
+    async def scenario():
+        with actor(e.alice_id):
+            row = store.authenticate(created['token'])
+            jobs = [asyncio.create_task(service.call(row, 'list_knowledge_bases', {})) for _ in range(4)]
+            try:
+                for _ in range(100):
+                    if sum(job.done() for job in jobs) == 4-slots and service._active == slots:
+                        break
+                    await asyncio.sleep(.01)
+                assert service._active == slots
+                assert sum(job.done() for job in jobs) == 4-slots
+            finally:
+                release.set()
+                results = await asyncio.gather(*jobs, return_exceptions=True)
+            success = [r for r in results if isinstance(r, dict)]
+            busy = [r for r in results if isinstance(r, HTTPException)]
+            assert len(success) == slots and len(busy) == 4-slots
+            assert all(r.status_code == 429 and r.detail['code'] == 'busy' for r in busy)
+            assert service._active == 0
+    asyncio.run(scenario())

@@ -235,8 +235,8 @@ def _on_startup() -> None:
 
             def _prewarm_local_embedder() -> None:
                 try:
-                    client._get_local_embedder()
-                    logger.info("embedding 模型预热完成")
+                    if client.prewarm_embedding():
+                        logger.info("embedding 模型预热完成")
                 except Exception as e:
                     logger.warning(f"embedding 模型预热失败（下次用到时再加载）: {e}")
 

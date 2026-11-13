@@ -7,7 +7,7 @@ import threading
 import time
 from collections import defaultdict, deque
 from fastapi import HTTPException
-from src.mcp import store, tools
+from src.mcp import store, tools, contracts
 
 _lock = threading.Lock()
 _active = 0
@@ -28,9 +28,9 @@ async def call(token, name, arguments, disconnected=None):
         while bucket and bucket[0] <= started-60:
             bucket.popleft()
         if len(bucket) >= cfg.requests_per_minute:
-            raise HTTPException(429, 'MCP 请求频率过高，请稍后重试')
+            raise HTTPException(429, contracts.error('rate_limited', 'MCP 请求频率过高，请稍后重试', legacy='429'))
         if _active >= cfg.max_concurrent:
-            raise HTTPException(429, 'MCP 查询繁忙，请稍后重试')
+            raise HTTPException(429, contracts.error('busy', 'MCP 查询繁忙，请稍后重试', legacy='429'))
         bucket.append(started)
         _active += 1
     cancelled = threading.Event()

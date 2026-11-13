@@ -23,6 +23,10 @@ class Settings(BaseModel):
     max_output_chars: int = Field(default=32000, ge=16000, le=64000)
     requests_per_minute: int = Field(default=30, ge=1, le=120)
     reference_minutes: int = Field(default=30, ge=5, le=120)
+    rerank_enabled: bool = True
+    rerank_candidates: int = Field(default=24, ge=4, le=40)
+    rerank_seconds: int = Field(default=12, ge=2, le=30)
+    rerank_min_score: float = Field(default=0.10, ge=0, le=1)
 
 
 def init_schema():
@@ -46,8 +50,11 @@ def init_schema():
         ''')
 
 
+RETRIEVAL_KEYS = {'rerank_enabled', 'rerank_candidates', 'rerank_seconds', 'rerank_min_score'}
+
+
 def config() -> Settings:
-    return Settings.model_validate(db.get_state('mcp_settings', {}))
+    return Settings.model_validate({**db.get_state('mcp_settings', {}), **db.get_state('mcp_retrieval_settings', {})})
 
 
 def save_config(value: Settings):
@@ -61,9 +68,13 @@ def save_config(value: Settings):
         raise HTTPException(422, '请输入不含凭据、查询参数的 MCP HTTP(S) 地址')
     if url.scheme == 'http' and url.hostname not in ('localhost', '127.0.0.1', '::1'):
         raise HTTPException(422, '远程 MCP 地址请使用 HTTPS；内网可使用 HTTPS 或安全隧道')
-    db.set_state('mcp_settings', value.model_dump())
+    # Old clients omit new fields; preserve the independent retrieval preferences.
+    current = config()
+    retrieval = {key: getattr(value if key in value.model_fields_set else current, key) for key in RETRIEVAL_KEYS}
+    db.set_state('mcp_settings', value.model_dump(exclude=RETRIEVAL_KEYS))
+    db.set_state('mcp_retrieval_settings', retrieval)
     a.audit('mcp_settings_changed')
-    return value
+    return config()
 
 
 def token_view(row):

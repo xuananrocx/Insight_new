@@ -15,7 +15,7 @@ import { ConfirmDialog } from '@/components/confirm-dialog'
 
 type Token = { id: string; user_id: string; name: string; prefix: string; kb_ids: string[]; created_at: number; expires_at: number; revoked_at: number | null; last_used_at: number | null; username?: string }
 type Personal = { enabled: boolean; can_use: boolean; public_url: string; items: Token[]; knowledge_bases: { id: string; name: string }[] }
-type Configuration = { enabled: boolean; public_url: string; timeout_seconds: number; max_concurrent: number; max_output_chars: number; requests_per_minute: number; reference_minutes: number }
+type Configuration = { enabled: boolean; public_url: string; timeout_seconds: number; max_concurrent: number; max_output_chars: number; requests_per_minute: number; reference_minutes: number; rerank_enabled: boolean; rerank_candidates: number; rerank_seconds: number; rerank_min_score: number }
 type Call = { id: number; username: string | null; token_name: string | null; tool: string; kb_id: string | null; status: string; duration_ms: number; created_at: number }
 const date = (seconds: number | null) => seconds ? new Date(seconds * 1000).toLocaleString() : '—'
 const callState = (status: string) => ({ ok: '成功', '408': '已取消或超时', '401': '令牌失效', '403': '无权访问', '413': '结果超限', '422': '参数错误', '503': '接入已关闭' } as Record<string, string>)[status] ?? '查询失败'
@@ -111,11 +111,14 @@ function PersonalMcpContent() {
   </Card>
 }
 
-const limits: { key: Exclude<keyof Configuration, 'enabled' | 'public_url'>; label: string; min: number; max: number; hint: string }[] = [
+const limits: { key: Exclude<keyof Configuration, 'enabled' | 'public_url' | 'rerank_enabled'>; label: string; min: number; max: number; step?: number; hint: string }[] = [
   { key: 'timeout_seconds', label: '单次查询时长（秒）', min: 5, max: 120, hint: '超时后停止后续处理；底层读取退出前保留并发槽。' },
   { key: 'max_concurrent', label: 'MCP 最大并发', min: 1, max: 4, hint: '独立额度；默认 1，繁忙时直接提示重试。' },
   { key: 'requests_per_minute', label: '每账号每分钟调用数', min: 1, max: 120, hint: '同一账号的多个令牌共用额度。' },
-  { key: 'max_output_chars', label: '单次输出字符上限', min: 16000, max: 64000, hint: '完整响应上限，超限时提示缩小范围。' },
+  { key: 'max_output_chars', label: '单次输出字符上限', min: 16000, max: 64000, hint: '完整响应上限，超限时分页或分段返回。' },
+  { key: 'rerank_candidates', label: '相关性评估候选数', min: 4, max: 40, hint: '候选越多覆盖越广，但本地计算时间更长。' },
+  { key: 'rerank_seconds', label: '相关性评估时间（秒）', min: 2, max: 30, hint: '批次间检查时间；不能中断正在执行的本地推理。' },
+  { key: 'rerank_min_score', label: '最低相关性评分', min: 0, max: 1, step: 0.01, hint: '不是正确概率；提高可减少无关结果，也可能漏掉资料。' },
   { key: 'reference_minutes', label: '查询引用有效期（分钟）', min: 5, max: 120, hint: '仅用于阅读入口与分页，失效后重新搜索。' },
 ]
 
@@ -148,7 +151,8 @@ function SystemMcpContent() {
       {form && <form className="space-y-4" onSubmit={event => void save(event)}><fieldset disabled={busy || !can('system.edit')} className="space-y-4">
         <div className="flex items-center justify-between gap-4"><div><p className="text-sm font-medium">允许 MCP 接入</p><p role="status" className="mt-1 text-xs text-muted-foreground">{draft ? '有未保存更改 · 保存后生效' : query.data?.enabled ? '当前已开启' : '当前已关闭（默认）'}</p></div><Toggle label="允许 MCP 接入，保存后生效" checked={form.enabled} onChange={enabled => setDraft({ ...form, enabled })} /></div>
         <label className="block space-y-1 text-sm"><span>MCP 接入地址</span><input type="url" className={accountInput} value={form.public_url} maxLength={500} placeholder="https://knowledge.example.com/mcp" onChange={event => setDraft({ ...form, public_url: event.target.value })} /><span className="block text-xs text-muted-foreground">提供给用户配置客户端的地址；远程使用 HTTPS，本机或安全隧道可使用 localhost。</span></label>
-        <div className="grid gap-4 sm:grid-cols-2">{limits.map(item => <label key={item.key} className="space-y-1 text-sm"><span>{item.label}</span><input type="number" className={accountInput} value={form[item.key]} required min={item.min} max={item.max} onChange={event => setDraft({ ...form, [item.key]: Number(event.target.value) })} /><span className="block text-xs leading-relaxed text-muted-foreground">{item.hint}</span></label>)}</div>
+        <div className="flex items-center justify-between gap-4 border-t pt-3"><div><p className="text-sm font-medium">MCP 相关性筛选</p><p className="mt-1 text-xs text-muted-foreground">使用已部署的本地重排模型，不自动下载。资料不足时可少返回；模型不可用时明确提示降级。仅影响 MCP 概念检索。</p></div><Toggle label="MCP 相关性筛选，保存后生效" checked={form.rerank_enabled ?? true} onChange={rerank_enabled => setDraft({ ...form, rerank_enabled })} /></div>
+        <div className="grid gap-4 sm:grid-cols-2">{limits.map(item => <label key={item.key} className="space-y-1 text-sm"><span>{item.label}</span><input type="number" className={accountInput} value={form[item.key]} required min={item.min} max={item.max} step={item.step ?? 1} onChange={event => setDraft({ ...form, [item.key]: Number(event.target.value) })} /><span className="block text-xs leading-relaxed text-muted-foreground">{item.hint}</span></label>)}</div>
         <div className="flex items-center justify-between gap-3 border-t pt-3"><Link className="text-xs text-primary underline" to="/settings?section=mcp">个人令牌与接入示例 →</Link><Button type="submit" disabled={!draft}>{busy ? '正在保存…' : '保存 MCP 配置'}</Button></div>
       </fieldset></form>}
     </Card>

@@ -7,7 +7,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field, ConfigDict, StringConstraints
 from starlette.responses import JSONResponse
 from src.core import accounts as a, permissions as p
-from src.mcp import store, tools, service
+from src.mcp import store, tools, service, contracts
 
 router = APIRouter(prefix='/api/v1', tags=['mcp'])
 
@@ -154,7 +154,14 @@ class CallRequest(BaseModel):
 
 @query_app.post('/call')
 async def tool_call(req: CallRequest, request: Request):
+    binding = contracts.request_identity.set(contracts.request_id())
     try:
         return await service.call(request.scope['mcp_token'], req.name, req.arguments, request.is_disconnected)
-    except (ValueError, TypeError, KeyError):
-        raise HTTPException(422, '工具参数不正确，请按工具定义调用')
+    except HTTPException as exc:
+        if isinstance(exc.detail, dict):
+            raise
+        raise HTTPException(exc.status_code, contracts.error(str(exc.status_code), str(exc.detail))) from exc
+    except (ValueError, TypeError, KeyError) as exc:
+        raise HTTPException(422, contracts.error('422', '工具参数不正确，请按工具定义调用')) from exc
+    finally:
+        contracts.request_identity.reset(binding)

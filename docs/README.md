@@ -24,6 +24,8 @@
 
 - [账号与权限](accounts.md)
 - [只读知识 MCP 接入](mcp.md)：独立网关、个人令牌、权限边界、部署及验证。
+- [MCP 面向 Agent 的质量优化方案](mcp-agent-optimization-plan.md)：工具合约、证据、覆盖、分页恢复及下游召回改进。
+- [MCP 独立验收清单](mcp-agent-evaluation.md)：开发侧隔离验证与 Claude Code + GLM 下游效果对比口径。
 - [发布流程](release-process.md)
 - [按平台构建候选包](selective-build.md)
 - [Linux 部署说明](../deploy/linux/README.md)

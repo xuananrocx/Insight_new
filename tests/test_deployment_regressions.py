@@ -57,7 +57,7 @@ def test_failed_model_switch_restores_active_model(monkeypatch, cache_size):
     embedder = llm_client._LocalEmbedding('old', cache_size=cache_size)
     old = object()
     embedder._model, embedder._dimensions = old, 768
-    def fail():
+    def fail(**kwargs):
         embedder._model = None
         raise OSError('missing weights')
     monkeypatch.setattr(embedder, '_load', fail)

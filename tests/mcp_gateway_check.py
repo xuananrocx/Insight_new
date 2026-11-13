@@ -6,10 +6,13 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from src.mcp.gateway import create_app
+from src.mcp import contracts
 
 
 def definition():
-    return [{'name': 'list_knowledge_bases', 'description': 'list', 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False}}]
+    return [{'name': name, 'description': name, 'inputSchema': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+             **({'outputSchema': contracts.OUTPUT_SCHEMA} if name in ('partial', 'busy') else {})}
+            for name in ('list_knowledge_bases', 'wait', 'denied', 'partial', 'busy')]
 
 
 async def run():
@@ -33,6 +36,10 @@ async def run():
                 await asyncio.Event().wait()
             finally:
                 cancelled.set()
+        if payload['name'] == 'partial':
+            return httpx.Response(200, json=contracts.decorate({'error': 'evidence_budget', 'message': 'partial', 'evidence': [{'text': 'source'}]}, 'partial', {}))
+        if payload['name'] == 'busy':
+            return httpx.Response(429, json={'detail': contracts.error('busy', 'busy', legacy='429')})
         if payload['name'] == 'denied':
             return httpx.Response(403, json={'detail': 'revoked'})
         await asyncio.sleep(.01)
@@ -87,6 +94,7 @@ async def run():
                         init = await session.initialize()
                         assert init.serverInfo.name == 'Insight Knowledge'
                         listed = await session.list_tools()
+                        assert init.serverInfo.version == __import__('src').__version__
                         assert listed.tools[0].annotations.readOnlyHint
                         result = await session.call_tool('list_knowledge_bases', {})
                         assert not result.isError and result.structuredContent['knowledge_bases'][0]['name'] == 'Bearer '+secret
@@ -95,6 +103,11 @@ async def run():
                         assert bad.isError
                         denied = await session.call_tool('denied', {})
                         assert denied.isError and denied.structuredContent['error'] == '403'
+                        partial = await session.call_tool('partial', {})
+                        assert not partial.isError and partial.structuredContent['outcome'] == 'partial'
+                        busy = await session.call_tool('busy', {})
+                        assert busy.isError and busy.structuredContent['code'] == 'busy'
+                        assert busy.structuredContent['recovery']['delay_is_advisory']
         await asyncio.wait_for(asyncio.gather(client('alice'), client('bob')), 15)
     assert {auth for path, auth in seen if path.endswith('/call')} == {'Bearer alice', 'Bearer bob'}
     print('PASS: official SDK initialize/list/call, two concurrent identities, errors, cancellation/disconnect, session ownership, revocation, auth, Host/Origin, body limit')

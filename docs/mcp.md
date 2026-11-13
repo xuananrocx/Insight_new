@@ -17,7 +17,7 @@ Claude Code / Codex / 其他 MCP 客户端
 原权限系统、SQLite、阅读索引、检索能力
 ```
 
-网关使用官方 Python MCP SDK 1.30.0、独立虚拟环境，避免其 Pydantic >=2.11 要求改变主应用固定的 2.10.4 依赖。网关不导入主应用配置、数据库、向量库或模型，不开第二个 SQLite/Chroma 数据进程。原 `src/qa/knowledge_tools.py` 及聊天调用链保持原样；适配类只覆盖查询前的鉴权，不要求用户配置聊天 API。
+网关使用官方 Python MCP SDK 1.30.0、独立虚拟环境，避免其 Pydantic >=2.11 要求改变主应用固定的 2.10.4 依赖。网关不导入主应用配置、数据库、向量库或模型，不开第二个 SQLite/Chroma 数据进程。原 `src/qa/knowledge_tools.py` 及聊天调用链保持原样；MCP 适配层复用原文阅读，独立实现受限扫描和候选融合，不要求用户配置聊天 API。
 
 目录、精确搜索、已索引原文阅读不需要聊天 API。语义/混合检索仍依赖系统已有的 embedding 与检索设施，不承诺脱离这些设施离线完成语义检索。
 
@@ -65,7 +65,7 @@ MCP SDK 保留最多 128 个短期**协议连接**（空闲 300 秒回收），�
 
 除列知识库外，每次显式传 `kb_id`；内部知识工具的旧参数兼容形状不向 MCP 暴露，也不接受绕过引用的旧阅读参数。搜索 `limit` 为 1–20，请按返回的续页入口继续。
 
-返回来源包括文档编号、名称、版本、章节/页面/坐标、阅读及覆盖说明。原文和概览不是系统指令，也不表示经过结论核验。`citation` 及 `coverage` 仅在本次工具调用内有意义，外部 Agent 自行合并不同调用的引用、已读范围和上下文。没有累计证据包、问答历史、研究记录或对话预算。
+返回来源包括文档编号、名称、版本、章节/页面/坐标、阅读及覆盖说明。原文和概览不是系统指令，也不表示经过结论核验。`citation` 编号仅在本次调用内有意义；`coverage` 表示本次范围（扫描续接的累计计数另有明确字段），不代表答案完整性。稳定的 `source_id` / `evidence_id` 可用于跨调用关联，外部 Agent 自行合并证据、已读范围和上下文。没有累计证据包、问答历史、研究记录或对话预算。
 
 `read_ref`、`scope_ref`、`next_cursor` 是令牌和知识库绑定的随机短期入口。服务端只保存实现跨调用导航必需的引用描述/分页快照；不要求重放前面的对话。每次继续使用都会重新验证权限和文档/索引版本。文档更新、重建索引、过期或容量回收会明确失败，Agent 应重新获取目录/搜索。列表/目录使用 `next_offset`，文档读取使用 `next_read_ref`/`next_section_ref`，搜索优先使用 `continue_search`。
 
@@ -182,3 +182,53 @@ npm run build
 ## 本地人工验收
 
 2026-11-12 用户反馈 MCP 测试通过，授权提交首版。具体客户端版本及测试覆盖未记录，不据此扩大为所有客户端兼容承诺。当前本地 8000 使用 `Insight-local/start-local.sh` 与原 `Insight-local/dev-data`，8001 为独立网关；继续开发应复用该脚本，避免误用系统默认数据目录。
+
+
+## MCP 合约 v2：Agent 查询质量优化（2026-11-12）
+
+本节更新首版行为；上面的历史验收记录不代表本轮新增能力已在真实客户端验证。11 个工具名保留，现有必填参数不增加，新增字段为加法兼容。网关初始化返回 Insight 应用版本，SDK 版本不再误作应用版本。
+
+### 模型可执行的返回契约
+
+每个结果包含 `contract_version="2"`、`request_id`、`outcome`、`coverage`、`continuations`。`outcome` 为 ok / partial / no_match / error；partial 中的已有证据可用，不被 SDK 当成整次失败。每项 continuation 给出 `kind`、`tool`、`arguments`，客户端可直接按参数继续，不必从说明文字猜测。
+
+- `source_id` 绑定知识库、文档和内容版本；`evidence_id` 进一步绑定范围、解析产物和片段。同一内容版本的同一片段可跨调用关联。`citation_scope=call` 明确引用编号不跨调用复用。
+- coverage 区分解析完整性（无法证明时 unknown）、扫描完成、候选截断和返回分页。候选搜索结束不代表全库无答案。
+- `get_kb_overview` 读取已有摘要，不调用模型生成；未传 query 是目录样本，传 query 是文件名候选。文档 capability 只描述原文索引和 chunk 列表，`vector_health=not_probed` 不冒充向量健康检查。
+- 错误保留 error/message，增加 code、retryable、recovery。busy 与 rate_limited 分开，退避时间只是建议。引用过期、被回收或不属于当前令牌统一为 reference_invalid，避免透露他人引用是否存在；文档版本变化返回 document_changed。
+
+### 返回预算与续接
+
+预算按完整 JSON envelope 计算，包括元数据和实际长度的引用。目录、成员和证据列表超限时保存余项，通过 continue_search 的 cursor 返回剩余页；尾页才恢复原查询后续入口。长原文缩小单段，保留 next_read_ref。表格按更小行区间重试，保持行与引用的对应；单行超限返回 pending_row 的原文入口，后续行另有 next_range。读取超大行的原文不等于已经获得完整结构化单元格。
+
+不可拆分的巨型元数据或超过引用存储容量仍可能返回 output_limit；不承诺任意大小数据都能一次成功。引用容量和有效期沿用首版，不扩大存储上限。
+
+exact / identifier 在原文索引可用时采用有界扫描：每次至多推进约 524,288 个字符，轮转文档，合并同范围重叠窗口并保留 match_positions。`cursor` 仅翻当前结果；`scan_cursor` 才推进剩余原文，二者互斥。消费当前结果后才返回 next_scan_cursor。`matches_seen` / `scanned_chars` 是该扫描链累计值，`call_matches` / `call_scanned_chars` 是本次增量；只有完成时 total_matches 才确定。分页快照不是 Agent 会话或长期上下文。
+
+### 检索策略与诊断
+
+全库/文档的非精确搜索可传最多两个、各不超过 200 字符的 `query_variants`。Agent 自行提供同义词或原文语言查询，服务端不自动翻译、不调用聊天模型；exact / identifier 不接受该参数。向量候选与关键词候选按模式融合，过滤过期/外来/摘要 chunk，适度优先展示不同来源；文件名候选只供导航，不当成证据。语义路径不可用时尝试关键词，明确记录降级；所有路径失败时返回错误，不能推断知识库无答案。
+
+这些策略不证明真实 embedding 的跨语言能力或索引健康已修复。缺少原文索引时保留原工具降级路径；未统一重写网页问答的检索算法。新增阶段日志用 request_id 关联网关往返、工具总耗时、原文扫描、embedding、候选检索、定位和引用发布。files_inclusive_ms 是包含内部工作的耗时，不与内部阶段简单相加。
+
+权限在请求入口、发布结果前及请求返回前校验；长循环每次检查取消，权限检查最多缓存 100ms。底层不可中断操作仍占用并发槽直到退出，不提高默认并发、不增加后台队列。
+
+### 兼容与回退
+
+本轮无数据库迁移，不修改知识数据、账号、模型配置或网页问答默认链路；新增代码集中在 src/mcp。旧引用仍可使用；升级生成的 result / scan 引用旧代码不识别，回退后客户端必须重新搜索/取目录。回退应用与网关到同一旧提交并重新连接；无需清空知识数据。当前优化未提交、未部署生产。
+
+正式回答效果验收由用户在独立 Claude Code + GLM 会话执行；开发侧使用隔离知识库和官方 SDK 独立验证，不读取或操作该会话。评测口径见 [MCP 独立验收清单](mcp-agent-evaluation.md)。
+
+开发侧最终记录：全量后端 860 passed；之后补充的超大表格行边界专项 10 passed。超大的 display_header 仅保留行/坐标和 read_ref，明确 values_omitted，不把省略的结构化单元格冒充已完整返回。原文仍可分段读完。SDK 协议与真实 HTTP 查询链路、Ruff、版本、diff、前端构建均通过。详见独立验收清单。
+
+## 对比报告后修复
+
+本地 embedding 完整缓存从本地 snapshot 加载；缺失模型在普通查询/预热时快速失败，不隐式下载。管理员模型加载入口仍可明确下载。失败冷却 60 秒；预热只有实际成功才记录完成。原索引需使用对应模型，不能替换成另一型号规避缺失问题。
+
+MCP 的 diagnostics 返回当前调用关键阶段 phase_ms 与 request_log_key，阶段可能重叠，范围截至输出分页前；详细发布/总耗时仍在日志。search_scope.degraded 与 executed_paths 区分实际执行路径，retrieval_warnings 给出失败阶段和恢复建议。即使有候选，Agent 也应核对相关性，必要时提供原文语言 query_variants 或阅读目录/原文。
+
+实现及独立测试结果见 [对比报告后的修复与验证](mcp-followup-results-2026-11-12.md)。
+
+## MCP 相关性筛选
+
+MCP 的概念检索增加独立本地相关性评估，系统 MCP 设置可调整开关、候选数、时间预算及最低评分。exact / identifier / keyword 不增加重排；网页检索不改。完整说明、回退和多类测试记录见 [MCP 相关性优化](mcp-relevance-implementation.md)。相关性分数不是事实正确概率；务必检查 relevance.status 与未评估数量，模型缺失会明确降级且不自动下载。
