@@ -110,7 +110,7 @@ sudo python3 /path/to/bundle/insightctl.py rollback --apply --restore-data \
 
 ## 现有 host 网络部署：首次接管、升级与回退
 
-此模式面向现有主应用容器和宿主机 Nginx，不改为 bridge，不接管其他业务。使用 `host-settings.example.json` 复制到包外填写实际值：原应用名称、UID:GID、/data 与只读 /models 挂载、专用 Docker Unix socket、Nginx 可执行文件/前缀/主配置、端口及 Host 白名单。设置值不能在后续升级时隐式改变。
+此模式面向现有主应用容器和宿主机 Nginx，不改为 bridge，不接管其他业务。使用 `host-settings.example.json` 复制到包外填写实际值：原应用名称、UID:GID、/data 与原 /models 挂载、专用 Docker Unix socket、Nginx 可执行文件/前缀/主配置及 Insight server 文件、端口及 Host 白名单。设置值不能在后续升级时隐式改变。
 
 176 这类没有宿主机 Python 3 的环境，可用包中的 `hostctl.sh`。它使用配套 MCP 镜像里的 Python 启动一次性控制器，结束即删除；不在宿主机安装 Python、Compose 或 SDK。控制器需要管理员权限，挂载宿主机根目录到 `/host`、共享 host PID/network，以访问指定 Docker socket、制作备份并调用宿主机原 Nginx 校验/加载；不是长期业务容器。请仅运行已通过外层 SHA256 校验且来源可信的发布包。使用 SELinux/userns-remap 等隔离策略的环境需要另外验收，脚本不会关闭这些策略。
 
@@ -125,9 +125,9 @@ sh /absolute/bundle/hostctl.sh adopt --apply \
   --settings /absolute/host-settings.json --state /absolute/private-state
 ```
 
-状态目录含原容器配置（可能有密钥），限制为 0700、记录为 0600；不能提交、分享或放入公共发布包。主应用必须使用 host 网络，且 /data、/models、UID:GID 与设置完全匹配。已存在同名未知网关时拒绝接管，避免覆盖临时部署。
+状态目录含原容器配置（可能有密钥），限制为 0700、记录为 0600；不能提交、分享或放入公共发布包。主应用必须使用 host 网络，且 /data、/models、UID:GID 与设置完全匹配；保留原模型挂载的读写模式。已存在同名未知网关时拒绝接管，避免覆盖临时部署。
 
-第一次启用需要准备**经过人工审阅的完整 Nginx 候选配置**，仅在 Insight 的 server 块加入一行 `include /实际路径/insight-mcp.conf;`（路径对应 `nginx_include`）。不要修改正在使用的主配置，也不要把 include 放在共用 http 块或其他业务 server 中。控制器在维护窗口里备份原配置，生成受管 include，安装候选配置，执行原 Nginx 的 `-t`，通过后才 reload；失败恢复原配置。不会自动重写未知 Nginx 配置或其他服务。
+第一次启用需要准备**经过人工审阅的 Nginx 候选配置**，仅在 Insight 的 server 块加入一行 `include /实际路径/insight-mcp.conf;`（路径对应 `nginx_include`）。若原主配置 include 独立的 Insight server 文件，在 `nginx_server_config` 填该文件，候选只替换这个文件；省略时才以主配置为目标。不要修改正在使用的配置，也不要把 include 放在共用 http 块或其他业务 server 中。控制器在维护窗口里备份原配置，生成受管 include，安装候选 server 配置，仍用原主配置执行 Nginx 的 `-t`，通过后才 reload；失败恢复原配置。不会自动重写未知 Nginx 配置或其他服务。
 
 ```sh
 sh /absolute/bundle/hostctl.sh check \
