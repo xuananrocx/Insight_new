@@ -27,6 +27,11 @@ def host_path(value):
     return Path(root + str(value)) if root else Path(value)
 
 
+def proxy_config(settings):
+    # Legacy hosts often include a dedicated Insight server file from nginx.conf.
+    return settings.get('nginx_server_config', settings['nginx_config'])
+
+
 class Engine:
     def __init__(self, path):
         self.path = path
@@ -184,11 +189,14 @@ def validate(settings):
         mapped = host_path(value)
         if not value.is_absolute() or mapped.resolve() != mapped or value == Path('/'):
             raise ValueError('Host paths must be absolute, normalized and not symlinks')
+    target = host_path(proxy_config(settings))
+    if not Path(proxy_config(settings)).is_absolute() or target.resolve() != target:
+        raise ValueError('nginx_server_config must be an absolute normalized file path')
     directories = [Path(settings[key]) for key in ('data_dir', 'models_dir', 'backup_dir')]
     if any(a == b or a in b.parents or b in a.parents for i, a in enumerate(directories) for b in directories[i+1:]):
         raise ValueError('Data/models/backups must use separate, non-overlapping directories')
     include = settings['nginx_include']
-    if not re.fullmatch(r'/[a-zA-Z0-9_./-]+', include) or include == settings['nginx_config']:
+    if not re.fullmatch(r'/[a-zA-Z0-9_./-]+', include) or include in (settings['nginx_config'], proxy_config(settings)):
         raise ValueError('Use a distinct, plain nginx_include path')
     if not settings['public_origin'].startswith(('http://', 'https://')) or settings['public_origin'].endswith('/'):
         raise ValueError('public_origin must be an HTTP(S) origin without a trailing slash')
@@ -206,8 +214,8 @@ def confirm_app(settings, snapshot):
     for target, key in (('/data', 'data_dir'), ('/models', 'models_dir')):
         if target not in mounts or mounts[target]['Source'] != settings[key]:
             raise ValueError('Application mount does not match ' + key)
-    if not mounts['/data']['RW'] or mounts['/models']['RW']:
-        raise ValueError('Expected writable /data and read-only /models')
+    if not mounts['/data']['RW']:
+        raise ValueError('Expected writable /data; the original model mount mode is preserved')
     if not snapshot['State']['Running']:
         raise ValueError('Adoption requires a running application')
 
@@ -261,7 +269,7 @@ def review_candidate(settings, bundle, active, engine, nginx_candidate=None):
     if not active['gateway']:
         with socket.socket() as probe:
             probe.bind(('127.0.0.1', settings['mcp_port']))
-    config = (nginx_candidate or host_path(settings['nginx_config'])).read_text()
+    config = (nginx_candidate or host_path(proxy_config(settings))).read_text()
     if 'include ' + settings['nginx_include'] + ';' not in config:
         raise ValueError('Review a candidate Nginx config with the managed include inside the Insight server block')
     data = host_path(settings['data_dir'])
@@ -280,7 +288,7 @@ def prepare(settings, bundle, active, engine, state, nginx_candidate=None):
     folder = host_path(settings['backup_dir']) / ('host-' + str(time.time_ns()))
     folder.mkdir(parents=True, mode=0o700)
     pending = {'previous': active, 'bundle': str(bundle), 'bundle_checksum': common.sha(bundle / 'checksums.json'),
-               'release': release, 'backup': str(folder), 'nginx_config': file_snapshot(settings['nginx_config']),
+               'release': release, 'backup': str(folder), 'nginx_config': file_snapshot(proxy_config(settings)),
                'nginx_include': file_snapshot(settings['nginx_include']),
                'candidate_config': base64.b64encode(config.encode()).decode(), 'created': {}, 'phase': 'prepared'}
     common.save(state / 'pending.json', pending)
@@ -339,13 +347,13 @@ def activate(settings, pending, engine, state):
         engine.action(pending['created'][field], 'start')
     # Only the reviewed main config and our own include are changed; never edit other servers.
     restore_file(settings['nginx_include'], base64.b64encode(proxy_text(settings['mcp_port']).encode()).decode())
-    restore_file(settings['nginx_config'], pending['candidate_config'])
+    restore_file(proxy_config(settings), pending['candidate_config'])
     try:
         nginx(settings, 'test')
         nginx(settings, 'reload')
         ready(settings, pending['release']['version'])
     except Exception:
-        restore_file(settings['nginx_config'], pending['nginx_config'])
+        restore_file(proxy_config(settings), pending['nginx_config'])
         restore_file(settings['nginx_include'], pending['nginx_include'])
         nginx(settings, 'test')
         nginx(settings, 'reload')
@@ -398,7 +406,7 @@ def rollback(settings, pending, engine, state, restore_data=False):
         data.rename(data.with_name(data.name + '.before-rollback-' + str(time.time_ns())))
         (target / 'data').rename(data)
         target.rmdir()
-    restore_file(settings['nginx_config'], pending['nginx_config'])
+    restore_file(proxy_config(settings), pending['nginx_config'])
     restore_file(settings['nginx_include'], pending['nginx_include'])
     nginx(settings, 'test')
     for field, name in (('app', settings['app_container']), ('gateway', settings['mcp_container'])):

@@ -91,6 +91,7 @@ class HostTransactions(unittest.TestCase):
             self.settings[key] = str(self.root / key)
         for key in ('nginx_config', 'nginx_include'):
             self.settings[key] = str(self.root / (key + '.conf'))
+        self.settings['nginx_server_config'] = self.settings['nginx_config']
         self.settings.update(nginx_binary='/usr/sbin/nginx', nginx_prefix=str(self.root),
                              docker_socket=str(self.root / 'docker.sock'), public_host='kb.test:8088',
                              mcp_allowed_hosts='kb.test:8088,127.0.0.1:8088')
@@ -162,6 +163,21 @@ class HostTransactions(unittest.TestCase):
         host.rollback(self.settings, pending2, self.engine, self.state)
         self.assertEqual(self.engine.inspect('insight')['Id'], record['app']['Id'])
         self.assertEqual(self.engine.inspect('insight-mcp')['Id'], record['gateway']['Id'])
+
+    def test_legacy_writable_models_and_separate_server_file_are_preserved(self):
+        self.engine.containers['old-app']['Mounts'][1]['RW'] = True
+        self.engine.containers['old-app']['HostConfig']['Binds'][1] = self.settings['models_dir'] + ':/models'
+        self.settings['nginx_server_config'] = str(self.root / 'insight-server.conf')
+        Path(self.settings['nginx_server_config']).write_bytes(self.original_proxy)
+        self.active = host.adopt(self.settings, self.engine, self.state)
+        host.confirm_app(self.settings, self.active['app'])
+        pending = self.prepare()
+        record = host.activate(self.settings, pending, self.engine, self.state)
+        self.assertEqual(record['app']['HostConfig']['Binds'][1], self.settings['models_dir'] + ':/models')
+        self.assertEqual(Path(self.settings['nginx_config']).read_bytes(), self.original_proxy)
+        self.assertNotEqual(Path(self.settings['nginx_server_config']).read_bytes(), self.original_proxy)
+        host.rollback(self.settings, pending, self.engine, self.state)
+        self.assertEqual(Path(self.settings['nginx_server_config']).read_bytes(), self.original_proxy)
 
     def test_nginx_failure_restores_proxy_and_allows_runtime_rollback(self):
         pending = self.prepare()

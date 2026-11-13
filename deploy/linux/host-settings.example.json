@@ -17,5 +17,6 @@
   "nginx_binary": "/path/to/nginx/sbin/nginx",
   "nginx_prefix": "/path/to/nginx",
   "nginx_config": "/path/to/nginx/conf/nginx.conf",
+  "nginx_server_config": "/path/to/nginx/conf/insight.conf",
   "nginx_include": "/path/to/nginx/conf/insight-mcp.conf"
 }
