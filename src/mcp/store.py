@@ -19,7 +19,7 @@ class Settings(BaseModel):
     enabled: bool = False
     public_url: str = Field(default='', max_length=500)
     timeout_seconds: int = Field(default=30, ge=5, le=120)
-    max_concurrent: int = Field(default=1, ge=1, le=4)
+    max_concurrent: int = Field(default=1, ge=1, strict=True)
     max_output_chars: int = Field(default=32000, ge=16000, le=64000)
     requests_per_minute: int = Field(default=30, ge=1, le=120)
     reference_minutes: int = Field(default=30, ge=5, le=120)
@@ -66,8 +66,6 @@ def save_config(value: Settings):
         raise HTTPException(422, 'MCP 地址格式不正确')
     if value.public_url and (url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password or url.query or url.fragment or any(c.isspace() for c in value.public_url)):
         raise HTTPException(422, '请输入不含凭据、查询参数的 MCP HTTP(S) 地址')
-    if url.scheme == 'http' and url.hostname not in ('localhost', '127.0.0.1', '::1'):
-        raise HTTPException(422, '远程 MCP 地址请使用 HTTPS；内网可使用 HTTPS 或安全隧道')
     # Old clients omit new fields; preserve the independent retrieval preferences.
     current = config()
     retrieval = {key: getattr(value if key in value.model_fields_set else current, key) for key in RETRIEVAL_KEYS}

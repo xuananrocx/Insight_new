@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, FastAPI, HTTPException, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ConfigDict, StringConstraints
 from starlette.responses import JSONResponse
 from src.core import accounts as a, permissions as p
@@ -73,12 +73,19 @@ def admin_revoke(tid: str):
 
 
 @router.get('/admin/mcp/calls')
-def calls(offset: int = 0, limit: int = 20):
+def calls(offset: int = 0, limit: int = 20, search: str = Query(default='', max_length=200)):
     p.require('system.view')
     offset, limit = max(0, offset), max(1, min(100, limit))
-    return {'items': a.rows('''SELECT c.*,u.username,t.name token_name FROM mcp_calls c
-        LEFT JOIN auth_users u ON u.id=c.user_id LEFT JOIN mcp_tokens t ON t.id=c.token_id
-        ORDER BY c.id DESC LIMIT ? OFFSET ?''', (limit, offset)), 'total': a.rows('SELECT count(*) n FROM mcp_calls')[0]['n']}
+    search = search.strip()
+    where = '''WHERE instr(lower(coalesce(u.username,'已删除用户')),lower(?)) > 0
+        OR instr(lower(coalesce(profile.display_name,'')),lower(?)) > 0''' if search else ''
+    params = (search, search) if search else ()
+    source = '''FROM mcp_calls c LEFT JOIN auth_users u ON u.id=c.user_id
+        LEFT JOIN permission_profiles profile ON profile.user_id=u.id'''
+    return {'items': a.rows(f'''SELECT c.*,u.username,profile.display_name,t.name token_name {source}
+        LEFT JOIN mcp_tokens t ON t.id=c.token_id {where}
+        ORDER BY c.id DESC LIMIT ? OFFSET ?''', (*params, limit, offset)),
+        'total': a.rows(f'SELECT count(*) n {source} {where}', params)[0]['n']}
 
 
 class BearerAccess:

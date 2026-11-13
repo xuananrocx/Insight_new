@@ -65,7 +65,7 @@ def test_default_closed_and_management_boundaries(setup):
     assert e.alice.put('/api/v1/admin/mcp/settings', json={'enabled': True}).status_code == 403
     assert e.admin.put('/api/v1/admin/mcp/settings', headers={'X-CSRF-Token': 'bad'}, json={'enabled': True}).status_code == 403
     assert e.admin.put('/api/v1/admin/mcp/settings', json={'enabled': True, 'unknown': 1}).status_code == 422
-    assert e.admin.put('/api/v1/admin/mcp/settings', json={'public_url': 'http://example.com/mcp'}).status_code == 422
+    assert e.admin.put('/api/v1/admin/mcp/settings', json={'public_url': 'http://example.com/mcp'}).status_code == 200
     assert e.admin.put('/api/v1/admin/mcp/settings', json={'enabled': True, 'public_url': 'https://kb.example.com/mcp'}).status_code == 200
     assert e.admin.get('/api/v1/admin/mcp/settings').json()['enabled']
     t = token(e)
@@ -94,6 +94,60 @@ def test_tokens_hash_ownership_scope_and_live_revocation(setup):
     assert c.get('/check').status_code == 401
     assert e.admin.get('/api/v1/admin/mcp/calls').json()['total'] >= 1
     assert e.bob.get('/api/v1/admin/mcp/calls').status_code == 403
+
+
+@pytest.mark.parametrize('url', ['http://172.19.211.176:8001/mcp', 'http://kb.example.com/mcp', 'https://kb.example.com/mcp', 'http://[fd00::1]:8001/mcp'])
+def test_remote_protocol_and_custom_concurrency_round_trip(setup, url):
+    response = setup.admin.put('/api/v1/admin/mcp/settings', json={'public_url': url, 'max_concurrent': 257})
+    assert response.status_code == 200, response.text
+    saved = setup.admin.get('/api/v1/admin/mcp/settings').json()
+    assert saved['public_url'] == url and saved['max_concurrent'] == 257
+    assert setup.alice.get('/api/v1/account/mcp').json()['public_url'] == url
+
+
+@pytest.mark.parametrize('value', [0, -1, 1.5, True, '8'])
+def test_concurrency_requires_positive_integer(setup, value):
+    assert setup.admin.put('/api/v1/admin/mcp/settings', json={'max_concurrent': value}).status_code == 422
+
+
+@pytest.mark.parametrize('url', ['ftp://kb.example.com/mcp', 'http://user:pass@kb.example.com/mcp',
+                               'http://kb.example.com:bad/mcp', 'http://kb.example.com:65536/mcp',
+                               'http://kb.example.com/mcp?q=x', 'http://kb.example.com/mcp#fragment',
+                               'http://bad host/mcp', 'http://[broken'])
+def test_remote_url_format_checks_remain(setup, url):
+    assert setup.admin.put('/api/v1/admin/mcp/settings', json={'public_url': url}).status_code == 422
+
+
+def test_call_user_filter_matches_all_pages_counts_and_literal_text(setup):
+    e = setup
+    a.execute('UPDATE permission_profiles SET display_name=? WHERE user_id=?', ('MCP Alice测试_%', e.alice_id))
+    a.execute('UPDATE permission_profiles SET display_name=? WHERE user_id=?', ('MCP Bob', e.bob_id))
+    alice_name = a.rows('SELECT username FROM auth_users WHERE id=?', (e.alice_id,))[0]['username']
+    for uid in (e.alice_id, e.bob_id, e.alice_id, e.bob_id, e.alice_id, e.alice_id, 'deleted-user'):
+        a.execute('''INSERT INTO mcp_calls(user_id,token_id,tool,status,duration_ms,created_at)
+            VALUES (?,?,'list_documents','ok',12,1)''', (uid, 'deleted-token'))
+    endpoint = '/api/v1/admin/mcp/calls'
+    assert e.admin.get(endpoint).json()['total'] == 7
+    assert e.admin.get(endpoint, params={'search': '  '}).json()['total'] == 7
+    first = e.admin.get(endpoint, params={'search': alice_name.upper(), 'limit': 2}).json()
+    second = e.admin.get(endpoint, params={'search': alice_name, 'limit': 2, 'offset': 2}).json()
+    assert first['total'] == second['total'] == 4
+    assert len(first['items']) == len(second['items']) == 2
+    assert len({row['id'] for row in first['items'] + second['items']}) == 4
+    assert all(row['user_id'] == e.alice_id and row['display_name'] == 'MCP Alice测试_%'
+               for row in first['items'] + second['items'])
+    assert first['items'][-1]['id'] > second['items'][0]['id']
+    for search in ('Alice测试', '%', '_', '  Alice测试  '):
+        result = e.admin.get(endpoint, params={'search': search}).json()
+        assert result['total'] == len(result['items']) == 4
+    for search in ('no-such-user', "' OR 1=1 --", 'deleted-token'):
+        assert e.admin.get(endpoint, params={'search': search}).json() == {'items': [], 'total': 0}
+    empty_page = e.admin.get(endpoint, params={'search': alice_name, 'offset': 100}).json()
+    assert empty_page == {'items': [], 'total': 4}
+    deleted = e.admin.get(endpoint, params={'search': '已删除用户'}).json()
+    assert deleted['total'] == 1 and deleted['items'][0]['user_id'] == 'deleted-user'
+    assert e.bob.get(endpoint, params={'search': alice_name}).status_code == 403
+    assert e.admin.get(endpoint, params={'search': 'x' * 201}).status_code == 422
 
 
 @pytest.mark.parametrize('change', ['expiry', 'disable', 'password', 'capability', 'global'])

@@ -28,11 +28,15 @@ bearer = contextvars.ContextVar('mcp_bearer', default='')
 
 def create_app(backend_url=None, transport=None):
     backend = (backend_url or os.environ.get('INSIGHT_BACKEND_URL', 'http://127.0.0.1:8000')).rstrip('/')
-    parsed = urlsplit(backend)
-    if not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/'):
-        raise ValueError('INSIGHT_BACKEND_URL must be a plain backend origin')
-    if parsed.scheme != 'https' and not (parsed.scheme == 'http' and parsed.hostname in ('127.0.0.1', 'localhost', '::1')):
-        raise ValueError('Use HTTPS for a remote backend or HTTP on loopback')
+    try:
+        parsed = urlsplit(backend)
+        parsed.port
+    except ValueError as exc:
+        raise ValueError('INSIGHT_BACKEND_URL must be a plain HTTP(S) backend origin') from exc
+    if (parsed.scheme not in ('http', 'https') or not parsed.hostname or parsed.username
+            or parsed.password or parsed.query or parsed.fragment or parsed.path not in ('', '/')
+            or any(c.isspace() for c in backend)):
+        raise ValueError('INSIGHT_BACKEND_URL must be a plain HTTP(S) backend origin')
     server = Server('Insight Knowledge', version=__version__, instructions=contracts.INSTRUCTIONS)
     security = TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
@@ -99,7 +103,8 @@ def create_app(backend_url=None, transport=None):
     @asynccontextmanager
     async def lifespan(app):
         nonlocal client
-        async with httpx.AsyncClient(timeout=135, trust_env=False, transport=transport) as client:
+        async with httpx.AsyncClient(timeout=135, trust_env=False, transport=transport,
+                                    limits=httpx.Limits(max_connections=None, max_keepalive_connections=20)) as client:
             async with manager.run():
                 yield
 
