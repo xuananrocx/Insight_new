@@ -2,6 +2,7 @@
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -15,7 +16,10 @@ class BundleTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
+        architecture = patch.object(ctl.os, 'uname', return_value=SimpleNamespace(machine='x86_64'))
+        architecture.start()
+        self.addCleanup(architecture.stop)
         self.bundle = self.root / 'bundle'
         self.bundle.mkdir()
         (self.bundle / 'release.json').write_text(json.dumps({'architecture': 'amd64'}))
@@ -42,6 +46,21 @@ class BundleTests(unittest.TestCase):
         record = {'env': {'MODELS_DIR': str(self.root)}, 'release': {'model_checksums': {'missing.bin': 'abc'}}}
         with self.assertRaisesRegex(ValueError, 'Model missing'):
             ctl.verify_models(record)
+
+    def test_rollback_stops_pending_pair_including_new_gateway(self):
+        active = {'project': 'test', 'env': {'DATA_DIR': '/isolated/data'}, 'bundle': 'old-without-mcp'}
+        pending = {**active, 'bundle': 'new-with-mcp'}
+        state = self.root / 'state'
+        state.mkdir()
+        (state / 'pending.json').write_text(json.dumps(pending))
+        with patch.object(ctl, 'compose') as compose:
+            ctl.stop_for_rollback(active, state)
+            compose.assert_called_once_with(pending, 'stop', '--timeout', '120')
+        pending['project'] = 'unrelated'
+        (state / 'pending.json').write_text(json.dumps(pending))
+        with patch.object(ctl, 'compose') as compose, self.assertRaisesRegex(ValueError, 'different deployment'):
+            ctl.stop_for_rollback(active, state)
+        compose.assert_not_called()
 
     def test_host_route_overlap_rejected(self):
         settings = dict(project='test', app_uid=1002, app_gid=1002, data_dir=str(self.root / 'data'),

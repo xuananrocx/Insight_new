@@ -53,6 +53,10 @@ def verify(bundle):
             raise ValueError('Bundle checksum/path error: ' + name)
     if manifest['architecture'] != 'amd64':
         raise ValueError('This controller currently supports linux/amd64 only')
+    if manifest.get('format', 1) >= 2:
+        images = manifest.get('image_ids', {})
+        if not manifest.get('mcp_image') or any(manifest.get(key) not in images for key in ('app_image', 'web_image', 'mcp_image')):
+            raise ValueError('Bundle must contain application, proxy and MCP images')
     return manifest
 
 
@@ -71,6 +75,11 @@ def record_for(settings, bundle, release):
                'app_memory_swap': 'APP_MEMORY_SWAP', 'app_cpus': 'APP_CPUS', 'model_threads': 'MODEL_THREADS'}
     env = {dest: settings[src] for src, dest in mapping.items()}
     env.update(APP_IMAGE=release['app_image'], WEB_IMAGE=release['web_image'])
+    if release.get('mcp_image'):
+        hosts = settings.get('mcp_allowed_hosts', '')
+        if not hosts or 'REPLACE' in hosts or any(not value.strip() or value.strip() == '*' for value in hosts.split(',')):
+            raise ValueError('Set mcp_allowed_hosts to the actual public host:port (no unrestricted wildcard)')
+        env.update(MCP_IMAGE=release['mcp_image'], MCP_ALLOWED_HOSTS=hosts)
     return dict(bundle=str(bundle), project=settings['project'], env=env, release=release,
                 bundle_checksum=sha(bundle / 'checksums.json'))
 
@@ -188,11 +197,29 @@ def start(record):
         try:
             with opener.open(address, timeout=5) as response:
                 if response.status == 200:
+                    if record['release'].get('mcp_image'):
+                        check_mcp('http://{}:{}'.format(host, record['env']['HTTP_PORT']), record['release']['version'])
                     return
         except (urllib.error.URLError, OSError):
             pass
         time.sleep(2)
     raise ValueError('Frontend/API health check failed')
+
+
+def check_mcp(origin, version, host=None):
+    """Verify routing without minting a token or turning on business access."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    headers = {'Host': host} if host else {}
+    with opener.open(urllib.request.Request(origin + '/mcp-health', headers=headers), timeout=5) as response:
+        value = json.load(response)
+        if value.get('component') != 'insight-mcp' or value.get('status') != 'ok' or value.get('version') != version:
+            raise ValueError('MCP gateway readiness/version check failed')
+    try:
+        opener.open(urllib.request.Request(origin + '/mcp', data=b'{}', headers=headers, method='POST'), timeout=5)
+    except urllib.error.HTTPError as error:
+        if error.code == 401 and error.headers.get('WWW-Authenticate') == 'Bearer':
+            return
+    raise ValueError('MCP POST route did not reach the Bearer-protected gateway')
 
 
 def backup(active, settings, state):
@@ -210,19 +237,36 @@ def backup(active, settings, state):
     return folder
 
 
+def stop_for_rollback(active, state):
+    # A failed activation has not replaced active.json yet. Its compose file may
+    # include a new MCP service that the previous bundle does not know about.
+    pending_file = state / 'pending.json'
+    running = json.loads(pending_file.read_text()) if pending_file.exists() else active
+    if running['project'] != active['project'] or running['env']['DATA_DIR'] != active['env']['DATA_DIR']:
+        raise ValueError('Pending activation belongs to a different deployment')
+    compose(running, 'stop', '--timeout', '120')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['check', 'install', 'upgrade', 'resume', 'status', 'logs', 'rollback'])
+    parser.add_argument('action', choices=['check', 'adopt', 'install', 'upgrade', 'resume', 'status', 'logs', 'rollback'])
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--state', type=Path, required=True, help='Private deployment state directory')
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--backup', type=Path, help='Explicit backup directory for rollback')
+    parser.add_argument('--nginx-candidate', type=Path, help='Host mode: reviewed main Nginx config containing managed server include')
     parser.add_argument('--apply', action='store_true')
     parser.add_argument('--restore-data', action='store_true', help='Required: restore snapshot; newer writes remain archived in displaced directory')
     args = parser.parse_args()
     if args.action in ('check', 'install', 'upgrade') and not args.bundle:
         parser.error('--bundle is required for ' + args.action)
     settings = json.loads(args.settings.read_text())
+    if settings.get('deployment_mode') == 'host':
+        from hostctl import main as host_main
+        host_main(args, settings)
+        return
+    if args.action == 'adopt' or args.nginx_candidate:
+        raise ValueError('adopt/nginx-candidate are only supported in host deployment mode')
     state = args.state.resolve()
     active_file = state / 'active.json'
     active = json.loads(active_file.read_text()) if active_file.exists() else None
@@ -295,7 +339,7 @@ def main():
                     if restore not in target.parents or member.issym() or member.islnk() or not (member.isfile() or member.isdir()):
                         raise ValueError('Unsafe backup member')
                 archive.extractall(restore)
-            compose(active, 'stop', '--timeout', '120')
+            stop_for_rollback(active, state)
             displaced = data.with_name(data.name + '.before-rollback-' + str(time.time_ns()))
             data.rename(displaced)
             (restore / 'data').rename(data)

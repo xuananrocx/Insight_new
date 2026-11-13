@@ -13,6 +13,8 @@ from pydantic import BaseModel, Field, ConfigDict
 from src.core import accounts as a, permissions as p
 from src.db import metadata_db as db
 
+PERMANENT_TOKEN_EXPIRY = -1
+
 
 class Settings(BaseModel):
     model_config = ConfigDict(extra='forbid')
@@ -76,10 +78,13 @@ def save_config(value: Settings):
 
 
 def token_view(row):
-    return {k: row[k] for k in ('id', 'user_id', 'name', 'prefix', 'created_at', 'expires_at', 'revoked_at', 'last_used_at')} | {'kb_ids': json.loads(row['kb_ids'])}
+    return {k: row[k] for k in ('id', 'user_id', 'name', 'prefix', 'created_at', 'expires_at', 'revoked_at', 'last_used_at')} | {
+        'kb_ids': json.loads(row['kb_ids']),
+        'expires_at': None if row['expires_at'] == PERMANENT_TOKEN_EXPIRY else row['expires_at'],
+    }
 
 
-def create_token(name: str, kb_ids: list[str], days: int):
+def create_token(name: str, kb_ids: list[str], days: int | None):
     user = p.require('mcp.use')
     if not config().enabled:
         raise HTTPException(409, 'MCP 接入尚未开启')
@@ -92,11 +97,13 @@ def create_token(name: str, kb_ids: list[str], days: int):
     tid, now = uuid.uuid4().hex, int(time.time())
     with db.get_cursor() as cur:
         cur.execute('BEGIN IMMEDIATE')
-        cur.execute('SELECT count(*) FROM mcp_tokens WHERE user_id=? AND revoked_at IS NULL AND expires_at>?', (user['id'], now))
+        cur.execute('SELECT count(*) FROM mcp_tokens WHERE user_id=? AND revoked_at IS NULL AND (expires_at=? OR expires_at>?)',
+                    (user['id'], PERMANENT_TOKEN_EXPIRY, now))
         if cur.fetchone()[0] >= 20:
             raise HTTPException(409, '最多保留 20 个有效令牌，请先撤销旧令牌')
         cur.execute('INSERT INTO mcp_tokens(id,user_id,name,token_hash,prefix,kb_ids,created_at,expires_at) VALUES (?,?,?,?,?,?,?,?)',
-                    (tid, user['id'], name.strip(), hashlib.sha256(secret.encode()).hexdigest(), secret[:19], json.dumps(ids), now, now + days * 86400))
+                    (tid, user['id'], name.strip(), hashlib.sha256(secret.encode()).hexdigest(), secret[:19], json.dumps(ids), now,
+                     PERMANENT_TOKEN_EXPIRY if days is None else now + days * 86400))
         cur.connection.commit()
     a.audit('mcp_token_created', tid)
     row = a.rows('SELECT * FROM mcp_tokens WHERE id=?', (tid,))[0]
@@ -122,8 +129,8 @@ def authenticate(secret: str):
         raise HTTPException(401, 'MCP 令牌无效或已失效')
     now = int(time.time())
     found = a.rows('''SELECT t.* FROM mcp_tokens t JOIN auth_users u ON u.id=t.user_id
-        WHERE t.token_hash=? AND t.revoked_at IS NULL AND t.expires_at>?
-        AND u.disabled=0 AND u.must_change_password=0''', (hashlib.sha256(secret.encode()).hexdigest(), now))
+        WHERE t.token_hash=? AND t.revoked_at IS NULL AND (t.expires_at=? OR t.expires_at>?)
+        AND u.disabled=0 AND u.must_change_password=0''', (hashlib.sha256(secret.encode()).hexdigest(), PERMANENT_TOKEN_EXPIRY, now))
     if not found:
         raise HTTPException(401, 'MCP 令牌无效或已失效')
     row = found[0]
@@ -136,7 +143,8 @@ def require_access(token, kb_id=None):
     # Recheck the token and current user/capability even on an existing connection.
     if not config().enabled:
         raise HTTPException(503, 'MCP 接入已关闭')
-    fresh = a.rows('SELECT * FROM mcp_tokens WHERE id=? AND revoked_at IS NULL AND expires_at>?', (token['id'], int(time.time())))
+    fresh = a.rows('SELECT * FROM mcp_tokens WHERE id=? AND revoked_at IS NULL AND (expires_at=? OR expires_at>?)',
+                   (token['id'], PERMANENT_TOKEN_EXPIRY, int(time.time())))
     if not fresh or a.user()['id'] != token['user_id']:
         raise HTTPException(401, 'MCP 令牌已失效')
     if a.user()['must_change_password']:

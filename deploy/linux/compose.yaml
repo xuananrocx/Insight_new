@@ -16,6 +16,7 @@ services:
       OPENBLAS_NUM_THREADS: ${MODEL_THREADS:-2}
       TOKENIZERS_PARALLELISM: 'false'
       ANONYMIZED_TELEMETRY: 'False'
+      INSIGHT_MCP_HEALTH_URL: http://mcp:8001/health
     command: [python, -m, uvicorn, src.api.main:app, --host, 0.0.0.0, --port, '8888', --workers, '1', --proxy-headers, --forwarded-allow-ips, '${WEB_IP:?Set WEB_IP}']
     volumes:
       - ${DATA_DIR:?Set DATA_DIR}:/data
@@ -36,6 +37,29 @@ services:
     logging:
       driver: json-file
       options: {max-size: 20m, max-file: '3'}
+  mcp:
+    image: ${MCP_IMAGE:?Set MCP_IMAGE}
+    pull_policy: never
+    restart: unless-stopped
+    user: ${APP_UID}:${APP_GID}
+    init: true
+    read_only: true
+    tmpfs: ['/tmp:size=16m,mode=1777']
+    environment:
+      INSIGHT_BACKEND_URL: http://app:8888
+      INSIGHT_MCP_BIND: 0.0.0.0
+      INSIGHT_MCP_PORT: '8001'
+      INSIGHT_MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:?Set MCP_ALLOWED_HOSTS}
+    depends_on:
+      app: {condition: service_healthy}
+    mem_limit: 256m
+    pids_limit: 64
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    networks: [insight]
+    logging:
+      driver: json-file
+      options: {max-size: 20m, max-file: '3'}
   web:
     image: ${WEB_IMAGE:?Set WEB_IMAGE}
     pull_policy: never
@@ -51,6 +75,7 @@ services:
       - '${BIND_ADDRESS:-0.0.0.0}:${HTTP_PORT:-8088}:8088'
     depends_on:
       app: {condition: service_healthy}
+      mcp: {condition: service_healthy}
     mem_limit: 128m
     pids_limit: 64
     cap_drop: [ALL]

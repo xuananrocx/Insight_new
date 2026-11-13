@@ -14,34 +14,40 @@ import { Toggle } from '@/components/ui/toggle-switch'
 import { ManagementDialog } from '@/components/management-dialog'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 
-type Token = { id: string; user_id: string; name: string; prefix: string; kb_ids: string[]; created_at: number; expires_at: number; revoked_at: number | null; last_used_at: number | null; username?: string }
+type Token = { id: string; user_id: string; name: string; prefix: string; kb_ids: string[]; created_at: number; expires_at: number | null; revoked_at: number | null; last_used_at: number | null; username?: string }
 type Personal = { enabled: boolean; can_use: boolean; public_url: string; items: Token[]; knowledge_bases: { id: string; name: string }[] }
 type Configuration = { enabled: boolean; public_url: string; timeout_seconds: number; max_concurrent: number; max_output_chars: number; requests_per_minute: number; reference_minutes: number; rerank_enabled: boolean; rerank_candidates: number; rerank_seconds: number; rerank_min_score: number }
 type Call = { id: number; username: string | null; display_name: string | null; token_name: string | null; tool: string; kb_id: string | null; status: string; duration_ms: number; created_at: number }
+type Deployment = { state: 'not_configured' | 'unavailable' | 'version_mismatch' | 'ready'; gateway_version: string | null; application_version: string; checked_at: number }
+const deploymentState: Record<Deployment['state'], string> = { not_configured: '未配置部署检测', unavailable: '网关或主服务未就绪', version_mismatch: '网关与主应用版本不一致', ready: '网关与主服务连通' }
 const date = (seconds: number | null) => seconds ? new Date(seconds * 1000).toLocaleString() : '—'
 const callState = (status: string) => ({ ok: '成功', '408': '已取消或超时', '401': '令牌失效', '403': '无权访问', '413': '结果超限', '422': '参数错误', '503': '接入已关闭' } as Record<string, string>)[status] ?? '查询失败'
-const state = (token: Token) => token.revoked_at ? '已撤销' : token.expires_at <= Date.now() / 1000 ? '已过期' : '有效'
+const state = (token: Token) => token.revoked_at ? '已撤销' : token.expires_at !== null && token.expires_at <= Date.now() / 1000 ? '已过期' : '有效'
+const expiration = (seconds: number | null) => seconds === null ? '永久有效' : date(seconds)
 
 function ErrorLine({ error, retry }: { error: Error; retry: () => void }) {
   return <p role="alert" className="text-sm text-destructive">{error.message}<Button variant="ghost" size="sm" onClick={retry}>重试</Button></p>
 }
 
-function CodeSample({ title, value }: { title: string; value: string }) {
+function CodeSample({ title, value, hint }: { title: string; value: string; hint?: string }) {
   const [copied, setCopied] = useState(false)
-  async function copy() {
-    try { await copyText(value); setCopied(true); window.setTimeout(() => setCopied(false), 1800) }
+  async function copy(trigger: HTMLButtonElement) {
+    setCopied(false)
+    try { await copyText(value, trigger); setCopied(true); window.setTimeout(() => setCopied(false), 1800) }
     catch { toast.error('复制失败，请手动选择并复制') }
   }
   return <div className="min-w-0 overflow-hidden rounded-lg border">
-    <div className="flex items-center justify-between bg-muted/30 px-3 py-2 text-xs"><span>{title}</span><Button size="sm" variant="ghost" className="h-7 gap-1" onClick={() => void copy()}><Copy className="h-3 w-3" />{copied ? '已复制' : '复制'}</Button></div>
-    <pre className="overflow-x-auto p-3 text-xs leading-relaxed">{value}</pre>
+    <div className="flex items-center justify-between gap-2 bg-muted/30 px-3 py-2 text-xs">{hint ? <SettingsHelp title={title}>{hint}</SettingsHelp> : <span>{title}</span>}<Button type="button" size="sm" variant="ghost" aria-label={`复制${title}`} className="h-7 shrink-0 gap-1" onClick={event => void copy(event.currentTarget)}><Copy className="h-3 w-3" />{copied ? '已复制' : '复制'}</Button></div>
+    <textarea readOnly aria-label={title} value={value} rows={Math.min(12, Math.max(2, value.split('\n').length))} spellCheck={false}
+      onFocus={event => event.currentTarget.select()}
+      className="block w-full resize-none rounded-none border-0 bg-transparent p-3 font-mono text-xs leading-relaxed focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring" />
   </div>
 }
 
 function ConnectionExamples({ url }: { url: string }) {
   if (!url) return <p role="status" className="text-sm text-muted-foreground"><SettingsHelp title="管理员尚未填写 MCP 接入地址。">请先完成独立网关部署，再到系统设置 → MCP 接入填写地址。</SettingsHelp></p>
   return <div className="space-y-3">
-    <p className="break-all text-sm"><SettingsHelp title={<>接入地址：{url}</>}>将令牌设置为启动 Agent 时的 INSIGHT_MCP_TOKEN 环境变量。配置文件使用变量引用，不包含令牌明文；已运行的客户端需要重新加载配置。</SettingsHelp></p>
+    <CodeSample title="接入地址" value={url} hint="将令牌设置为启动 Agent 时的 INSIGHT_MCP_TOKEN 环境变量。配置文件使用变量引用，不包含令牌明文；已运行的客户端需要重新加载配置。" />
     <CodeSample title="Codex · config.toml" value={`[mcp_servers.insight]\nurl = ${JSON.stringify(url)}\nbearer_token_env_var = "INSIGHT_MCP_TOKEN"\ntool_timeout_sec = 135`} />
     <CodeSample title="Claude Code · .mcp.json" value={JSON.stringify({ mcpServers: { insight: { type: 'http', url, headers: { Authorization: 'Bearer ${INSIGHT_MCP_TOKEN}' } } } }, null, 2)} />
   </div>
@@ -53,22 +59,29 @@ function CreateToken({ data, onClose, onCreated }: { data: Personal; onClose: ()
   const [selected, setSelected] = useState<string[]>([])
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState(false)
+  const visibleKbs = data.knowledge_bases.filter(kb => kb.name.toLowerCase().includes(filter.trim().toLowerCase()))
+  const allVisibleSelected = visibleKbs.length > 0 && visibleKbs.every(kb => selected.includes(kb.id))
+  function selectAll() {
+    const ids = Array.from(new Set([...selected, ...visibleKbs.map(kb => kb.id)]))
+    if (ids.length > 100) { toast.error('单个令牌最多选择 100 个知识库，请缩小筛选范围后再全选'); return }
+    setSelected(ids)
+  }
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!selected.length) { toast.error('请至少选择一个知识库'); return }
     setBusy(true)
     try {
       // Keep the one-time secret out of the query/mutation cache and browser storage.
-      const result = await accountRequest<{ token: string }>('/account/mcp/tokens', 'POST', { name, kb_ids: selected, days: Number(days) })
+      const result = await accountRequest<{ token: string }>('/account/mcp/tokens', 'POST', { name, kb_ids: selected, days: days === 'permanent' ? null : Number(days) })
       onCreated(result.token)
     } catch (error) { toast.error((error as Error).message) }
     finally { setBusy(false) }
   }
   return <ManagementDialog title="创建 MCP 令牌" onClose={onClose} busy={busy} className="max-w-lg"><form onSubmit={event => void submit(event)} className="space-y-4">
     <label className="block space-y-1 text-sm"><span>名称</span><input className={accountInput} value={name} onChange={event => setName(event.target.value)} required maxLength={80} placeholder="例如：办公电脑 Codex" /></label>
-    <label className="block space-y-1 text-sm"><span>有效期</span><OptionSelect aria-label="令牌有效期" value={days} onValueChange={setDays} options={[7, 30, 90, 365].map(value => ({ value: String(value), label: `${value} 天` }))} /></label>
-    <div className="space-y-2"><p className="text-sm"><SettingsHelp title={<>知识库范围 · 已选 {selected.length}/100</>}>令牌只能读取所选范围，不能修改文档。用户权限被收回后，令牌也无法继续查询对应知识库。令牌仅在创建后显示一次。</SettingsHelp></p><input className={accountInput} aria-label="筛选知识库" placeholder="搜索知识库" value={filter} onChange={event => setFilter(event.target.value)} />
-      <div className="max-h-52 space-y-1 overflow-y-auto rounded-lg border p-2">{data.knowledge_bases.filter(kb => kb.name.toLowerCase().includes(filter.toLowerCase())).map(kb => <label key={kb.id} className="flex cursor-pointer items-start gap-2 rounded-md p-2 text-sm hover:bg-accent/30"><input type="checkbox" className="mt-0.5 accent-primary" checked={selected.includes(kb.id)} disabled={!selected.includes(kb.id) && selected.length >= 100} onChange={event => setSelected(current => event.target.checked ? [...current, kb.id] : current.filter(id => id !== kb.id))} /><span className="break-all">{kb.name}</span></label>)}{!data.knowledge_bases.length && <p className="p-2 text-sm text-muted-foreground">暂无可授权知识库</p>}</div>
+    <label className="block space-y-1 text-sm"><span><SettingsHelp title="有效期">永久有效令牌仍可随时撤销，账号停用或权限收回后也会失效。</SettingsHelp></span><OptionSelect aria-label="令牌有效期" value={days} onValueChange={setDays} options={[...[7, 30, 90, 365].map(value => ({ value: String(value), label: `${value} 天` })), { value: 'permanent', label: '永久有效' }]} /></label>
+    <div className="space-y-2"><div className="flex flex-wrap items-center justify-between gap-2"><p className="min-w-0 text-sm"><SettingsHelp title={<>知识库范围 · 已选 {selected.length}/100</>}>令牌只能读取所选范围，不能修改文档。用户权限被收回后，令牌也无法继续查询对应知识库。令牌仅在创建后显示一次。全选应用于当前搜索结果，最多 100 个；之后新增的知识库不会自动加入。</SettingsHelp></p><div className="flex shrink-0 items-center gap-1"><Button type="button" size="sm" variant="ghost" className="h-7" disabled={busy || !visibleKbs.length || allVisibleSelected} onClick={selectAll}>{filter.trim() ? '全选当前结果' : '全选'}</Button><Button type="button" size="sm" variant="ghost" className="h-7" disabled={busy || !selected.length} onClick={() => setSelected([])}>清空选择</Button></div></div><input className={accountInput} aria-label="筛选知识库" placeholder="搜索知识库" value={filter} disabled={busy} onChange={event => setFilter(event.target.value)} />
+      <div className="max-h-52 space-y-1 overflow-y-auto rounded-lg border p-2">{visibleKbs.map(kb => <label key={kb.id} className="flex cursor-pointer items-start gap-2 rounded-md p-2 text-sm hover:bg-accent/30"><input type="checkbox" className="mt-0.5 accent-primary" checked={selected.includes(kb.id)} disabled={busy || (!selected.includes(kb.id) && selected.length >= 100)} onChange={event => setSelected(current => event.target.checked ? [...current, kb.id] : current.filter(id => id !== kb.id))} /><span className="break-all">{kb.name}</span></label>)}{!visibleKbs.length && <p className="p-2 text-sm text-muted-foreground">{data.knowledge_bases.length ? '未找到匹配的知识库' : '暂无可授权知识库'}</p>}</div>
     </div>
 
     <div className="flex justify-end gap-2"><Button type="button" variant="outline" disabled={busy} onClick={onClose}>取消</Button><Button type="submit" disabled={busy || !selected.length}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}{busy ? '正在创建…' : '创建令牌'}</Button></div>
@@ -102,7 +115,7 @@ function PersonalMcpContent() {
     {query.isPending && <p role="status" className="text-sm text-muted-foreground">正在加载…</p>}
     {data && <>
       <p role="status" className="rounded-lg border bg-muted/20 p-3 text-sm">{!data.can_use ? '当前角色没有 MCP 接入权限，请联系管理员分配「外部接入」权限。' : !data.enabled ? '系统 MCP 接入已关闭，已有令牌暂不可用，仍可撤销。' : 'MCP 接入已开启 · 只读查询 · 不使用你的聊天 API'}</p>
-      <div className="divide-y rounded-lg border">{data.items.length ? data.items.map(token => <div key={token.id} className="flex items-start justify-between gap-3 p-3"><div className="min-w-0 space-y-1"><p className="break-all text-sm font-medium">{token.name}<span className="ml-2 text-xs font-normal text-muted-foreground">{state(token)}</span></p><p className="break-all font-mono text-xs text-muted-foreground">{token.prefix}…</p><p className="break-words text-xs text-muted-foreground">{token.kb_ids.map(id => data.knowledge_bases.find(kb => kb.id === id)?.name ?? '不可访问的知识库').join('、')}</p><p className="text-xs text-muted-foreground">到期 {date(token.expires_at)} · 上次使用 {date(token.last_used_at)}</p></div>{!token.revoked_at && <Button size="sm" variant="outline" onClick={() => setRevoke(token)}>撤销</Button>}</div>) : <p className="p-4 text-sm text-muted-foreground">暂无接入令牌</p>}</div>
+      <div className="divide-y rounded-lg border">{data.items.length ? data.items.map(token => <div key={token.id} className="flex items-start justify-between gap-3 p-3"><div className="min-w-0 space-y-1"><p className="break-all text-sm font-medium">{token.name}<span className="ml-2 text-xs font-normal text-muted-foreground">{state(token)}</span></p><p className="break-all font-mono text-xs text-muted-foreground">{token.prefix}…</p><p className="break-words text-xs text-muted-foreground">{token.kb_ids.map(id => data.knowledge_bases.find(kb => kb.id === id)?.name ?? '不可访问的知识库').join('、')}</p><p className="text-xs text-muted-foreground">{token.expires_at === null ? '永久有效' : `到期 ${date(token.expires_at)}`} · 上次使用 {date(token.last_used_at)}</p></div>{!token.revoked_at && <Button size="sm" variant="outline" onClick={() => setRevoke(token)}>撤销</Button>}</div>) : <p className="p-4 text-sm text-muted-foreground">暂无接入令牌</p>}</div>
       <details className="rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">客户端配置示例</summary><div className="mt-4"><ConnectionExamples url={data.public_url} /></div></details>
     </>}
     {create && data && <CreateToken data={data} onClose={() => setCreate(false)} onCreated={value => { setCreate(false); setSecret(value); void qc.invalidateQueries({ queryKey: key }) }} />}
@@ -127,9 +140,10 @@ export function SystemMcpSettings() {
   return <SystemMcpContent key={`${user.id}:${user.permission_revision}`} />
 }
 function SystemMcpContent() {
-  const { can } = useAuth()
+  const { can, user } = useAuth()
   const qc = useQueryClient()
   const query = useQuery({ queryKey: ['mcp-config'], queryFn: ({ signal }) => accountRequest<Configuration>('/admin/mcp/settings', 'GET', undefined, signal) })
+  const deployment = useQuery({ queryKey: ['mcp-deployment', user.id], queryFn: ({ signal }) => accountRequest<Deployment>('/admin/mcp/status', 'GET', undefined, signal), refetchInterval: 30000, retry: false })
   const [draft, setDraft] = useState<Configuration | null>(null)
   const [busy, setBusy] = useState(false)
   const form = draft ?? query.data
@@ -145,7 +159,8 @@ function SystemMcpContent() {
     finally { setBusy(false) }
   }
   return <>
-    <Card className="space-y-4 p-5"><h3 className="font-medium"><SettingsHelp title="独立知识接入服务">为外部 Agent 提供只读知识查询，不创建会话、不生成回答。需要单独部署 MCP 网关；这里的开关控制访问权限，不会启动或停止网关进程。</SettingsHelp></h3>
+    <Card className="space-y-4 p-5"><h3 className="font-medium"><SettingsHelp title="独立知识接入服务">为外部 Agent 提供只读知识查询，不创建会话、不生成回答。Linux 版本包配套部署独立网关；这里的开关控制访问权限，不会启动或停止网关进程。</SettingsHelp></h3>
+      <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-xs"><span role="status"><SettingsHelp title={<>MCP 网关状态 · {deployment.isPending ? '正在检测…' : deployment.isError ? '检测失败' : deployment.data ? deploymentState[deployment.data.state] : '状态未知'}</>}>检查内部网关及它到主服务的连通性，与下方业务开关独立；不代表客户端到公开接入地址的网络和代理已验证。未配置部署检测不等于网关未运行。{deployment.data?.gateway_version && ` 网关版本 ${deployment.data.gateway_version}；主应用版本 ${deployment.data.application_version}。`}</SettingsHelp></span><Button type="button" size="icon" variant="ghost" className="h-7 w-7 shrink-0" aria-label="刷新 MCP 网关状态" disabled={deployment.isFetching} onClick={() => void deployment.refetch()}><RefreshCw className={`h-3.5 w-3.5 ${deployment.isFetching ? 'animate-spin' : ''}`} /></Button></div>
       {query.isError && <ErrorLine error={query.error} retry={() => void query.refetch()} />}
       {query.isPending && <p role="status" className="text-sm text-muted-foreground">正在加载…</p>}
       {form && <form className="space-y-4" onSubmit={event => void save(event)}><fieldset disabled={busy || !can('system.edit')} className="space-y-4">
@@ -186,7 +201,7 @@ function McpRecords() {
       {(userDraft || userSearch) && <Button type="button" size="sm" variant="ghost" onClick={() => { setUserDraft(''); setUserSearch(''); setPage(0) }}>重置</Button>}
     </form>}
     {query.isError && <ErrorLine error={query.error} retry={() => void query.refetch()} />}
-    {query.isPending ? <p role="status" className="text-sm text-muted-foreground">正在加载…</p> : <div className="overflow-x-auto rounded-lg border"><table className="w-full text-left text-xs"><thead className="bg-muted/30"><tr>{(tab === 'tokens' ? ['用户 / 名称', '状态', '有效期 / 上次使用', '操作'] : ['用户 / 令牌', '工具', '结果 / 耗时', '时间']).map(label => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{label}</th>)}</tr></thead><tbody className="divide-y">{query.data?.items.map(item => tab === 'tokens' ? <tr key={item.id}><td className="max-w-48 break-all p-3">{item.username ?? '已删除用户'}<p className="mt-1 text-muted-foreground">{(item as Token).name}</p></td><td className="p-3">{state(item as Token)}</td><td className="whitespace-nowrap p-3">{date((item as Token).expires_at)}<p className="mt-1 text-muted-foreground">{date((item as Token).last_used_at)}</p></td><td className="p-3"><Button size="sm" variant="outline" disabled={!can('system.edit') || !!(item as Token).revoked_at} onClick={() => setRevoke(item as Token)}>撤销</Button></td></tr> : <tr key={item.id}><td className="max-w-40 break-all p-3">{(item as Call).display_name || item.username || '已删除用户'}{(item as Call).display_name && <p className="text-muted-foreground">{item.username}</p>}<p className="mt-1 text-muted-foreground">{(item as Call).token_name ?? '—'}</p></td><td className="max-w-48 break-all p-3 font-mono">{(item as Call).tool}</td><td className="whitespace-nowrap p-3">{callState((item as Call).status)}<p className="mt-1 text-muted-foreground">{((item as Call).duration_ms / 1000).toFixed(2)} 秒</p></td><td className="whitespace-nowrap p-3">{date(item.created_at)}</td></tr>)}{!query.data?.items.length && <tr><td colSpan={4} className="p-5 text-center text-muted-foreground">{search ? '未找到匹配用户的调用记录' : '暂无记录'}</td></tr>}</tbody></table></div>}
+    {query.isPending ? <p role="status" className="text-sm text-muted-foreground">正在加载…</p> : <div className="overflow-x-auto rounded-lg border"><table className="w-full text-left text-xs"><thead className="bg-muted/30"><tr>{(tab === 'tokens' ? ['用户 / 名称', '状态', '有效期 / 上次使用', '操作'] : ['用户 / 令牌', '工具', '结果 / 耗时', '时间']).map(label => <th key={label} className="whitespace-nowrap px-3 py-2 font-medium">{label}</th>)}</tr></thead><tbody className="divide-y">{query.data?.items.map(item => tab === 'tokens' ? <tr key={item.id}><td className="max-w-48 break-all p-3">{item.username ?? '已删除用户'}<p className="mt-1 text-muted-foreground">{(item as Token).name}</p></td><td className="p-3">{state(item as Token)}</td><td className="whitespace-nowrap p-3">{expiration((item as Token).expires_at)}<p className="mt-1 text-muted-foreground">{date((item as Token).last_used_at)}</p></td><td className="p-3"><Button size="sm" variant="outline" disabled={!can('system.edit') || !!(item as Token).revoked_at} onClick={() => setRevoke(item as Token)}>撤销</Button></td></tr> : <tr key={item.id}><td className="max-w-40 break-all p-3">{(item as Call).display_name || item.username || '已删除用户'}{(item as Call).display_name && <p className="text-muted-foreground">{item.username}</p>}<p className="mt-1 text-muted-foreground">{(item as Call).token_name ?? '—'}</p></td><td className="max-w-48 break-all p-3 font-mono">{(item as Call).tool}</td><td className="whitespace-nowrap p-3">{callState((item as Call).status)}<p className="mt-1 text-muted-foreground">{((item as Call).duration_ms / 1000).toFixed(2)} 秒</p></td><td className="whitespace-nowrap p-3">{date(item.created_at)}</td></tr>)}{!query.data?.items.length && <tr><td colSpan={4} className="p-5 text-center text-muted-foreground">{search ? '未找到匹配用户的调用记录' : '暂无记录'}</td></tr>}</tbody></table></div>}
     <div className="flex items-center justify-between text-xs text-muted-foreground"><span>共 {query.data?.total ?? 0} 条 · 每页 20 条</span><div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={!page || query.isFetching} onClick={() => setPage(page - 1)}>上一页</Button><span>{page + 1}</span><Button size="sm" variant="outline" disabled={query.isFetching || (page + 1) * 20 >= (query.data?.total ?? 0)} onClick={() => setPage(page + 1)}>下一页</Button></div></div>
     {revoke && <ConfirmDialog title="撤销 MCP 令牌" message={`确认撤销 ${revoke.username ?? '已删除用户'} 的「${revoke.name}」？使用该令牌的 Agent 将无法继续查询。`} danger loading={busy} onConfirm={() => void remove()} onCancel={() => setRevoke(null)} />}
   </Card>

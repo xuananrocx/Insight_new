@@ -100,6 +100,14 @@ Linux/macOS：`python3.11 -m venv .venv`、`source .venv/bin/activate`、`python
 - [按平台构建候选包](selective-build.md)
 - [Linux 部署说明](../deploy/linux/README.md)
 
+### MCP 的打包与部署边界
+
+Linux 构建入口 `scripts/release_build.py` 同时构建应用和独立网关；`deploy/linux/package.py` 校验同一版本/提交并记录三组件镜像身份。`deploy/mcp/Dockerfile` 只复制网关及无应用依赖的协议模块，不包含数据库、配置和模型。修改网关导入时需保持这个边界。
+
+`insightctl.py` 按 `deployment_mode` 分派：默认 Compose 管理新环境，`hostctl.py` 管理已存在的 host 网络容器与宿主机 Nginx。host 模式先 adopt 记录受保护的原配置，再统一备份、升级、校验、续跑或回退；`hostctl.sh`/`host-runner.py` 允许无 Python 3 的宿主机使用包内 Python 运行控制器。此控制器是管理员工具，拥有宿主机访问能力；不要把私有 state、配置快照或备份放入 Git/Release。
+
+业务开关与部署检测相互独立。主应用 `/api/v1/admin/mcp/status` 仅根据部署环境变量探测内部网关，不探测用户填写的公开地址；网关 `/health` 核对主应用健康。前端的内部连通状态不保证外网入口已配置。发布前需在 Linux 候选环境实际运行镜像和 Nginx 检查，本地模拟事务通过不代表 176 已验收；不在生产构建或临时 pip 安装 SDK。
+
 ### 系统默认主题与个人偏好
 
 系统设置 → 界面与交互中的默认主题保存在用户配置 `interface.default_theme`，缺省为 `minimal`。`GET/PUT /api/v1/settings/interface` 沿用 `system.view/system.edit` 权限；公开的 `/api/v1/auth/status` 仅额外返回主题标识供登录页和普通用户使用，不返回配置全文。

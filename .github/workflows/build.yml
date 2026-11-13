@@ -122,7 +122,9 @@ jobs:
         if: matrix.platform == 'linux'
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.sha }}
-        run: python scripts/smoke_linux_ci.py --image "insight:build-$SOURCE_SHA"
+        run: |
+          python -m unittest discover -s deploy/linux -p 'test*deployment.py'
+          python scripts/smoke_linux_ci.py --image "insight:build-$SOURCE_SHA" --mcp-image "insight-mcp:build-$SOURCE_SHA" --web-image "$INSIGHT_WEB_IMAGE" --bundle "$RUNNER_TEMP/insight-work/insight-linux"
       - uses: actions/upload-artifact@v4
         with:
           name: candidate-${{ matrix.platform }}-${{ needs.prepare.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}

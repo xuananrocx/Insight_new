@@ -19,7 +19,10 @@ async def run(backend_url):
     seen = []
     entered, cancelled = asyncio.Event(), asyncio.Event()
     valid = {'Bearer alice', 'Bearer bob'}
+    backend_ready = True
     async def backend(request):
+        if request.url.path == '/health':
+            return httpx.Response(200 if backend_ready else 503, json={'status': 'ok' if backend_ready else 'unavailable'})
         assert str(request.url).startswith(backend_url + '/mcp-service/')
         auth = request.headers.get('authorization')
         seen.append((request.url.path, auth))
@@ -49,6 +52,12 @@ async def run(backend_url):
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url='http://127.0.0.1:8001') as raw:
+            health = await raw.get('/health')
+            assert health.status_code == 200 and health.json()['component'] == 'insight-mcp'
+            assert health.json()['version'] == __import__('src').__version__
+            backend_ready = False
+            assert (await raw.get('/health')).status_code == 503
+            backend_ready = True
             assert (await raw.post('/mcp', json={})).status_code == 401
             assert (await raw.post('/mcp', headers={'Authorization': 'Bearer bad'}, json={})).status_code == 401
             headers = {'Authorization': 'Bearer alice', 'Accept': 'application/json, text/event-stream', 'Content-Type': 'application/json'}

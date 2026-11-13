@@ -1,5 +1,5 @@
 /** Support HTTP deployments and embedded browsers without Clipboard API access. */
-export async function copyText(text: string): Promise<void> {
+export async function copyText(text: string, trigger?: HTMLElement): Promise<void> {
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(text)
@@ -13,10 +13,14 @@ export async function copyText(text: string): Promise<void> {
   textarea.value = text
   textarea.readOnly = true
   textarea.style.cssText = 'position:fixed;top:0;left:0;opacity:0;pointer-events:none;'
-  document.body.appendChild(textarea)
+  // Keep the temporary selection inside the active modal's focus scope.
+  const dialogSelector = '[role="dialog"], [role="alertdialog"]'
+  const container = trigger?.closest<HTMLElement>(dialogSelector) ?? previous?.closest<HTMLElement>(dialogSelector) ?? document.body
+  container.appendChild(textarea)
   try {
     textarea.focus({ preventScroll: true })
     textarea.select()
+    if (document.activeElement !== textarea) throw new Error('copy selection unavailable')
     if (!document.execCommand('copy')) throw new Error('copy rejected')
   } finally {
     textarea.remove()

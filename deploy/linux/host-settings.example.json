@@ -1,0 +1,22 @@
+{
+  "deployment_mode": "host",
+  "project": "insight",
+  "app_container": "insight",
+  "mcp_container": "insight-mcp",
+  "app_user": "1002:1002",
+  "docker_socket": "/run/insight-docker.sock",
+  "app_port": 8888,
+  "mcp_port": 8001,
+  "public_origin": "http://127.0.0.1:8088",
+  "public_host": "REPLACE_WITH_PUBLIC_IP_OR_HOST:8088",
+  "mcp_allowed_hosts": "REPLACE_WITH_PUBLIC_IP_OR_HOST:8088,127.0.0.1:8088",
+  "data_dir": "/srv/insight/data",
+  "models_dir": "/srv/insight/models",
+  "backup_dir": "/srv/insight/backups",
+  "data_schema": "insight-0.1.1",
+  "nginx_binary": "/path/to/nginx/sbin/nginx",
+  "nginx_prefix": "/path/to/nginx",
+  "nginx_config": "/path/to/nginx/conf/nginx.conf",
+  "nginx_server_config": "/path/to/nginx/conf/insight.conf",
+  "nginx_include": "/path/to/nginx/conf/insight-mcp.conf"
+}

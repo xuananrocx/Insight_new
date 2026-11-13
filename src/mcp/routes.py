@@ -7,7 +7,7 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field, ConfigDict, StringConstraints
 from starlette.responses import JSONResponse
 from src.core import accounts as a, permissions as p
-from src.mcp import store, tools, service, contracts
+from src.mcp import store, tools, service, contracts, deployment
 
 router = APIRouter(prefix='/api/v1', tags=['mcp'])
 
@@ -16,7 +16,7 @@ class TokenRequest(BaseModel):
     model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=80)
     kb_ids: list[Annotated[str, StringConstraints(min_length=1, max_length=100)]] = Field(min_length=1, max_length=100)
-    days: int = Field(default=30, ge=1, le=365)
+    days: int | None = Field(default=30, ge=1, le=365, strict=True)
 
 
 @router.get('/account/mcp')
@@ -49,6 +49,12 @@ def remove(tid: str):
 def configuration():
     p.require('system.view')
     return store.config()
+
+
+@router.get('/admin/mcp/status')
+async def deployment_status():
+    p.require('system.view')
+    return await deployment.status()
 
 
 @router.put('/admin/mcp/settings')
