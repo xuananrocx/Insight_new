@@ -42,8 +42,8 @@ def query(query_text, top_k=20, kb_id=None):
     return _incremental.query(query_text,top_k,kb_id)
 
 @publication_guard
-def query_enhanced(query_text, top_k=20, kb_id='default'):
-    return _incremental.query(query_text,top_k,kb_id,enhanced=True)
+def query_enhanced(query_text, top_k=20, kb_id='default', *, allowed_ids=None):
+    return _incremental.query(query_text,top_k,kb_id,enhanced=True,allowed_ids=allowed_ids)
 
 def stats():
     return _incremental.stats()

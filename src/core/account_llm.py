@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.core import accounts as a
+from src.core import model_budget
 from src.core.llm_client import LLMClient
 from src.core.llm_providers import (
     OpenAIProvider,
@@ -13,6 +14,7 @@ from src.core.llm_providers import (
 
 class AccountChatClient(LLMClient):
     def __init__(self, provider: dict):
+        self.budget = model_budget.active.get() or model_budget.capture(provider)
         self._account_scoped = True
         self.provider_id = provider["id"]
         self.model_id = provider["chat_model"]
@@ -33,21 +35,21 @@ class AccountChatClient(LLMClient):
         if a.active_kb.get():
             a.require_kb(a.active_kb.get())
 
-    def chat(self, *args, **kwargs):
+    def chat(self, messages, **kwargs):
         self.check_access()
         try:
-            result = super().chat(*args, **kwargs)
+            result = super().chat(messages, **model_budget.limit_messages(messages, kwargs, self.budget))
             self.check_access()
             return result
         finally:
             self.close()
 
-    async def chat_stream(self, *args, **kwargs):
+    async def chat_stream(self, messages, **kwargs):
         import asyncio
         from contextlib import aclosing
         await asyncio.to_thread(self.check_access)
         try:
-            async with aclosing(super().chat_stream(*args, **kwargs)) as stream:
+            async with aclosing(super().chat_stream(messages, **model_budget.limit_messages(messages, kwargs, self.budget))) as stream:
                 async for token in stream:
                     await asyncio.to_thread(self.check_access)
                     yield token

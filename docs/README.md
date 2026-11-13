@@ -8,6 +8,8 @@
 - [架构设计](architecture.md)：基础架构原则和历史背景；与当前源码冲突时以源码和交接指南为准。
 - [开发指南](development.md)：跨平台开发和日常切换。
 - [配置说明](configuration.md)：配置覆盖、路径、模型和 API。
+- [配置入口待办](configuration-ui-backlog.md)：上下文窗口、模型预算及检索高级配置的前台入口梳理。
+- [模型能力与问答预算方案](model-budget-plan.md)：统一模型约束、作答预留、前台入口和兼容验证。
 
 ## AI、检索与知识库
 
@@ -21,6 +23,9 @@
 ## 账号与运行
 
 - [账号与权限](accounts.md)
+- [只读知识 MCP 接入](mcp.md)：独立网关、个人令牌、权限边界、部署及验证。
+- [MCP 面向 Agent 的质量优化方案](mcp-agent-optimization-plan.md)：工具合约、证据、覆盖、分页恢复及下游召回改进。
+- [MCP 独立验收清单](mcp-agent-evaluation.md)：开发侧隔离验证与 Claude Code + GLM 下游效果对比口径。
 - [发布流程](release-process.md)
 - [按平台构建候选包](selective-build.md)
 - [Linux 部署说明](../deploy/linux/README.md)

@@ -12,6 +12,7 @@ from src.qa.rag import (
     ask,
 )
 from src.core import ai_read_limits as read_limits
+from src.core.model_budget import ContextSettings
 from src.core import llm_client
 from src.core.interface_settings import ThemeKey, default_theme, AccentKey, default_accent
 from fastapi import APIRouter, HTTPException
@@ -783,3 +784,60 @@ def update_interface_settings(req: InterfaceSettingsInfo):
     _secure_write_yaml(USER_CONFIG_PATH, raw)
     settings.config["interface"] = raw["interface"]
     return get_interface_settings()
+
+
+# Model budget settings are independent from document-summary task policy.
+def _context_config():
+    from src.core.model_budget import ContextSettings, context_values
+    return ContextSettings.model_validate(context_values(settings.config))
+
+
+def _context_sources():
+    from src.core.config import USER_CONFIG_PATH, USER_CONFIG_LOCAL_PATH, PROJECT_ROOT
+    from src.core.model_budget import ContextSettings
+    sources = {k: '默认值' for k in ContextSettings.model_fields}
+    # Correct path wins over legacy, including legacy fields in later overlays.
+    legacy_sources = {}
+    for path, label in [(USER_CONFIG_PATH, '用户配置'), (USER_CONFIG_LOCAL_PATH, '用户本地覆盖'),
+                        (PROJECT_ROOT / 'config.local.yaml', '项目本地覆盖')]:
+        if not path.exists():
+            continue
+        with path.open(encoding='utf-8') as f:
+            raw = yaml.safe_load(f) or {}
+        for key in ((raw.get('feature_flags') or {}).get('conversation_context') or {}):
+            if key in sources:
+                legacy_sources[key] = label + '（旧层级）'
+        for key in ((raw.get('qa') or {}).get('conversation_context') or {}):
+            if key in sources:
+                sources[key] = label
+    return {k: legacy_sources.get(k, v) if v == '默认值' else v for k, v in sources.items()}
+
+
+@router.get('/context_budget')
+def get_context_budget():
+    return {**_context_config().model_dump(), 'sources': _context_sources(),
+            'defaults': ContextSettings().model_dump(),
+            'application_window_limit': 262144}
+
+
+@router.put('/context_budget')
+def update_context_budget(req: ContextSettings):
+    from src.core.config import USER_CONFIG_PATH
+    current = _context_config().model_dump()
+    sources = _context_sources()
+    # PATCH-like semantics preserve values omitted by older clients.
+    changes = req.model_dump(exclude_unset=True)
+    blocked = [k for k, v in changes.items() if '覆盖' in sources[k] and current[k] != v]
+    if blocked:
+        raise HTTPException(409, '这些配置由本地覆盖文件控制：' + '、'.join(blocked))
+    merged = ContextSettings.model_validate({**current, **changes}).model_dump()
+    with USER_CONFIG_PATH.open(encoding='utf-8') as f:
+        raw = yaml.safe_load(f) or {}
+    raw.setdefault('qa', {}).setdefault('conversation_context', {}).update(merged)
+    _secure_write_yaml(USER_CONFIG_PATH, raw)
+    settings.config.setdefault('qa', {}).setdefault('conversation_context', {}).update(merged)
+    from src.core import accounts
+    if accounts.identity.get():
+        accounts.audit('context_budget_changed')
+    logger.info('上下文预算已保存，新请求生效')
+    return get_context_budget()

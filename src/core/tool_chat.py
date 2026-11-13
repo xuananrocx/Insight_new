@@ -4,11 +4,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 
 import httpx
 
-from src.core import accounts, ai_call_logger
+from src.core import accounts, ai_call_logger, model_budget
 from src.core.llm_providers import OpenAIProvider, AnthropicArchProvider
 from src.core.llm_diagnostics import CallDiagnostics
 from src.core.api_retry import network_timeout, retry_after, retry_plan, report_retry
@@ -43,6 +43,8 @@ class ToolTurn:
 
 class ToolChat:
     def __init__(self, provider, system: str, messages: list[dict], *, check_access=lambda: None, meta=None, transport=None):
+        self.budget = model_budget.current()
+        self.last_budget = None
         self.provider = provider
         self.name = provider.name
         self.system = system
@@ -89,6 +91,11 @@ class ToolChat:
         return True
 
     def _request(self, tools: list[dict], *, final=False, force=False, max_tokens=4096):
+        url, headers, payload = self._build_request(tools, final=final, force=force, max_tokens=max_tokens)
+        self.last_budget = model_budget.limit_payload(payload, self.budget)
+        return url, headers, payload
+
+    def _build_request(self, tools: list[dict], *, final=False, force=False, max_tokens=4096):
         from src.qa.conversation_context import log_model_input
         log_model_input(self.system, self.messages, tools, max_tokens)
         p = self.provider
@@ -151,6 +158,8 @@ class ToolChat:
             self.messages.append({k: v for k, v in msg.items() if k in ("role", "content", "tool_calls", "reasoning_content")})
         elif self.style == "responses":
             truncated = data.get("status") == "incomplete"
+            if truncated and (data.get("incomplete_details") or {}).get("reason") != "max_output_tokens":
+                raise ToolProtocolError("模型响应未完成，未确认是输出额度限制。")
             if data.get("status") not in ("completed", "incomplete"):
                 raise ToolProtocolError("模型响应不完整，工具尚未执行。")
             output = data.get("output", [])
@@ -216,6 +225,7 @@ class ToolChat:
             await asyncio.to_thread(self.check_access)
             diagnostic.data["phase"] = "构造请求"
             url, headers, payload = self._request(tools, force=force, max_tokens=max_tokens)
+            diagnostic.data["budget"] = asdict(self.last_budget)
             diagnostic.request(url, payload)
             response = await self.http.post(url, headers=headers, json=payload, extensions={"trace": diagnostic.trace})
             await diagnostic.response(response)
@@ -257,6 +267,7 @@ class ToolChat:
                     await asyncio.to_thread(self.check_access)
                     url,headers,payload = self._request(tools,max_tokens=max_tokens)
                     payload['stream'] = True
+                    diagnostic.data["budget"] = asdict(self.last_budget)
                     diagnostic.request(url,payload)
                     async with self.http.stream('POST',url,headers=headers,json=payload,extensions={'trace':diagnostic.trace}) as response:
                         await diagnostic.response(response)
@@ -335,6 +346,7 @@ class ToolChat:
             diagnostic.data["phase"] = "构造请求"
             url, headers, payload = self._request(tools, final=True, max_tokens=max_tokens)
             payload["stream"] = True
+            diagnostic.data["budget"] = asdict(self.last_budget)
             diagnostic.request(url, payload)
             async with self.http.stream("POST", url, headers=headers, json=payload, extensions={"trace": diagnostic.trace}) as response:
                 await diagnostic.response(response)
@@ -369,6 +381,8 @@ class ToolChat:
                         if event.get("type") == "response.completed":
                             complete = True
                         if event.get("type") == "response.incomplete":
+                            if (event.get("response", {}).get("incomplete_details") or {}).get("reason") != "max_output_tokens":
+                                raise ToolProtocolError("模型响应未完成，原因并非已确认的输出额度耗尽，请查看调用日志。")
                             complete = truncated = True
                     else:
                         if event.get("type") == "content_block_delta" and event.get("delta", {}).get("type") == "text_delta":
@@ -386,8 +400,7 @@ class ToolChat:
             self.final_truncated = truncated
             if truncated and not parts:
                 raise ToolProtocolError(
-                    f"模型输出达到输出上限（max_tokens={max_tokens}）且没有可见回答内容，"
-                    "推理可能已耗尽全部额度。请联系管理员在系统设置的 AI 生成配置中调大输出上限后重试。")
+                    model_budget.truncation_message(self.last_budget) + " 本轮没有可见回答内容。")
             await asyncio.to_thread(self.check_access)
             self._log(scene, started, "".join(parts))
             diagnostic.success()
@@ -412,7 +425,8 @@ def create_tool_chat(system, messages, *, meta=None):
         if not available:
             raise NoAvailableProviderError("没有可用的 AI API")
         provider = getattr(available[0], "_impl", available[0])
-        check = lambda: None
+        def check():
+            return None
     return ToolChat(provider, system, messages, check_access=check, meta=meta)
 
 

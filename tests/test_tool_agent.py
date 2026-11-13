@@ -630,6 +630,7 @@ async def test_output_limit_finish_decodes_as_truncated_turn(knowledge, style):
         body['choices'][0]['finish_reason'] = 'length'
     elif style == 'responses':
         body['status'] = 'incomplete'
+        body['incomplete_details'] = {'reason': 'max_output_tokens'}
     else:
         body['stop_reason'] = 'max_tokens'
     requests = []
@@ -660,7 +661,7 @@ async def test_final_stream_output_limit_keeps_partial_answer(knowledge, style):
                       {'choices': [{'delta': {}, 'finish_reason': 'length'}]}]
         elif style == 'responses':
             events = [{'type': 'response.output_text.delta', 'delta': '部分回答'},
-                      {'type': 'response.incomplete'}]
+                      {'type': 'response.incomplete', 'response': {'incomplete_details': {'reason': 'max_output_tokens'}}}]
         else:
             events = [{'type': 'content_block_delta', 'delta': {'type': 'text_delta', 'text': '部分回答'}},
                       {'type': 'message_delta', 'delta': {'stop_reason': 'max_tokens'}}]
@@ -686,7 +687,7 @@ async def test_final_stream_truncated_without_visible_output_raises_hint(knowled
         return httpx.Response(200, text=''.join('data: ' + json.dumps(e) + '\n\n' for e in events))
     model = ToolChat(provider, 's', [{'role': 'user', 'content': 'q'}], transport=httpx.MockTransport(handler))
     try:
-        with pytest.raises(ToolProtocolError, match='调大输出上限'):
+        with pytest.raises(ToolProtocolError, match='限制来源'):
             ''.join([t async for t in model.final_stream(kt.TOOLS, 'answer')])
         assert len(requests) == 1
     finally:
@@ -723,7 +724,7 @@ async def test_agent_final_truncation_marks_partial_and_appends_notice(knowledge
     assert events[-1]['type'] == 'done'
     data = events[-1]['data']
     assert data['outcome'] == 'partial' and '截断' in data['reason']
-    assert '调大输出上限' in data['answer']
+    assert '模型能力' in data['answer']
 
 
 @pytest.mark.asyncio
@@ -1292,7 +1293,12 @@ def test_read_pages_end_on_lines_without_losing_bytes(knowledge):
 @pytest.mark.asyncio
 async def test_capacity_fallback_keeps_recent_analysis_and_history(knowledge, monkeypatch):
     model = Model([[ToolCall('read', 'read_document', dict(document_id=1, version='v1', section=1))], []])
-    model.messages = [{'role':'assistant', 'content':'x' * 600000 + '已有分析：先核对依赖版本'}]
+    model.messages = []
+    original_results = model.results
+    def results(items):
+        original_results(items)
+        model.messages = [{'role':'assistant', 'content':'x' * 600000 + '已有分析：先核对依赖版本'}]
+    model.results = results
     monkeypatch.setattr(tool_agent, 'create_tool_chat', lambda *a, **k: model)
     events = [e async for e in tool_agent.ask_stream('下一步呢？', [{'role':'user', 'content':'只考虑 Linux 离线环境'}], 'kb')]
     assert events[-1]['type'] == 'done'

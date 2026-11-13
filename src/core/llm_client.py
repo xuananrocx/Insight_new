@@ -12,6 +12,8 @@ from __future__ import annotations
 import logging
 from contextlib import aclosing
 import threading
+import time
+import math
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -37,6 +39,15 @@ class NoAvailableProviderError(LLMError):
 
 class EmbeddingBusyError(RuntimeError):
     """embedding 模型正在加载/切换中，需等待完成后再重试。"""
+
+
+class EmbeddingLoadError(RuntimeError):
+    """Safe, bounded failure information for callers; never includes provider URLs."""
+
+    def __init__(self, retry_after_seconds: int, code: str = 'embedding_load_unavailable'):
+        self.retry_after_seconds = retry_after_seconds
+        self.code = code
+        super().__init__(f'本地 embedding 模型不可用，请管理员部署所配置模型的完整文件或在模型设置中加载；自动重试冷却 {retry_after_seconds} 秒。')
 
 
 class _Provider:
@@ -138,11 +149,42 @@ class _LocalEmbedding:
         # _lock 保护缓存账本（快）；_load_lock 串行化模型加载/切换（慢，可长达数分钟）
         self._lock = threading.RLock()
         self._load_lock = threading.Lock()
+        self._load_failures: dict[str, float] = {}
 
-    def _load_into_cache(self, model_name: str) -> Any:
+    def _create_model(self, model_name: str, *, allow_download: bool = False) -> Any:
+        from sentence_transformers import SentenceTransformer
+        from src.core.model_availability import local_files_ready
+        from huggingface_hub import try_to_load_from_cache
+
+        remaining = self._load_failures.get(model_name, 0) - time.monotonic()
+        if remaining > 0 and not allow_download:
+            raise EmbeddingLoadError(math.ceil(remaining))
+        try:
+            local = local_files_ready(model_name)
+            if not local and not allow_download:
+                raise EmbeddingLoadError(60, 'embedding_files_missing')
+            source = model_name
+            if local and not Path(model_name).is_dir():
+                cached = try_to_load_from_cache(model_name, 'config.json')
+                if isinstance(cached, str):
+                    source = str(Path(cached).parent)
+            # Complete local snapshots must not probe optional files on the Hub.
+            # Only explicit administrator model loading may download missing files.
+            model = SentenceTransformer(source, device=self.device, local_files_only=local or not allow_download)
+        except Exception as exc:
+            self._load_failures[model_name] = time.monotonic() + 60
+            from src.core.model_availability import download_error_message
+            logger.warning('embedding 加载失败 model=%s reason=%s；60 秒内不重复加载',
+                           model_name, download_error_message(exc))
+            if isinstance(exc, EmbeddingLoadError):
+                raise
+            raise EmbeddingLoadError(60) from exc
+        self._load_failures.pop(model_name, None)
+        return model
+
+    def _load_into_cache(self, model_name: str, *, allow_download: bool = False) -> Any:
         # cache_size=0：不缓存，每次都新建（不存进 _cache），切换前显式释放旧模型
         if self._cache_size == 0:
-            from sentence_transformers import SentenceTransformer
             # 显式释放旧 _model（避免新旧模型同时驻留导致 RSS 翻倍）
             old_model = getattr(self, "_model", None)
             if old_model is not None:
@@ -152,7 +194,7 @@ class _LocalEmbedding:
                 import gc
                 gc.collect()
             logger.info(f"加载 embedding 模型（无缓存模式）: {model_name}")
-            model = SentenceTransformer(model_name, device=self.device)
+            model = self._create_model(model_name, allow_download=allow_download)
             self._dimensions = model.get_sentence_embedding_dimension()
             return model
 
@@ -160,9 +202,8 @@ class _LocalEmbedding:
             self._cache_order.remove(model_name)
             self._cache_order.append(model_name)
             return self._cache[model_name]
-        from sentence_transformers import SentenceTransformer
-        logger.info(f"加载本地 embedding 模型: {model_name}（首次运行需下载）")
-        model = SentenceTransformer(model_name, device=self.device)
+        logger.info(f"加载本地 embedding 模型: {model_name}（完整缓存优先）")
+        model = self._create_model(model_name, allow_download=allow_download)
         dim = model.get_sentence_embedding_dimension()
         self._cache[model_name] = model
         self._cache_dims[model_name] = dim
@@ -181,17 +222,17 @@ class _LocalEmbedding:
         logger.info(f"模型加载完成，维度: {dim}")
         return model
 
-    def _load(self) -> None:
+    def _load(self, *, allow_download: bool = False) -> None:
         with self._lock:
             if self._cache_size == 0:
                 # 无缓存：每次都重建（释放旧的）
-                self._model = self._load_into_cache(self.model_name)
+                self._model = self._load_into_cache(self.model_name, allow_download=allow_download)
                 return
             if self.model_name in self._cache:
-                self._model = self._load_into_cache(self.model_name)
+                self._model = self._load_into_cache(self.model_name, allow_download=allow_download)
                 self._dimensions = self._cache_dims[self.model_name]
                 return
-            self._model = self._load_into_cache(self.model_name)
+            self._model = self._load_into_cache(self.model_name, allow_download=allow_download)
             self._dimensions = self._cache_dims[self.model_name]
 
     def switch_model(self, model_name: str) -> bool:
@@ -200,7 +241,7 @@ class _LocalEmbedding:
             return False
         try:
             if model_name == self.model_name and (
-                self._cache_size == 0 or self._cache.get(model_name) is not None
+                (self._cache_size == 0 and self._model is not None) or self._cache.get(model_name) is not None
             ):
                 return True
             was_cached = self._cache_size > 0 and model_name in self._cache
@@ -209,7 +250,7 @@ class _LocalEmbedding:
                 old_name, old_model, old_dim = self.model_name, self._model, self._dimensions
                 try:
                     self.model_name = model_name
-                    self._load()
+                    self._load(allow_download=True)
                 except Exception:
                     self.model_name, self._model, self._dimensions = old_name, old_model, old_dim
                     raise
@@ -285,14 +326,15 @@ class LLMClient:
                     device = emb_cfg.get("device", "cpu")
                     cache_size = emb_cfg.get("cache_size", 3)
                     self._local_embed = _LocalEmbedding(model_name, device, cache_size=cache_size)
-                    # 预热：把默认模型加载到内存（首次 1-3 秒），后续切换永远秒级
-                    # cache_size=0 时跳过预热（用户选择不缓存）
-                    if cache_size > 0:
-                        try:
-                            self._local_embed._load()
-                        except Exception as e:
-                            logger.warning(f"预热 embedding 模型失败（下次用到时再加载）: {e}")
         return self._local_embed
+
+    def prewarm_embedding(self) -> bool:
+        """Return success only after loading; construction alone is not readiness."""
+        embedder = self._get_local_embedder()
+        if embedder._cache_size == 0:
+            return False
+        embedder._load()
+        return True
 
     def set_embedding_cache_size(self, new_size: int) -> dict[str, Any]:
         """动态修改 embedding 缓存上限。

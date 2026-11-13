@@ -41,8 +41,12 @@ embedding = SentenceTransformer('BAAI/bge-large-zh-v1.5', device='cpu', local_fi
 assert embedding.encode(['offline build verification']).shape == (1, 1024)
 del embedding
 gc.collect()
-reranker = CrossEncoder('/models/reranker-torch', device='cpu', local_files_only=True)
+from src.mcp import relevance
+assert str(relevance.model_path()) == '/models/reranker-torch'
+reranker = CrossEncoder(str(relevance.model_path()), device='cpu', local_files_only=True)
 assert len(reranker.predict([('question', 'answer')])) == 1
+relevance._model = reranker
+assert len(relevance.score('question', ['answer'])) == 1
 assert tiktoken.get_encoding('cl100k_base').encode('offline check')
 assert tiktoken.get_encoding('o200k_base').encode('offline check')
 print('Offline embedding, reranker and tokenizers: PASS')

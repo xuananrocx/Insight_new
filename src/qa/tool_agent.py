@@ -7,13 +7,14 @@ import math
 import logging
 import re
 import threading
+from dataclasses import asdict
 import time
 
 import httpx
 
 from fastapi import HTTPException
 
-from src.core.config import settings
+from src.core import model_budget
 from src.core.deep_ai_options import DeepAiOptions
 from src.core.tool_chat import create_tool_chat, ToolProtocolError
 from src.core.api_retry import RetryDeferredError
@@ -81,7 +82,8 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
     stopped = threading.Event()
     trace, parts = [], []
     state = {"provider": "", "verification": "sources_validated", "outcome": "success", "reason": ""}
-    qa_cfg = settings.config.get("qa", {}) or {}
+    budget = model_budget.current()
+    qa_cfg = budget.qa
     cfg = qa_cfg.get("deep_ai") or {}
     gen = qa_cfg.get("ai_generation") or {}
 
@@ -108,7 +110,9 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
     rounds = options.max_rounds
     # No hidden twelve-call cap. Allow several tools per model round.
     max_calls = rounds * 4 if rounds is not None else float('inf')
-    tokens = number("max_tokens", 81920, 256)
+    configured_tokens = number("max_tokens", 81920, 256)
+    tokens = budget.cap(configured_tokens)
+    answer_reserve = budget.reserve(configured_tokens)
     answer_seconds = number("timeout_seconds", 600, 30)
     round_seconds = max(180, answer_seconds)
     deadline = time.monotonic() + total
@@ -171,7 +175,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             model.on_retry = lambda **info: stage("api_retry", "API 请求重试", status="partial",
                 notes=f"{info['reason']}，{info['delay']:g} 秒后进行第 {info['attempt']}/{info['maximum']} 次重试")
             state["provider"] = model.name
-            called, repeated, stalled, directory_run, round_no = 0, 0, 0, 0, 0
+            called, repeated, stalled, round_no = 0, 0, 0, 0
             stage('agent_limits', '深度 AI 查阅配置', notes=f"查阅轮数：{rounds if rounds is not None else '不限'}；总时长：{str(options.total_timeout_seconds) + ' 秒' if options.time_limit_enabled else '不限'}；单轮/作答时长：{answer_seconds} 秒；输出上限：{tokens} tokens；保留单次 API 超时及无进展保护")
             logger.info('深度 AI 预算 session=%s turn=%s rounds=%s total_seconds=%s max_calls=%s', session_id, turn_id, rounds, total, max_calls)
             progress_tracker = evidence_state.Progress()
@@ -183,16 +187,16 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
             while rounds is None or round_no < rounds:
                 input_estimate = conversation_context.estimate(system + json.dumps(
                     [getattr(model, 'messages', messages), tools], ensure_ascii=False))
-                window = conversation_context.config()['context_window_tokens']
+                window = budget.window
                 # 巨大的输出上限不能按全额预留：只要还给作答留出合理空间就继续查阅
-                if called and input_estimate + min(tokens, 8192) + 4096 >= window:
+                if input_estimate + answer_reserve + model_budget.SAFETY >= window:
                     stop_reason = 'context_capacity'
                     reason = '接近模型上下文容量，停止补查并使用已读资料回答'
                     logger.info('深度 AI 上下文停止 session=%s turn=%s input_estimate=%s window=%s',
                                 session_id, turn_id, input_estimate, window)
                     break
                 # anthropic 协议要求 input + max_tokens <= 窗口：按剩余空间钳制本次输出上限
-                round_tokens = min(tokens, max(1024, window - input_estimate - 2048))
+                round_tokens = budget.decide(tokens, input_estimate).actual_output
                 if called >= max_calls or time.monotonic() >= deadline - reserve or kb.used_chars >= kb.max_chars:
                     stop_reason = 'tool_calls' if called >= max_calls else 'time_limit' if time.monotonic() >= deadline - reserve else 'evidence_capacity'
                     reason = "达到本次查阅预算，依据已读资料回答并说明缺口"
@@ -232,7 +236,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                             queue.put_nowait({'type':'token','data':{'text':'\n\n'}})
                     else:
                         turn = await bounded(model.turn(tools, force=False, max_tokens=round_tokens), round_seconds, tools_phase=True)
-                except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError, RetryDeferredError) as exc:
+                except (asyncio.TimeoutError, ToolProtocolError, model_budget.BudgetError, httpx.HTTPError, RetryDeferredError) as exc:
                     if round_emitted:
                         answer_streamed = True
                         reason = '模型流式回答中断，已保留部分内容'
@@ -257,7 +261,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     # Output-cap verdict: retrying with the same cap fails the same way.
                     stop_reason = "output_limit"
                     # 输出上限是系统级配置（仅管理员可改），提示用户找管理员调整
-                    guidance = "，请联系管理员在系统设置的 AI 生成配置中调大输出上限"
+                    guidance = "；" + model_budget.truncation_message(getattr(model, "last_budget", None))
                     if turn.calls:
                         reason = "模型输出达到输出上限，本轮工具调用未执行" + guidance
                         state.update(outcome="partial", verification="partial", reason=reason)
@@ -371,11 +375,11 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 answer_system += '\n' + context.background
             elif history:
                 answer_system += '\n' + conversation_context.RULES
-            window = conversation_context.config()['context_window_tokens']
+            window = budget.window
             native_messages = getattr(model, 'messages', None)
             native_cost = conversation_context.estimate(answer_system + json.dumps(
                 [native_messages, tools], ensure_ascii=False) + instruction)
-            native = answer_streamed or (native_messages is not None and stop_reason != 'model_error' and native_cost + 3000 + 1024 <= window)
+            native = answer_streamed or (native_messages is not None and stop_reason != 'model_error' and native_cost + model_budget.SAFETY + answer_reserve <= window)
             model.system = answer_system
             final_tools = tools if native else []
             omitted = []
@@ -383,7 +387,7 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 allowed = list(range(1, len(sources) + 1))
                 context_mode = 'native'
                 # anthropic 协议要求 input + max_tokens <= 窗口，按剩余空间钳制作答输出上限
-                answer_tokens = min(tokens, max(1024, window - native_cost - 3000))
+                answer_tokens = budget.decide(tokens, native_cost).actual_output
             else:
                 # Never clip individual protocol items. Fall back only for a broken
                 # exchange or capacity pressure, preserving explicit observations.
@@ -400,9 +404,9 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 handoff = '\n'.join(observations)[-6000:]
                 base_cost = conversation_context.estimate(answer_system + json.dumps(messages, ensure_ascii=False) + instruction + handoff)
                 # 压缩作答模式本身就是为窄窗口准备：作答输出至多预留 16k
-                answer_tokens = min(tokens, 16384)
+                answer_tokens = answer_reserve
                 packet = evidence_state.answer_payload(kb.hits, review, history_reads,
-                    window - answer_tokens - base_cost - 3000, conversation_context.estimate)
+                    window - answer_tokens - base_cost - model_budget.SAFETY - 512, conversation_context.estimate)
                 allowed = [entry['citation'] for entry in packet['evidence']]
                 allowed.extend(alias['citation'] for entry in packet['evidence'] for alias in entry['same_text_citations'])
                 omitted = packet['omitted_citations']
@@ -411,6 +415,10 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                 if handoff:
                     model.messages.append({'role': 'user', 'content': '此前查阅阶段的初步分析（不是新增事实，仍以原文为准）：\n' + handoff})
                 context_mode = 'compact_fallback'
+                final_cost = model_budget.estimate(answer_system + json.dumps(model.messages, ensure_ascii=False) + instruction)
+                answer_tokens = budget.decide(tokens, final_cost).actual_output
+            decision = budget.decide(configured_tokens, native_cost if native else final_cost)
+            stage('model_budget', '模型预算', notes=decision.notes(), budget=asdict(decision))
             citations = CitationFilter(len(sources), allowed)
             citations.removed = live_removed
             logger.info('深度 AI 作答衔接 session=%s turn=%s context_mode=%s messages=%s citations=%s omitted=%s input_estimate=%s',
@@ -460,11 +468,11 @@ async def ask_stream(question, history, kb_scope, *, top_k=None, session_id=None
                     stage_running("agent_answer", "正在生成回答")
                     await bounded(generate(), max(1, model.deadline - time.monotonic()))
                     if getattr(model, "final_truncated", False):
-                        state.update(outcome="partial", reason="模型输出达到输出上限，回答已截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限")
-                        notice = "\n\n> 本次回答因输出上限被截断，请联系管理员在系统设置的 AI 生成配置中调大输出上限后重试。"
+                        state.update(outcome="partial", reason=model_budget.truncation_message(getattr(model, "last_budget", None)))
+                        notice = "\n\n> " + state["reason"]
                         parts.append(notice)
                         queue.put_nowait({"type": "token", "data": {"text": notice}})
-            except (asyncio.TimeoutError, ToolProtocolError, httpx.HTTPError, RetryDeferredError) as exc:
+            except (asyncio.TimeoutError, ToolProtocolError, model_budget.BudgetError, httpx.HTTPError, RetryDeferredError) as exc:
                 logger.warning("Agent answer incomplete: %s", type(exc).__name__)
                 await asyncio.wait_for(flush(), 5)
                 tail = citations.feed("", final=True)

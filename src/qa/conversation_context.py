@@ -19,7 +19,6 @@ from dataclasses import dataclass, field
 from fastapi import HTTPException
 
 from src.core import accounts, llm_client, personal_preferences
-from src.core.config import settings
 from src.db import metadata_db as db
 
 logger = logging.getLogger(__name__)
@@ -44,16 +43,9 @@ def estimate(text: str) -> int:
 
 
 def config():
-    raw = settings.config.get('qa', {}).get('conversation_context') or {}
-    def integer(key, default, minimum, maximum):
-        try:
-            return max(minimum, min(maximum, int(raw.get(key, default))))
-        except (TypeError, ValueError):
-            return default
-    return {'history_tokens': integer('history_tokens', 8000, 1000, 24000),
-            'context_window_tokens': integer('context_window_tokens', 65536, 16384, 262144),
-            'summary_input_tokens': integer('summary_input_tokens', 10000, 2000, 20000),
-            'summary_tokens': integer('summary_tokens', 2400, 500, 4000)}
+    from src.core import model_budget
+    budget = model_budget.current()
+    return {**budget.context, 'context_window_tokens': budget.window}
 
 
 def fingerprint(turns):
@@ -133,7 +125,8 @@ class Context:
                          f"{'已加载' if s.get('preferences_loaded') else '未加载'}个人偏好 · "
                          f"上下文约 {s.get('estimated_tokens', 0)} token（估算） · 摘要{s.get('summary_state', '无需更新')}"
                          + (f" · 另有 {s['omitted_turns']} 轮未载入，可检索历史" if s.get('omitted_turns') else '')
-                         + (' · 最近一轮过长，已保留节选' if s.get('clipped') else ''),
+                         + (' · 最近一轮过长，已保留节选' if s.get('clipped') else '')
+                         + (' · ' + s['model_budget_notes'] if s.get('model_budget_notes') else ''),
                 'context': {**s, 'request_id': self.request_id, 'history_reads': self.history_reads}}
 
     def execute(self, name, arguments):

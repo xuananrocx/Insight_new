@@ -114,6 +114,8 @@ async def authorize(request: Request):
         ("/api/v1/admin/", "/api/v1/access/", "/api/v1/permissions/", "/api/v1/roles/")
     ):
         return  # Each endpoint requires its specific capability or resource management right.
+    if path == "/api/v1/account/mcp" or path.startswith("/api/v1/account/mcp/"):
+        return  # MCP management enforces ownership and its own capability.
     if path.startswith("/api/v1/providers") or path in (
         "/api/v1/account/provider",
         "/api/v1/account/api-preferences",

@@ -86,8 +86,8 @@ async def test_truncation_mark_reports_partial_done(isolated, monkeypatch):
     events = [e async for e in rag.ask_stream('q', mode='ai')]
     assert events[-1]['type'] == 'done'
     data = events[-1]['data']
-    assert data['outcome'] == 'partial' and '输出上限' in data['reason'] and '联系管理员' in data['reason']
-    assert data['answer'].startswith('部分回答') and '联系管理员' in data['answer']
+    assert data['outcome'] == 'partial' and '输出上限' in data['reason'] and '上下文剩余空间' in data['reason']
+    assert data['answer'].startswith('部分回答') and '上下文剩余空间' in data['answer']
 
 
 def test_relevance_keeps_configuration_ahead_of_unrelated_sources():

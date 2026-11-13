@@ -11,6 +11,7 @@ import logging
 import re
 
 from src.core.config import settings
+from src.core import model_budget
 from src.db import metadata_db
 from src.qa import conversation_context, retrieval
 from src.qa.trace import PipelineCancelled, make_candidate
@@ -33,12 +34,12 @@ POLICIES = {
 
 
 def config():
-    return settings.config.get('qa', {}).get('enhanced_ai', {}) or {}
+    return model_budget.current().qa.get('enhanced_ai', {}) or {}
 
 
 def _configured_max_tokens():
     # ai_generation（统一配置卡）优先，旧键仅作回退。
-    qa = settings.config.get('qa', {}) or {}
+    qa = model_budget.current().qa
     for source in (qa.get('ai_generation') or {}, config()):
         if 'max_tokens' in source:
             try:
@@ -48,11 +49,16 @@ def _configured_max_tokens():
     return 4096
 
 
-def chat_options():
+def chat_options(messages=None):
     legacy = settings.config.get('qa', {}).get('chat_options', {}) or {}
-    window = conversation_context.config()['context_window_tokens']
-    # 输出上限是封顶不是预留，但不能超出窗口：输出与输入至多对半分。
-    effective = min(max(256, _configured_max_tokens()), max(1024, window // 2))
+    # Reserve a planning target for generation; final wire limits are checked separately.
+    budget = model_budget.current()
+    requested = max(256, _configured_max_tokens())
+    effective = budget.reserve(requested)
+    if messages is not None:
+        decision = budget.decide(requested, model_budget.estimate(messages))
+        effective = decision.actual_output
+        model_budget.record(decision)
     return {**legacy, 'max_tokens': effective}
 
 
@@ -87,7 +93,7 @@ def assemble(question, hits, history, background, policy, custom, trace):
     from src.qa.rag import _xml_escape_attr, _xml_escape_text
     cfg = config()
     window = conversation_context.config()['context_window_tokens']
-    available = window - chat_options()['max_tokens'] - 512
+    available = window - chat_options()['max_tokens'] - model_budget.SAFETY - 512
     system = COMMON + '\n' + POLICIES[policy]
     if custom:
         system += '\n补充回答要求：\n' + custom
@@ -132,7 +138,7 @@ def assemble(question, hits, history, background, policy, custom, trace):
         stage.set(count=len(selected), notes=f'策略={policy}；原文={len(selected)}；历史消息={len(prior)}；输入约 {size(messages)} token；输出预留={chat_options()["max_tokens"]}',
                   status='partial' if not selected or len(selected) < len(hits) or len(prior) < len(history) or any(a['text'] != b['text'] for a, b in zip(selected, hits)) else 'ok')
     logger.info('enhanced_ai context policy=%s hits=%s history=%s/%s input_tokens=%s window=%s', policy, len(selected), len(prior), len(history), size(messages), window)
-    conversation_context.log_model_input(messages[0]['content'], messages[1:], max_tokens=chat_options()['max_tokens'])
+    conversation_context.log_model_input(messages[0]['content'], messages[1:], max_tokens=chat_options(messages)['max_tokens'])
     return messages, selected
 
 
@@ -354,7 +360,7 @@ def supplement(question, hits, kb_scope, trace):
             ids = list(dict.fromkeys(wanted))[:80]
             rows = retrieval.vector_store.get_chunks_by_ids(ids, collection_name=collection)
             extra.extend(h for h in rows.values() if h.get('chunk_type') != 'summary')
-        stage.set(count=len(extra), notes=f'最多补读 3 篇文档，每篇命中位置附近最多 80 个片段；不从文档开头截取')
+        stage.set(count=len(extra), notes='最多补读 3 篇文档，每篇命中位置附近最多 80 个片段；不从文档开头截取')
     return ranked_unique(question, [*hits, *extra], 80)
 
 
@@ -398,7 +404,6 @@ def rerank_complete(question, hits, trace):
 
 
 def prepare(question, top_k, history, trace, system_override=None, kb_scope='default', *, strict=False, options=None):
-    cfg = config()
     policy = getattr(options, 'constraint_strategy', None) or ('evidence' if strict else 'balanced')
     if policy not in POLICIES:
         raise ValueError('未知的 AI约束策略')

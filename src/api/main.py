@@ -235,8 +235,8 @@ def _on_startup() -> None:
 
             def _prewarm_local_embedder() -> None:
                 try:
-                    client._get_local_embedder()
-                    logger.info("embedding 模型预热完成")
+                    if client.prewarm_embedding():
+                        logger.info("embedding 模型预热完成")
                 except Exception as e:
                     logger.warning(f"embedding 模型预热失败（下次用到时再加载）: {e}")
 
@@ -258,6 +258,11 @@ app.include_router(sessions_router)
 app.include_router(logs_router)
 app.include_router(ai_logs_router)
 
+
+# Independent MCP management and bearer-only query adapter. SDK runs in a separate gateway.
+from src.mcp.routes import router as mcp_router, query_app as mcp_query_app
+app.include_router(mcp_router)
+app.mount("/mcp-service", mcp_query_app)
 
 # ===== 数据模型 =====
 

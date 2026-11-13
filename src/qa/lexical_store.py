@@ -79,7 +79,7 @@ def clear():
         conn.execute('DELETE FROM chunk_keys')
 
 
-def query(text, limit=20, kb_id=None, enhanced=False):
+def query(text, limit=20, kb_id=None, enhanced=False, allowed_ids=None):
     from src.qa.bm25_index import _tokenize, identifiers
     import re
     words = list(dict.fromkeys(_tokenize(text)))[:64]
@@ -94,7 +94,8 @@ def query(text, limit=20, kb_id=None, enhanced=False):
         hits = []
         for row in rows:
             hit = json.loads(row['payload'])
-            if hit['id'] in blocked or hit.get('chunk_type') == 'summary':
+            if (hit['id'] in blocked or hit.get('chunk_type') == 'summary'
+                    or (allowed_ids is not None and hit['id'] not in allowed_ids)):
                 continue
             hit['bm25_score'] = row['score']
             hits.append(hit)

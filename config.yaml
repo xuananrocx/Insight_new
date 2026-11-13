@@ -25,12 +25,6 @@ feature_flags:
     auto_extract_package: true
     image_ocr: false
   qa:
-  # 会话历史采用 UTF-8 token 估算；模型窗口较小时应调低 context_window_tokens。
-  conversation_context:
-    context_window_tokens: 65536
-    history_tokens: 8000
-    summary_input_tokens: 10000
-    summary_tokens: 2400
     enabled: true
     web_ui: true
     show_sources: true
@@ -188,6 +182,12 @@ ingest:
     # 新字段未配置时由 src/core/summary_policy.py 统一提供默认值；
     # read_timeout_seconds: null 表示继承 llm.request_timeout_seconds。
 qa:
+  conversation_context:
+    context_window_tokens: 65536  # 模型容量未知时的默认窗口
+    history_tokens: 8000
+    summary_input_tokens: 10000
+    summary_tokens: 2400
+    answer_reserve_tokens: 16384
   top_k: 5
   # AI 生成配置（系统级，设置页「AI 运行配置」卡片写入此处）：深度 AI 与增强 AI 统一生效。
   # max_tokens 是单次模型调用的输出 token 上限（推理模型的思考过程计入）；

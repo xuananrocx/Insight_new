@@ -119,6 +119,8 @@ def init_auth() -> None:
     permissions.init()
     from src.core import api_models
     api_models.init_schema()
+    from src.mcp import store as mcp_store
+    mcp_store.init_schema()
     enabled = True
 
 

@@ -279,8 +279,15 @@ class OpenAIProvider(BaseLLMProvider):
                     raise LLMError("模型响应流返回错误")
                 if event.type == "response.output_text.delta" and event.delta:
                     yield event.delta
-                if status is not None and event.type in ("response.completed", "response.incomplete"):
-                    status["stop_reason"] = "completed" if event.type == "response.completed" else "incomplete"
+                if event.type == "response.incomplete":
+                    details = getattr(getattr(event, "response", None), "incomplete_details", None)
+                    reason = getattr(details, "reason", None)
+                    if reason != "max_output_tokens":
+                        raise LLMError(f"模型响应未完成（{reason or 'unknown'}），并非已确认的输出额度耗尽")
+                    if status is not None:
+                        status["stop_reason"] = "length"
+                elif status is not None and event.type == "response.completed":
+                    status["stop_reason"] = "completed"
         except Exception as e:
             raise LLMError(f"provider {self.name} chat_stream 中途失败: {e}") from e
         finally:

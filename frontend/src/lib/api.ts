@@ -51,6 +51,19 @@ function drainSseBuffer(input: string, onBlock: (block: string) => void): string
   return buffer
 }
 
+export interface ContextBudgetSettings {
+  context_window_tokens: number
+  answer_reserve_tokens: number
+  history_tokens: number
+  summary_input_tokens: number
+  summary_tokens: number
+}
+export type ContextBudgetResponse = ContextBudgetSettings & {
+  sources: Record<keyof ContextBudgetSettings, string>
+  defaults: ContextBudgetSettings
+  application_window_limit: number
+}
+
 export type KnowledgeStats = {
   files_total: number
   files_done: number
@@ -1330,6 +1343,13 @@ export const api = {
   webSearch: {
     get: () => request<{ enabled: boolean }>('/settings/web_search'),
     update: (enabled: boolean) => request<{ enabled: boolean }>('/settings/web_search', { method: 'PUT', body: JSON.stringify({ enabled }) }),
+  },
+
+  contextBudget: {
+    get: () => request<ContextBudgetResponse>('/settings/context_budget'),
+    update: (values: ContextBudgetSettings) => request<ContextBudgetResponse>('/settings/context_budget', {
+      method: 'PUT', body: JSON.stringify(values),
+    }),
   },
 
   aiGeneration: {

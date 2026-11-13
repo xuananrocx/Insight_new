@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from src.core import accounts as a
 
 CATALOG = {
+    "mcp.use": ("外部接入", "创建令牌并通过 MCP 查询授权知识库"),
     "documents.view": ("工作空间", "文档管理页面"),
     "analysis.view": ("工作空间", "个人分析页面"),
     "feedback.view": ("工作空间", "个人反馈页面"),

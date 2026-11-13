@@ -1,5 +1,4 @@
 """Session memory uses isolated SQLite/files and fake providers, never real APIs."""
-import asyncio
 import json
 from types import SimpleNamespace
 
@@ -7,6 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from src.core import accounts, personal_preferences as prefs
+from src.core.config import settings
 from src.db import metadata_db as db
 from src.qa import conversation_context as cc, tool_agent
 
@@ -16,7 +16,7 @@ def storage(tmp_path, monkeypatch):
     monkeypatch.setattr(accounts, 'enabled', False)
     monkeypatch.setattr(db, '_get_db_path', lambda: tmp_path / 'memory.db')
     monkeypatch.setattr(prefs, 'USER_DATA_DIR', tmp_path)
-    monkeypatch.setattr(cc.settings, '_config', {'qa': {'conversation_context': {'history_tokens': 2000}}})
+    monkeypatch.setattr(settings, '_config', {'qa': {'conversation_context': {'history_tokens': 2000}}})
     db.init_db()
     with db.get_cursor() as cur:
         for sid in ('mine', 'other'):
