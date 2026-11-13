@@ -59,6 +59,9 @@ events { worker_connections 64; }
 http {
   client_body_temp_path /tmp/client;
   proxy_temp_path /tmp/proxy;
+  fastcgi_temp_path /tmp/fastcgi;
+  uwsgi_temp_path /tmp/uwsgi;
+  scgi_temp_path /tmp/scgi;
   include SERVER;
 }
 '''.replace('SERVER', str(server_conf))
@@ -74,6 +77,15 @@ http {
         run('docker', 'run', '-d', '--name', proxy_name, '--network', 'host', '--read-only',
             '--tmpfs', '/tmp:size=16m', '-v', str(folder) + ':' + str(folder) + ':ro',
             '--entrypoint', 'nginx', web_image, '-p', str(folder), '-c', str(conf), '-g', 'daemon off;')
+        for _ in range(30):
+            try:
+                with opener.open('http://127.0.0.1:{}/health'.format(web_port), timeout=2) as response:
+                    assert response.status == 200
+                break
+            except OSError:
+                time.sleep(1)
+        else:
+            raise RuntimeError('Disposable host Nginx failed to start')
         adapter = folder / 'nginx-host-adapter'
         docker = shutil.which('docker')
         adapter.write_text('#!/bin/sh\nexec "' + docker + '" exec ' + proxy_name + ' nginx "$@"\n')
